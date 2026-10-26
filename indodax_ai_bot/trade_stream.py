@@ -586,3 +586,107 @@ def probe_official_public_ws(
         # offset. Disconnect is not a certified continuous trade tape.
         if acked and not disconnect_recorded:
             journal.mark_disconnected(pair)
+
+
+
+def collect_official_public_ws(
+    journal: PublicTradeStreamJournal, *, pair: str = "btc_idr",
+    sessions: int = 2, session_seconds: int = 30, pause_seconds: int = 1,
+    probe=None, sleep=None,
+) -> dict[str, Any]:
+    """M04-I: bounded PUBLIC trade collection using existing verified WS probe.
+
+    This is a finite operator-driven acquisition slice, NOT a daemon, no
+    unbounded reconnect, no trusted trade-tape issuer, no buy permission.
+    Identical SQLite journal is reused across sessions, so server offset
+    recovery can cover short intentional reconnect gaps. No other scanner.
+    """
+    channel_for_pair(pair)
+    if (type(sessions) is not int or not 2 <= sessions <= 10
+            or type(session_seconds) is not int or not 3 <= session_seconds <= 30
+            or type(pause_seconds) is not int or not 0 <= pause_seconds <= 10):
+        raise StreamEvidenceError("INVALID_PUBLIC_WS_COLLECTOR_BOUNDS")
+    import time
+    session_probe = probe if probe is not None else probe_official_public_ws
+    wait = sleep if sleep is not None else time.sleep
+    samples: list[dict[str, Any]] = []
+    total_recovered = 0
+    total_live = 0
+    halted_reason: str | None = None
+    for index in range(sessions):
+        if index:
+            wait(pause_seconds)
+        try:
+            result = session_probe(journal, pair=pair, seconds=session_seconds)
+        except StreamEvidenceError as exc:
+            # Only stable internal error codes. Never log socket exception
+            # text, account credentials or upstream response bodies.
+            halted_reason = "WS_SESSION_REJECTED:" + str(exc)
+            break
+        if not isinstance(result, dict):
+            halted_reason = "WS_SESSION_MISSING_REPORT"
+            break
+        if (result.get("g1_receipt_issuance_allowed") is not False
+                or result.get("g2_provider_call_allowed") is not False
+                or result.get("execution_allowed") is not False):
+            halted_reason = "WS_SESSION_UNSAFE_AUTHORITY_CLAIM"
+            break
+        record = {
+            "session": index + 1,
+            "subscription_acknowledged": result.get("subscription_acknowledged") is True,
+            "protocol_heartbeat_confirmed": result.get("protocol_heartbeat_confirmed") is True,
+            "stream_status_during_probe": result.get("stream_status_during_probe"),
+            "persisted_stream_status": result.get("stream_status"),
+            "resume_requested": result.get("resume_requested"),
+            "resume_requested_offset": result.get("resume_requested_offset"),
+            "recovery_diagnostic": result.get("recovery_diagnostic"),
+            "server_replayed_publication_frames": result.get("server_replayed_publication_frames"),
+            "recovered_publications_newly_persisted": result.get("recovered_publications_newly_persisted"),
+            "live_publications_newly_persisted": result.get("live_publications_newly_persisted"),
+            "last_publication_offset": result.get("last_publication_offset"),
+            "persisted_publications": result.get("persisted_publications"),
+        }
+        samples.append(record)
+        if not record["subscription_acknowledged"]:
+            halted_reason = "WS_SUBSCRIPTION_NOT_CONFIRMED"
+            break
+        if not record["protocol_heartbeat_confirmed"]:
+            halted_reason = "WS_HEARTBEAT_NOT_CONFIRMED"
+            break
+        if (record["stream_status_during_probe"] not in
+                ("CONTIGUOUS_OBSERVED", "BASELINE_ONLY")
+                or record["persisted_stream_status"] != "DISCONNECTED"):
+            halted_reason = "WS_CONTINUITY_OR_DISCONNECT_REJECTED"
+            break
+        recovered = record["recovered_publications_newly_persisted"]
+        live = record["live_publications_newly_persisted"]
+        if (type(recovered) is not int or recovered < 0
+                or type(live) is not int or live < 0):
+            halted_reason = "WS_PUBLICATION_ACCOUNTING_INVALID"
+            break
+        total_recovered += recovered
+        total_live += live
+    persisted = journal.status(pair)
+    complete = halted_reason is None and len(samples) == sessions
+    return {
+        "stage": "M04I_BOUNDED_PUBLIC_WS_COLLECTION",
+        "pair": pair,
+        "status": "PUBLIC_SAMPLE_COLLECTED_UNATTESTED" if complete else "REJECT",
+        "reason": "PUBLIC_WS_SAMPLE_IS_NOT_CERTIFIED_TAPE" if complete else halted_reason,
+        "requested_sessions": sessions,
+        "completed_safe_sessions": len(samples) if complete else max(0, len(samples) - 1),
+        "attempted_sessions": len(samples),
+        "total_recovered_publications_newly_persisted": total_recovered,
+        "total_live_publications_newly_persisted": total_live,
+        "last_publication_offset": persisted["last_publication_offset"],
+        "persisted_publications": persisted["persisted_publications"],
+        "persisted_stream_status": persisted["stream_status"],
+        "session_reports": samples,
+        "unattested_public_sample_only": True,
+        "full_closed_minute_coverage_proven": False,
+        "indodax_trade_tape_completeness_proven": False,
+        "source_authenticated_for_g1": False,
+        "g1_receipt_issuance_allowed": False,
+        "g2_provider_call_allowed": False,
+        "execution_allowed": False,
+    }
