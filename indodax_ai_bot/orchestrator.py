@@ -7,6 +7,7 @@ from .config import Settings
 from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
+from .scanner import DailyPairScanner
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class CycleResult:
     reason: str
     execution_allowed: bool = False
     market: dict[str, str | int | bool] | None = None
+    screening: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -46,13 +48,28 @@ class DailyScalpingOrchestrator:
         self.journal.record_reject(trace_id, reason)
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, payload)
 
+    def run_scan_cycle(self, trace_id: str, *,
+                       market: IndodaxPublicMarket | None = None) -> CycleResult:
+        """Public scan into same mainpath; no G1 evidence or trading approval."""
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            ranking = DailyPairScanner(client).scan()
+        except PublicDataError as exc:
+            reason = f"PUBLIC_SCANNER_INVALID:{exc}"
+            summary = None
+        else:
+            reason = "G1_DEEP_ANALYSIS_AND_RISK_NOT_CONNECTED"
+            summary = ranking.summary()
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, summary)
+
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M02_PUBLIC_SOURCE_CODED",
+            "release": "M03A_PUBLIC_SCREEN_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M02_PUBLIC_ONLINE_VERIFICATION",
+            "next_stage": "M03B_DEEP_SCALPING_EVIDENCE",
         }
