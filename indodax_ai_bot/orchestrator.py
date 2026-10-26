@@ -146,11 +146,11 @@ class DailyScalpingOrchestrator:
 
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M04A_THREE_ROLE_SHADOW_CODED",
+            "release": "M04B_SUMOPOD_ADAPTER_CODED_PAID_OFF",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M04A_VPS_UNTRUSTED_G1_ROLE_BOUNDARY_TEST",
+            "next_stage": "M04B_VPS_MOCK_ADAPTER_TEST_AND_PUBLIC_NO_CALL",
         }
