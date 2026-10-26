@@ -241,6 +241,10 @@ def _same_window_gate(
         "live_trading_authorized": False,
         "cross_cycle_ranking_allowed": False,
         "btc_context_requested": True,
+        "provisional_quality_reviews": [],
+        "provisional_watchlist_preview": [],
+        "watchlist_is_trade_signal": False,
+        "provisional_thresholds_backtested": False,
     }
     if btc is None:
         return dict(base, status="REJECT_BTC_SOURCE_UNAVAILABLE")
