@@ -7,11 +7,48 @@
 
 > **BACA DULU SETIAP CHAT / SESI CODING:** Bagian A (checkpoint), B (keputusan tetap), C (arsitektur), D (kontrak dan keselamatan), E (roadmap), F (cara kerja). Tidak perlu meninjau ulang arsip panjang ataupun mengulang tes PASS jika fungsi tidak berubah.
 
+## 0. IRON RULES — WAJIB, BUKAN OPSIONAL
+
+**Perintah owner:**
+
+> **MULAI PEKERJAAN.** Pertama susun arsitektur final, kontrak data, struktur repository, dan daftar modul utama. **Kemudian langsung implementasikan** sistem bertahap sampai satu jalur trading terintegrasi. Di setiap tahap **wajib tampilkan**: (1) kode atau modul yang benar-benar dibuat, (2) sambungannya ke jalur utama, (3) hasil pemeriksaan yang sudah terbukti, (4) bagian yang masih belum berfungsi, (5) satu langkah implementasi berikutnya. **Prioritaskan kode berjalan, integrasi nyata, pengamanan uang, dan kualitas keputusan, bukan dokumentasi berlebihan.**
+
+**10 aturan eksekusi besi:**
+1. **DAILY SCALPING IS THE PRODUCT.** Bot ini *bukan* swing bot, holdings bot, news bot atau proyek riset AI. Semua komponen mengutamakan peluang scalping spot intraday yang dapat ditutup dan dikonversi ke IDR.
+2. **CODE FIRST, MAINPATH FIRST.** Selesai mendesain sekali, implementasikan vertical slice nyata; scanner → tiga AI → Final → preflight → order → SELL → IDR harus tersambung dalam satu runtime. Modul stand-alone tanpa caller runtime = NOT DONE.
+3. **SINGLE SOURCE OF TRUTH.** Hanya dokumen ini sebagai guideline + checkpoint/roadmap/status; jangan bikin dokumen master atau daftar milestone duplikat.
+4. **ONE IMPLEMENTATION PER CAPABILITY.** Satu scanner, satu candidate ranking, satu AI pipeline 3 role, satu Final, satu Executor, satu Position Manager, satu ledger. Adapter/provider boleh berbeda, core logic jangan kembar.
+5. **NO REPEAT PASS.** Accepted evidence disimpan dengan commit SHA. Tes ulang hanya saat kode/dependency berkaitan berubah, ada regresi nyata, atau acceptance belum terbukti.
+6. **EVIDENCE BEFORE CLAIMS.** Bedakan CODED / TESTED_OFFLINE / PUBLIC_ONLINE / PRIVATE_READONLY / PAPER / LIVE. Jangan menyebut live jika hanya mock, Telegram view, atau provider research.
+7. **FAIL CLOSED WITH REAL MONEY.** Telegram PASS dan AUTO mode tak boleh bypass fresh source, AI Risk veto, spendable IDR, owned positions, fee/precision, Final+Preflight dan execution authorization. Live BUY/SELL butuh explicit scoped GO owner setelah proof.
+8. **SCALP FAST, NOT RECKLESS.** Jangan memperlambat entry dengan model berulang atas candle yang sama; cache source-bound hasil tiga AI per unique closed candle jika layak. Tetapi jangan menerima stale price, spread berubah, quote invalid, over-budget slippage atau missing fill.
+9. **NO FORCED TRADES OR GUARANTEED PNL.** Target Rp100.000 netto realized/hari hanyalah sasaran; bot boleh tidak trade dan harus menjaga drawdown/risiko. Stop-loss, trailing, protective SELL tetap wajib sekalipun hasil akhir negatif.
+10. **EVERY TURN FINISH WITH 5-PART REPORT.** (1) kode/files aktual, (2) wiring mainpath, (3) proof dan SHA, (4) masih pending/blocker, (5) persis satu next action. Setelah selesai pindah milestone, jangan berkutat di satu audit berulang.
+
+**Jika instruksi implementasi bersaing dengan keselamatan order**, keselamatan tidak dibypass. Implementasikan jalur code-to-runtime yang aman sampai gate memungkinkan Live GO.
+
+## 0A. DAILY SCALPING ENGINE — MISI INTI BOT
+
+Bot beroperasi **24/7 untuk memantau pasar**, tetapi hanya trading pada kesempatan yang memenuhi seluruh gerbang. *Daily* berarti strategi scalping intraday dan metrik laba per hari kalender **Asia/Jakarta**, bukan kewajiban entry tiap hari.
+
+**Siklus harian yang wajib diimplementasikan dan dibuktikan:**
+1. **Scan berulang berbasis event/candle:** pembaruan market sepanjang hari; dorong evaluasi kandidat ketika **candle 1m sudah close**, kombinasikan 5m/15m dan konteks BTC. Jangan mengirim analisis satu candle berkali-kali karena polling.
+2. **Scan all → top 20–40 deep → max 1–2:** analisis spread, volume, liquidity, buyer/seller flow, impuls momentum, breakout, surge-pullback, order book, trend; tentukan peluang paling layak tanpa memaksa dua posisi.
+3. **Strict freshness:** data source, pair, candle-close, bid/ask, volume, trade coverage, G1 provenance dan snapshot tiga AI terikat. Freshness/latency thresholds harus dikonfigurasi dan diukur; proposal kedaluwarsa saat bursa bergerak/coverage gagal, tak perlu menunggu maksimum TTL Telegram 90 detik.
+4. **AI MARKET→RISK→STRATEGY:** 3 role benar-benar menerima market evidence yang sama dan membuat analisis *scalping entry/exit*, bukan ulasan pasar generik. Risk dapat menolak entry; Strategy wajib menyediakan sizing dan exit plan.
+5. **Qualify BUY:** proyeksi laba **≥Rp10.000 net DAN ≥2% net ROI** sesudah all-in fees, spread, slippage; capital verified, max slots, no overlap/duplicate proposal, valid precision dan bot-owned constraints.
+6. **Owner Final:** MANUAL default PASS/REJECT one-shot; AUTO via Telegram setelah diaktifkan. Kedua mode melalui gerbang terakhir identik dan consent LIVE yang terpisah.
+7. **SELL manager aktif terus:** posisi filled tidak dibiarkan tanpa rencana exit; target **2% / 8% / 11% NET**, trailing/stop-loss, time-stop dan protective exit yang mengutamakan mitigasi risiko. **Hindari overnight HOLD** bila dapat ditutup aman, tapi jangan memalsukan kemampuan keluar atau menjual tanpa ownership.
+8. **Close loop IDR:** periksa order/fill/partial/cancel/restart, net settled IDR dan ledger realized PnL. PnL harian berdasarkan fill dan settlement nyata, timezone WIB; reset agregat hari baru *tidak menghapus* riwayat/posisi.
+9. **Optimize from evidence:** simpan alasan kandidat dipilih/ditolak, peluang yang dilewatkan, success/failure pattern, latency, fees, realized vs projected net ROI; ablation/out-of-sample untuk tuning, tanpa mengubah hard risk secara otonom.
+
+**Acceptance khusus scalping** (baru bisa DONE setelah terbukti): satu siklus scanner closed 1m nyata → ranking real → trio model valid → MANUAL/AUTO Final → preflight source+balance → accepted Indodax order → matched BUY fills → managed protective/target SELL → matched SELL fills → profit bersih nyata dan IDR settlement. Sebelum Live GO, buktikan end-to-end deterministic/offline/PAPER tanpa klaim order nyata. Untuk M01, cukup **satu no-trade vertical slice fail-closed yang benar-benar runnable**, bukan menyatakan kemampuan trading sudah ada.
+
 ## A. CHECKPOINT PROYEK (SATU-SATUNYA STATUS KANONIS)
 
 | Item | Status awal |
 | --- | --- |
-| Sasaran | Membangun bot spot scalping Indodax V2 dari repository baru dengan satu jalur online G1 → 3 AI → keputusan → execution → position/SELL → IDR dan kontrol Telegram. |
+| Sasaran | **DAILY SCALPING INTRADAY 24/7** sebagai misi inti. Membangun bot spot scalping Indodax V2 dari repository baru dengan satu jalur online G1 → 3 AI → keputusan → execution → position/SELL → IDR dan kontrol Telegram. |
 | Implementasi | **BELUM DIMULAI.** Dokumen ini menyatakan kebutuhan/acceptance, **bukan** bukti bahwa bot sudah aktif. |
 | Milestone aktif | **M01: fondasi runnable**, struktur paket, konfigurasi aman, kontrak data, persistence dan test dasar; jangan mengimplementasikan banyak modul tanpa wiring. |
 | Milestone selesai | M00: guideline/roadmap ditetapkan (dokumen); belum ada software, VPS, AI paid, private API, atau order yang diuji. |
@@ -28,8 +65,8 @@ Setiap checkpoint setelah perubahan cukup memperbarui bagian A dan tabel E. **Ja
 | Area | Kebutuhan final |
 | --- | --- |
 | Platform | Indodax spot, modal MAIN dalam IDR, Python di Ubuntu VPS, kode di GitHub, kontrol Telegram privat. |
-| Strategi | Scalping; alur utama IDR → BUY → SELL → IDR, sebisa mungkin tidak HOLD tanpa alasan dan proteksi exit. |
-| Profit | Target **Rp100.000 netto terealisasi/hari** sebagai tujuan, **bukan jaminan** dan **bukan alasan memaksa entry**. |
+| Strategi | **SCALPING HARIAN sebagai satu-satunya fokus utama**, monitoring 24/7, entry berbasis closed-candle 1m disaring 5m/15m/BTC, alur IDR → BUY → SELL → IDR, exit intraday jika layak; hindari HOLD overnight tanpa alasan, selalu ada proteksi exit. |
+| Profit | Target **Rp100.000 netto terealisasi per hari kalender WIB (Asia/Jakarta)**, bukan jaminan atau kewajiban bertransaksi. PnL virtual dan unrealized tidak dihitung. |
 | Gerbang BUY | Estimasi profit **minimal Rp10.000 BERSIH DAN ROI ≥2% BERSIH** setelah fee round-trip, spread, slippage dan asumsi fill yang konservatif. Boleh NO_TRADE. Tidak ada batas internal wajib Rp100.000 per transaksi. |
 | Target SELL MAIN | **2% / 8% / 11% NETTO**, bukan 2/5/10. Trailing, stop-loss, time-stop dan protective SELL wajib. Protective SELL boleh rugi untuk mengurangi risiko, tidak tunduk pada profit floor BUY. |
 | Banyak posisi | Maksimal **1–2 pair MAIN** dipilih berdasarkan kualitas, tidak wajib mengisi dua slot. |
@@ -46,6 +83,9 @@ Setiap checkpoint setelah perubahan cukup memperbarui bagian A dan tabel E. **Ja
 **PERINGATAN MULTI-BOT:** Jika bot lama dan V2 terhubung pada akun Indodax yang sama, jangan jalankan keduanya LIVE bersamaan tanpa mekanisme lintas-bot untuk reservasi kas, ownership posisi dan rekonsiliasi. Default aman: hanya satu executor LIVE pada akun tersebut. API key dan runtime dipisahkan; jangan menganggap key terpisah mencegah double-spend pada akun yang sama.
 
 ## C. TARGET ARSITEKTUR TUNGGAL
+
+**Arsitektur dan antarmuka disusun satu kali, lalu segera diimplementasikan; review arsitektur ulang hanya jika fungsi/risiko material berubah. Jalur ini dirancang khusus untuk scalping harian berlatensi terukur dan exit cepat, bukan holding jangka panjang.**
+
 
 Indodax public ticker / trades / order book / OHLCV
 → G1 scanner dan market data validation
@@ -181,6 +221,8 @@ Setiap message lintas modul membawa request/trace_id, pair, timestamps, candle-c
 13. Hindari overengineering dan dokumen tanpa kode. Ketika spesifikasi cukup jelas, **implementasikan** modul berikutnya, bukan terus mengusulkan arsitektur yang sama.
 14. Jika ada perubahan kebijakan owner: ubah hanya aturan terdampak di dokumen ini, implementasi, dan affected tests; jelaskan perbedaan, jangan diam-diam mengubah target.
 15. Jika skill/bukti lama dari bot pertama dipakai sebagai referensi, adaptasi ulang secara selektif dan aman; jangan copy .env, key, ledger, user history, atau order state lama.
+
+**IRON RULE REPORT WAJIB PER TAHAP:** (1) kode/modul dibuat, (2) sambungan mainpath, (3) pemeriksaan terverifikasi, (4) belum berfungsi, (5) satu langkah berikutnya. Dilarang berhenti hanya pada rencana atau mengulang laporan lama.
 
 **FORMAT HANDOVER RINGKAS SAAT PINDAH CHAT** (tulis di A dan baris E terkait, bukan file baru): current SHA, milestone aktif, accepted evidence, blockers, code path utama, satu langkah berikutnya, unchanged milestones yang tidak perlu dites ulang.
 
