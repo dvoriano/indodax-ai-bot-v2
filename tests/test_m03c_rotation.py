@@ -121,7 +121,14 @@ class M03CRotatingWindowTests(unittest.TestCase):
                 self.assertFalse(result.rolling["full_universe_deep_verified"])
                 self.assertFalse(result.rolling["cross_cycle_ranking_allowed"])
                 self.assertFalse(result.rolling["trade_authorized"])
-            self.assertEqual(market.seen, list(PAIRS) + ["btc_idr"])
+                self.assertEqual(result.rolling["same_window"]["status"],
+                                 "ALIGNED_PUBLIC_UNATTESTED")
+                self.assertFalse(result.rolling["same_window"]["g2_candidate_authorized"])
+            # When BTC is absent from the selected pair batch, a fresh BTC
+            # observation is requested strictly for common-window context.
+            self.assertEqual(market.seen,
+                             ["btc_idr", "eth_idr", "sol_idr", "xrp_idr",
+                              "btc_idr", "inj_idr", "btc_idr"])
             self.assertEqual(app.journal.count(), 3)
 
     def test_cli_rolling_public_keeps_live_disabled(self):

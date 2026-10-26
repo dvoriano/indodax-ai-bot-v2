@@ -97,7 +97,7 @@ class DailyScalpingOrchestrator:
                 observed_epoch=preliminary.observed_epoch,
             )
             evidence = deep_scan(client, preliminary, limit=len(selected.pair_ids),
-                                 offset=selected.starting_index)
+                                 offset=selected.starting_index, require_btc=True)
             data = evidence.summary()
             data.update({
                 "reserved_pairs": list(selected.pair_ids),
