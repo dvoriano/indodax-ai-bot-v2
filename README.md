@@ -204,3 +204,11 @@ New `g1_receipt.py` validates a separate INTERNAL issuer MAC over trace, pair, c
 **Internal HMAC does not authenticate Indodax or prove complete exchange trades.** Only after a real independent G1 issuer validates actual origin, freshness, complete necessary market coverage and sound replay boundaries should a receipt be issued. This stage cannot enable real paid inference or orders.
 
 M04-A/B synthetic unit tests were updated to use a test-only signing key; ten new M04-C cases exercise tamper, expiry, replay and wrong issuer/key rejection. Run only these three changed-scope suites on VPS before one DRY_RUN public bulk probe. No Sumopod credentials are required.
+
+## M04-E: Official Indodax public trade stream recovery (CODED, not yet VPS-verified)
+
+Official source: https://github.com/btcid/indodax-official-api-docs/blob/master/Marketdata-websocket.md. Trade Activity channel `market:trade-activity-btcidr` carries timestamp, per-trade sequence, buy/sell, price, IDR/base amount, a publication offset and a recoverable subscription epoch. Official replay uses `recover:true` and the previously persisted offset after reconnect.
+
+`trade_stream.py` implements one **public-only** receiver with persistent SQLite publication hashes and offsets, strict gap/epoch/replay validation and a bounded optional `websocket-client` live probe. CLI: `--public-ws-once --pair btc_idr --stream-seconds 12 --db /tmp/indodax-v2-m04e-ws.sqlite3` (all exchange trading flags OFF). Public WS static token is published in official docs, not a private account token. The Python `websocket-client` package may require installing into the **V2** environment only.
+
+Contiguous received offsets prove only the continuity of what this client witnessed and server replayed, NOT exhaustive historical trade tape, not signed exchange-origin attestation, and certainly not buy permission. The normal 20-pair REST bulk and 3 AI shadow remains fail-closed and unchanged. Run only 10 new tests then one public WS proof; no order execution or provider call.
