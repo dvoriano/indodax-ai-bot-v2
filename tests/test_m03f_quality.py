@@ -85,10 +85,10 @@ class M03FPublicQualityReviewTests(unittest.TestCase):
         self.assertEqual(gate["provisional_watchlist_preview"], [])
         self.assertFalse(gate["g2_candidate_authorized"])
 
-    def test_public_bearish_context_may_rank_diagnostics_but_preview_empty(self):
+    def test_explicit_quality_review_flags_hide_preview_despite_aligned_candles(self):
         with patch("indodax_ai_bot.deep_analysis._quality_review") as review:
-            # Patch labels only, never model-generated or trusted provenance.
-            def bearish_flags(candidate, btc_regime):
+            # Patch labels only to isolate preview filtering; no claim of a real bearish regime.
+            def caution_flags(candidate, btc_regime):
                 return {
                     "pair": candidate.pair, "score": candidate.score,
                     "review_flags": ["BTC_DOWNTREND_CAUTION"],
@@ -96,7 +96,7 @@ class M03FPublicQualityReviewTests(unittest.TestCase):
                     "risk_ai_evaluated": False, "g2_candidate_authorized": False,
                     "trade_authorized": False,
                 }
-            review.side_effect = bearish_flags
+            review.side_effect = caution_flags
             gate = deep_scan(MarketFixture(), screening(), require_btc=True).summary()["same_window"]
         self.assertEqual(gate["status"], "ALIGNED_PUBLIC_UNATTESTED")
         self.assertEqual(len(gate["ranked_same_window_diagnostics"]), 2)
