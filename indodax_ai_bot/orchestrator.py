@@ -8,6 +8,7 @@ from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
+from .deep_analysis import deep_scan
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class CycleResult:
     execution_allowed: bool = False
     market: dict[str, str | int | bool] | None = None
     screening: dict | None = None
+    deep: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -63,13 +65,29 @@ class DailyScalpingOrchestrator:
         self.journal.record_reject(trace_id, reason)
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, summary)
 
+    def run_deep_cycle(self, trace_id: str, *,
+                       market: IndodaxPublicMarket | None = None) -> CycleResult:
+        """One bounded M03-B public-only discovery→closed-candle analysis mainpath."""
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            preliminary = DailyPairScanner(client).scan()
+            evidence = deep_scan(client, preliminary, limit=2)
+        except PublicDataError as exc:
+            reason = f"PUBLIC_DEEP_SOURCE_INVALID:{exc}"
+            result = None
+        else:
+            reason = "G1_TRADE_COVERAGE_AND_RISK_NOT_CONNECTED"
+            result = evidence.summary()
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, None, result)
+
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M03A_PUBLIC_SCREEN_CODED",
+            "release": "M03B_BOUNDED_DEEP_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M03B_DEEP_SCALPING_EVIDENCE",
+            "next_stage": "M03B_VPS_PROOF_AND_EXTENDED_COVERAGE",
         }
