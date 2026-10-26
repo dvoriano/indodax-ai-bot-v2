@@ -1,5 +1,6 @@
 """M03-B closed-candle indicators, source fault and no-trade integration tests."""
 from __future__ import annotations
+from dataclasses import replace
 from decimal import Decimal as D
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -69,6 +70,21 @@ class M03BDeepTest(unittest.TestCase):
         self.assertEqual(result.state,"REJECT_INCOMPLETE_EVIDENCE")
         self.assertIsNone(result.score)
         self.assertIn("GAPPED_60S_HISTORY",result.rejection_reason)
+
+    def test_candle_interval_checks_both_neighbor_timeframes(self):
+        obs=observation()
+        for index in (-1,-2):
+            with self.subTest(index=index):
+                minute=list(obs.candles_1m)
+                minute[index]=replace(minute[index],interval=300)
+                changed=replace(obs,candles_1m=tuple(minute))
+                result=analyze_observation(changed)
+                self.assertEqual(result.state,"REJECT_INCOMPLETE_EVIDENCE")
+                self.assertEqual(result.rejection_reason,"GAPPED_60S_HISTORY")
+        fifteen=list(obs.candles_15m)
+        fifteen[-1]=replace(fifteen[-1],interval=60)
+        changed=replace(obs,candles_15m=tuple(fifteen))
+        self.assertEqual(analyze_observation(changed).rejection_reason,"GAPPED_900S_HISTORY")
 
     def test_sparse_trade_and_wide_spread_fail_closed(self):
         self.assertEqual(analyze_observation(observation(no_trade=True)).rejection_reason,"NO_RECENT_TRADE_SAMPLE")
