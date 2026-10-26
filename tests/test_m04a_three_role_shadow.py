@@ -8,11 +8,14 @@ from unittest.mock import Mock, patch
 from io import StringIO
 from contextlib import redirect_stdout
 import json
+import hmac
+from hashlib import sha256
 import unittest
 
 from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.deep_analysis import bulk_public_deep_scan
 from indodax_ai_bot.three_role_ai import ROLES, ThreeRoleShadow
+from indodax_ai_bot.g1_receipt import G1ReceiptVerifier, canonical_receipt_bytes
 from test_m03g_bulk import FakeBulkMarket, fake_screen
 
 
@@ -30,6 +33,40 @@ def source(*, trusted=False, preview=True):
             result[key] = True
             result["eligible_cohort"][key] = True
     return result
+
+
+TEST_G1_SECRET = b"synthetic-test-only-internal-issuer-secret-00001"
+
+
+def signed_source_fixture():
+    """A private synthetic issuer key. Never used on production public data."""
+    bulk = source(trusted=True)
+    current = ThreeRoleShadow(clock=lambda: 1800000140).run("trace", bulk)
+    if current["reason"] != "G1_ISSUER_RECEIPT_UNVERIFIED":
+        raise AssertionError("SOURCE_BOUND_RECEIPT_GATE_NOT_REACHED")
+    digest = current["source_digest_sha256"]
+    claims = {
+        "schema_version": 1,
+        "issuer_id": "synthetic-unit-issuer",
+        "trace_id": "trace",
+        "pair": "btc_idr",
+        "closed_1m_epoch": 1800000120,
+        "source_digest_sha256": digest,
+        "expires_epoch": 1800000180,
+    }
+    signed = hmac.new(TEST_G1_SECRET, canonical_receipt_bytes(claims), sha256).hexdigest()
+    bulk["g1_attestation"] = {"claims": claims, "mac_sha256": signed}
+    verifier = G1ReceiptVerifier(
+        issuer_id="synthetic-unit-issuer",
+        verification_secret=TEST_G1_SECRET,
+    )
+    return bulk, verifier
+
+
+def signed_role_run(caller):
+    bulk, verifier = signed_source_fixture()
+    return ThreeRoleShadow(caller=caller, clock=lambda: 1800000140,
+                           source_verifier=verifier).run("trace", bulk)
 
 
 class RoleCaller:
@@ -95,8 +132,7 @@ class M04AShadowTests(unittest.TestCase):
 
     def test_synthetic_verified_fixture_has_exact_three_ordered_roles_but_still_no_order(self):
         caller=RoleCaller()
-        result=ThreeRoleShadow(caller=caller,clock=lambda:1800000140).run(
-            "trace",source(trusted=True))
+        result=signed_role_run(caller)
         self.assertEqual(caller.calls,list(ROLES))
         self.assertEqual(result["completed_roles"],list(ROLES))
         self.assertEqual([x["role"] for x in result["role_results"]],list(ROLES))
@@ -112,8 +148,7 @@ class M04AShadowTests(unittest.TestCase):
         for decision in ("NO_TRADE","EXIT_REVIEW"):
             with self.subTest(decision=decision):
                 caller=RoleCaller(risk=decision)
-                out=ThreeRoleShadow(caller=caller,clock=lambda:1800000140).run(
-                    "trace",source(trusted=True))
+                out=signed_role_run(caller)
                 self.assertEqual(caller.calls,["MARKET","RISK"])
                 self.assertEqual(out["reason"],"RISK_VETO_"+decision)
                 self.assertFalse(out["risk_veto_bypass_allowed"])
@@ -121,8 +156,7 @@ class M04AShadowTests(unittest.TestCase):
 
     def test_role_hash_mismatch_rejected_not_retried_or_promoted(self):
         caller=RoleCaller(corrupt_hash=True)
-        out=ThreeRoleShadow(caller=caller,clock=lambda:1800000140).run(
-            "trace",source(trusted=True))
+        out=signed_role_run(caller)
         self.assertEqual(out["reason"],"M04_ROLE_INVALID_OR_UNAVAILABLE")
         self.assertEqual(caller.calls,["MARKET"])
         self.assertEqual(out["completed_roles"],[])
@@ -142,8 +176,7 @@ class M04AShadowTests(unittest.TestCase):
             if role=="STRATEGY":
                 raw["projected_net_profit_idr"]="-1"
             return raw
-        out=ThreeRoleShadow(caller=provider,clock=lambda:1800000140).run(
-            "trace",source(trusted=True))
+        out=signed_role_run(provider)
         self.assertEqual(out["reason"],"M04_ROLE_INVALID_OR_UNAVAILABLE")
         self.assertEqual(out["completed_roles"],["MARKET","RISK"])
 
