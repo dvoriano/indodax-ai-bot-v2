@@ -9,6 +9,7 @@ from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
 from .deep_analysis import deep_scan, bulk_public_deep_scan
+from .three_role_ai import ThreeRoleShadow
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class CycleResult:
     deep: dict | None = None
     rolling: dict | None = None
     bulk: dict | None = None
+    ai_shadow: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -129,19 +131,22 @@ class DailyScalpingOrchestrator:
         else:
             reason = "G1_PUBLIC_BULK_SOURCE_UNVERIFIED"
             result = evidence
+        # One G2 boundary, in the already accepted bulk mainpath. No provider
+        # object is configured, no billable requests, no trading permission.
+        ai_shadow = ThreeRoleShadow().run(trace_id, result)
         self.journal.record_reject(trace_id, reason)
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
-            None, None, None, None, result,
+            None, None, None, None, result, ai_shadow,
         )
 
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M03G_PUBLIC_BULK_CODED",
+            "release": "M04A_THREE_ROLE_SHADOW_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M03G_VPS_SHARED_CONTEXT_AND_BUDGET_PROOF",
+            "next_stage": "M04A_VPS_UNTRUSTED_G1_ROLE_BOUNDARY_TEST",
         }

@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.bulk_deep_once:
                 result["public_bulk"] = outcome.bulk
+                result["ai_shadow"] = outcome.ai_shadow
                 result["bulk_probe_status"] = (
                     "PUBLIC_BULK_BLOCKED" if outcome.bulk is None
                     else "PUBLIC_BULK_UNATTESTED"

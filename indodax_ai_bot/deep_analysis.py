@@ -487,6 +487,9 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
     actual_requests = getattr(market, "public_get_attempt_count", None)
     return {
         "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
+        "screening_observed_epoch": screening.observed_epoch,
+        "source_trust_verified": False,
+        "trade_history_complete": False,
         "shortlist_size": len(screening.shortlist),
         "requested_pairs": list(selected),
         "attempted_count": attempted,
