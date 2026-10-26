@@ -160,9 +160,13 @@ Only after a clean Git pull on VPS, test changes to M02 adapter, M03-A scanner, 
 
 ```bash
 env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
-  python3 -B -m unittest discover -s tests -p 'test_m0[23ag]*.py' -v
+  python3 -B -m unittest discover -s tests -p 'test_m02_public_market.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m03a_scanner.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m03g_bulk.py' -v
 env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
   python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03g-bulk.sqlite3 --bulk-deep-once
 ```
 
-Use individual test patterns instead of the compact glob above if environment glob behavior differs. 20 live public pair requests can still fail or time out; this is not a scanner malfunction by itself. Do NOT enable orders.
+These are exactly the three affected scopes: M02 public adapter, M03-A scanner and M03-G bulk. Previously accepted M03-B/C/D/E/F are not rerun unless they break due to an actual dependency change. 20 live public pair requests can still fail or time out; this is not a scanner malfunction by itself. Do NOT enable orders.
