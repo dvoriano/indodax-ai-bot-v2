@@ -132,3 +132,20 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 ```
 
 No G1 provenance, trade coverage, AI, Telegram or live exchange permission is enabled by this milestone.
+
+## M03-F: observable quality cautions and a non-trading preview
+
+VPS M03-E reached **29/29 PASS**, real aligned public BTC+ETH source and `M03E_EXIT_CODE=0` at 4cf220a7. BTC regime then was DOWNTREND and the pair diagnostics were both score30, with negative book imbalance. These are timestamped samples, not real-time guidance.
+
+M03-F adds provisional caution flags to the **same** analyzer: BTC downtrend, RSI <=30 / >=75, 1m relative volume below 1, book imbalance below -0.5, or sampled visible sells above buys. A synchronized public-only preview may include up to 2 candidates with zero caution flags. This preview is NOT a qualified G1 receipt or a trading signal, all guard booleans remain false. Cutoffs have not been validated by historical replay.
+
+One VPS verification of affected tests and public market:
+
+```bash
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m03[d-f]*.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03f.sqlite3 --rolling-deep-once
+```
+
+Actual trade history coverage and G1 issuer are NOT present; Final Decision remains REJECT, private keys and orders OFF.
