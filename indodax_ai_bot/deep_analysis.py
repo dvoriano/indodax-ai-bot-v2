@@ -14,6 +14,11 @@ from .scanner import ScannerResult
 
 ZERO = Decimal("0")
 HUNDRED = Decimal("100")
+# Conservative provisional review thresholds; NOT statistically fitted.
+# Do not graduate this diagnostic to order permission without replay.
+EXTREME_VOLUME_RATIO = Decimal("10")
+EXTREME_RSI = Decimal("90")
+VISIBLE_SELL_DOMINANCE_MULTIPLE = Decimal("3")
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,7 @@ class DeepCandidate:
     visible_buy_idr: Decimal = ZERO
     visible_sell_idr: Decimal = ZERO
     book_imbalance: Decimal | None = None
+    anomaly_flags: tuple[str, ...] = ()
 
     def summary(self) -> dict:
         return {
@@ -45,6 +51,8 @@ class DeepCandidate:
             "visible_buy_idr": str(self.visible_buy_idr),
             "visible_sell_idr": str(self.visible_sell_idr),
             "book_imbalance": None if self.book_imbalance is None else str(self.book_imbalance.quantize(Decimal("0.001"))),
+            "anomaly_flags": list(self.anomaly_flags),
+            "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
             "trade_authorized": False,
@@ -115,6 +123,22 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
         imbalance = ((obs.bid_depth_top5_idr - obs.ask_depth_top5_idr)
                      / (obs.bid_depth_top5_idr + obs.ask_depth_top5_idr))
         buy, sell = obs.visible_closed_1m_buy_idr, obs.visible_closed_1m_sell_idr
+        # Public trade flow is a VISIBLE SAMPLE, never complete trade history.
+        # Conservative review when volume explosions are combined with extreme
+        # RSI or visible selling. These are anomaly flags, not proof of fraud.
+        flags: list[str] = []
+        if volume_ratio >= EXTREME_VOLUME_RATIO:
+            if rsi >= EXTREME_RSI:
+                flags.append("EXTREME_VOLUME_WITH_OVERBOUGHT_RSI")
+            if sell > ZERO and sell >= VISIBLE_SELL_DOMINANCE_MULTIPLE * buy:
+                flags.append("EXTREME_VOLUME_WITH_VISIBLE_SELL_DOMINANCE")
+        if flags:
+            return DeepCandidate(
+                pair, None, "REJECT_MOMENTUM_ANOMALY",
+                "EXTREME_PUBLIC_MOMENTUM_REVIEW_REQUIRED",
+                obs.snapshot.source.closed_1m_epoch, rsi, ema8, ema21,
+                volume_ratio, spread_bps, buy, sell, imbalance, tuple(flags),
+            )
 
         # Deterministic indicators, NOT a trading probability or expected ROI.
         score = sum((
@@ -187,10 +211,17 @@ def _same_window_gate(
     if btc is None:
         return dict(base, status="REJECT_BTC_SOURCE_UNAVAILABLE")
     btc_diagnostic = analyze_observation(btc)
+    if btc_diagnostic.state == "REJECT_MOMENTUM_ANOMALY":
+        return dict(base, status="REJECT_BTC_ANOMALY_REVIEW_REQUIRED")
     if btc_diagnostic.score is None:
         return dict(base, status="REJECT_BTC_CONTEXT_INCOMPLETE")
-    if len(candidates) == 0 or any(c.score is None for c in candidates):
+    if len(candidates) == 0 or any(
+        c.score is None and c.state != "REJECT_MOMENTUM_ANOMALY"
+        for c in candidates
+    ):
         return dict(base, status="REJECT_CANDIDATE_EVIDENCE_INCOMPLETE")
+    if any(c.state == "REJECT_MOMENTUM_ANOMALY" for c in candidates):
+        return dict(base, status="REJECT_CANDIDATE_ANOMALY_REVIEW_REQUIRED")
     btc_epoch = btc.snapshot.source.closed_1m_epoch
     all_observations = [btc]
     for candidate in candidates:
