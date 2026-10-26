@@ -130,10 +130,23 @@ class ThreeRoleShadow:
             "root_trade_history_complete": bulk.get("trade_history_complete") is True,
             "root_source_trust_verified": bulk.get("source_trust_verified") is True,
         }
+        raw_market_evidence = bulk.get("ranked_diagnostics_top10")
+        pair_evidence = next(
+            (item for item in raw_market_evidence
+             if isinstance(item, dict) and item.get("pair") == source["pair"]),
+            None,
+        ) if isinstance(raw_market_evidence, list) else None
+        if (not isinstance(pair_evidence, dict)
+                or pair_evidence.get("closed_1m_epoch") != epoch
+                or pair_evidence.get("trade_authorized") is not False):
+            return _reject("G1_MISSING_BOUND_MARKET_EVIDENCE",
+                           candidate_pair=source["pair"])
+        # Bind the actual candle/microstructure snapshot to the commitment,
+        # rather than hashing only the scalar score.
+        source["market_evidence"] = json.loads(json.dumps(pair_evidence))
         stable = json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         digest = sha256(stable.encode("utf-8")).hexdigest()
-        # SHA-256 binds local bytes; it NEVER authenticates an exchange or
-        # substitutes for a trusted G1 issuer. All three source gates required.
+        # A local SHA digest never authenticates Indodax or a trusted issuer.
         if not all(source[k] for k in (
             "source_trust_verified", "g1_verified", "trade_history_complete",
             "root_g1_verified", "root_trade_history_complete", "root_source_trust_verified",
@@ -144,19 +157,6 @@ class ThreeRoleShadow:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,
                            candidate_pair=source["pair"])
 
-        raw_market_evidence = bulk.get("ranked_diagnostics_top10")
-        pair_evidence = next(
-            (item for item in raw_market_evidence
-             if isinstance(item, dict) and item.get("pair") == source["pair"]),
-            None,
-        ) if isinstance(raw_market_evidence, list) else None
-        # A provider must not extrapolate from a bare scalar score. If the
-        # detailed candle/microstructure snapshot is missing, fail closed.
-        if (not isinstance(pair_evidence, dict)
-                or pair_evidence.get("closed_1m_epoch") != epoch
-                or pair_evidence.get("trade_authorized") is not False):
-            return _reject("G1_MISSING_BOUND_MARKET_EVIDENCE", digest=digest,
-                           candidate_pair=source["pair"])
         inputs = {
             "source": source,
             "market_evidence": json.loads(json.dumps(pair_evidence)),
