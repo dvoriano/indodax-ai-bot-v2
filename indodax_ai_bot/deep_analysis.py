@@ -142,6 +142,7 @@ class DeepScan:
     analyzed: tuple[DeepCandidate, ...]
     budget_limit: int
     scope: str = "M03B_BOUNDED_PUBLIC_PILOT_NO_TRADE"
+    same_window: dict | None = None
 
     def summary(self) -> dict:
         ranked = sorted(self.analyzed, key=lambda x: (
@@ -156,11 +157,81 @@ class DeepScan:
             "g1_verified": False,
             "trade_authorized": False,
             "risk_ai_connected": False,
+            **({"same_window": self.same_window} if self.same_window is not None else {}),
         }
 
 
+def _same_window_gate(
+    screening: ScannerResult,
+    candidates: tuple[DeepCandidate, ...],
+    observations: dict[str, PublicObservation],
+    btc: PublicObservation | None,
+) -> dict:
+    """Compare only observations from a single closed 1m epoch with fresh BTC.
+
+    A synchronized diagnostic is NOT a G1 receipt, AI candidate or permission.
+    No scores are carried from earlier scan batches.
+    """
+    base = {
+        "status": "REJECT_NO_SYNCHRONIZED_EVIDENCE",
+        "closed_1m_epoch": None,
+        "btc_regime": None,
+        "ranked_same_window_diagnostics": [],
+        "source_trust_verified": False,
+        "trade_history_complete": False,
+        "g2_candidate_authorized": False,
+        "live_trading_authorized": False,
+        "cross_cycle_ranking_allowed": False,
+        "btc_context_requested": True,
+    }
+    if btc is None:
+        return dict(base, status="REJECT_BTC_SOURCE_UNAVAILABLE")
+    btc_diagnostic = analyze_observation(btc)
+    if btc_diagnostic.score is None:
+        return dict(base, status="REJECT_BTC_CONTEXT_INCOMPLETE")
+    if len(candidates) == 0 or any(c.score is None for c in candidates):
+        return dict(base, status="REJECT_CANDIDATE_EVIDENCE_INCOMPLETE")
+    btc_epoch = btc.snapshot.source.closed_1m_epoch
+    all_observations = [btc]
+    for candidate in candidates:
+        o = observations.get(candidate.pair)
+        if o is None:
+            return dict(base, status="REJECT_MISSING_PAIR_OBSERVATION")
+        all_observations.append(o)
+    # Guard against observation spanning a new closed minute or stale ranking
+    # after the initial ticker_all sweep. Never interpret distinct 1m closes
+    # as one synchronous market picture.
+    epochs = {o.snapshot.source.closed_1m_epoch for o in all_observations}
+    times = [o.snapshot.source.observed_epoch for o in all_observations]
+    if (len(epochs) != 1 or next(iter(epochs)) != btc_epoch
+            or max(times) - min(times) > 45
+            or abs(max(times) - screening.observed_epoch) > 60
+            or any(o.snapshot.source.pair != o.pair for o in all_observations)):
+        return dict(base, status="REJECT_CANDLE_OR_SNAPSHOT_MISALIGNMENT")
+    # BTC is a context signal, not permission. Use closed 15m prices and
+    # EMA direction together; neither a public quote nor indicator is verified.
+    btc_latest = btc.candles_15m[-1]
+    btc_prev = btc.candles_15m[-2]
+    if btc_diagnostic.ema8 > btc_diagnostic.ema21 and btc_latest.close > btc_prev.close:
+        regime = "BTC_UPTREND_DIAGNOSTIC"
+    elif btc_diagnostic.ema8 < btc_diagnostic.ema21 and btc_latest.close < btc_prev.close:
+        regime = "BTC_DOWNTREND_DIAGNOSTIC"
+    else:
+        regime = "BTC_MIXED_DIAGNOSTIC"
+    ranked = sorted(candidates, key=lambda c: (-int(c.score), c.pair))
+    return dict(
+        base,
+        status="ALIGNED_PUBLIC_UNATTESTED",
+        closed_1m_epoch=btc_epoch,
+        btc_regime=regime,
+        ranked_same_window_diagnostics=[
+            {"pair": c.pair, "score": c.score} for c in ranked
+        ],
+    )
+
+
 def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: int = 2,
-              offset: int = 0) -> DeepScan:
+              offset: int = 0, require_btc: bool = False) -> DeepScan:
     """Bound deep calls; never fetch 30 x 7 requests in a single minute."""
     if not 1 <= limit <= 2:
         raise ValueError("M03B pilot limits deep HTTP work to 1-2 pairs")
@@ -169,6 +240,7 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
     if not screening.shortlist:
         raise PublicDataError("NO_PRELIMINARY_CANDIDATES")
     found: list[DeepCandidate] = []
+    observations: dict[str, PublicObservation] = {}
     count = min(limit, len(screening.shortlist))
     for i in range(count):
         item = screening.shortlist[(offset + i) % len(screening.shortlist)]
@@ -176,7 +248,25 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
             obs = market.observe(item.pair)
             if abs(obs.snapshot.source.observed_epoch - screening.observed_epoch) > 120:
                 raise PublicDataError("OUT_OF_SYNC_SCREENING")
+            observations[item.pair] = obs
             found.append(analyze_observation(obs))
         except PublicDataError as exc:
             found.append(DeepCandidate(item.pair, None, "REJECT_SOURCE_ERROR", str(exc)))
-    return DeepScan(screening.all_idr_pairs, len(screening.shortlist), tuple(found), limit)
+    synchronized: dict | None = None
+    if require_btc:
+        btc = observations.get("btc_idr")
+        if btc is None:
+            # Explicit third public observation only when BTC is absent from
+            # the selected two, bounded by the 12s scheduler, no re-use of
+            # older or cached snapshots.
+            try:
+                btc = market.observe("btc_idr")
+            except PublicDataError:
+                btc = None
+        synchronized = _same_window_gate(
+            screening, tuple(found), observations, btc,
+        )
+    return DeepScan(
+        screening.all_idr_pairs, len(screening.shortlist),
+        tuple(found), limit, same_window=synchronized,
+    )
