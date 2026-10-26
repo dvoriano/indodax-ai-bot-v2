@@ -13,7 +13,7 @@ from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
 from .deep_analysis import deep_scan, bulk_public_deep_scan
 from .three_role_ai import ThreeRoleShadow
-from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, StreamEvidenceError
+from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 
 
 @dataclass(frozen=True)
@@ -205,6 +205,36 @@ class DailyScalpingOrchestrator:
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
             public_ws=ws_data,
+        )
+
+    def run_public_ws_collect_cycle(self, trace_id: str, *, db_path: str,
+                                    pair: str = "btc_idr", sessions: int = 2,
+                                    seconds: int = 30, pause_seconds: int = 1) -> CycleResult:
+        """Bounded PUBLIC collector through same durable journal, Final REJECT."""
+        journal = PublicTradeStreamJournal(db_path)
+        try:
+            report = collect_official_public_ws(
+                journal, pair=pair, sessions=sessions,
+                session_seconds=seconds, pause_seconds=pause_seconds,
+            )
+            reason = (
+                "PUBLIC_WS_COLLECTION_UNATTESTED" if report["status"] ==
+                "PUBLIC_SAMPLE_COLLECTED_UNATTESTED"
+                else "PUBLIC_WS_COLLECTION_INTERRUPTED"
+            )
+        except StreamEvidenceError:
+            report = {
+                "status": "REJECT",
+                "reason": "INVALID_PUBLIC_WS_COLLECTOR_REQUEST",
+                "g1_receipt_issuance_allowed": False,
+                "g2_provider_call_allowed": False,
+                "execution_allowed": False,
+            }
+            reason = "PUBLIC_WS_COLLECTION_INTERRUPTED"
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(
+            trace_id, FinalDecision.REJECT, reason, False,
+            public_ws=report,
         )
 
     def health(self) -> dict[str, str | int | bool]:

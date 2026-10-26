@@ -24,7 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--rolling-deep-once", action="store_true", help="PUBLIC 2-pair rotating deep scan, SQLite persisted and paced, never trades")
     group.add_argument("--bulk-deep-once", action="store_true", help="PUBLIC up-to-20 same-cycle deep scan; bounded requests and never trades")
     group.add_argument("--public-ws-once", action="store_true", help="One public BTC trade-activity WS probe; persisted offset, no trades")
+    group.add_argument("--public-ws-collect", action="store_true",
+                       help="Bounded multi-session PUBLIC WS collection; durable SQLite, never trades")
     parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
+    parser.add_argument("--collector-sessions", type=int, default=2,
+                        help="PUBLIC WS collector: 2..10 sessions per bounded invocation")
+    parser.add_argument("--collector-pause-seconds", type=int, default=1,
+                        help="PUBLIC WS collector: 0..10 seconds between sessions")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
@@ -36,7 +42,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.health:
             result = app.health()
         else:
-            if args.public_ws_once:
+            if args.public_ws_collect:
+                outcome = app.run_public_ws_collect_cycle(
+                    uuid4().hex, db_path=args.db, pair=args.pair,
+                    sessions=args.collector_sessions,
+                    seconds=args.stream_seconds,
+                    pause_seconds=args.collector_pause_seconds,
+                )
+            elif args.public_ws_once:
                 outcome = app.run_public_ws_cycle(uuid4().hex, db_path=args.db,
                                                   pair=args.pair, seconds=args.stream_seconds)
             elif args.bulk_deep_once:
@@ -58,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
-            if args.public_ws_once:
+            if args.public_ws_once or args.public_ws_collect:
                 result["public_ws"] = outcome.public_ws
                 result["live_trading_authorized"] = False
             if args.bulk_deep_once:
@@ -103,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.bulk_deep_once and result["public_bulk"] is None:
             return 3
         if args.public_ws_once and outcome.reason.startswith("PUBLIC_WS_PROBE_REJECTED:"):
+            return 3
+        if args.public_ws_collect and outcome.reason == "PUBLIC_WS_COLLECTION_INTERRUPTED":
             return 3
         return 0
     except (ConfigurationError, OSError, ValueError) as exc:
