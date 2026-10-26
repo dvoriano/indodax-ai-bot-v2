@@ -14,6 +14,7 @@ from time import time
 from typing import Any
 
 from .contracts import FinalDecision
+from .g1_receipt import G1ReceiptVerifier
 
 ROLES = ("MARKET", "RISK", "STRATEGY")
 
@@ -59,9 +60,12 @@ class ThreeRoleShadow:
     """
 
     def __init__(self, *, caller: Callable[[str, dict[str, Any]], Mapping[str, Any]] | None = None,
-                 clock: Callable[[], float] = time) -> None:
+                 clock: Callable[[], float] = time,
+                 source_verifier: G1ReceiptVerifier | None = None) -> None:
         self._caller = caller
         self._clock = clock
+        # No verifier is wired from production public market or env flags.
+        self._source_verifier = source_verifier
 
     def run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(trace_id, str) or not trace_id.strip():
@@ -152,6 +156,17 @@ class ThreeRoleShadow:
             "root_g1_verified", "root_trade_history_complete", "root_source_trust_verified",
         )):
             return _reject("G1_PUBLIC_EVIDENCE_UNTRUSTED", digest=digest,
+                           candidate_pair=source["pair"])
+        # These boolean labels arrive in mutable JSON, so they are NOT
+        # sufficient to authorize a role call. Require an independently
+        # authenticated INTERNAL issuer receipt covering the evidence hash.
+        if (self._source_verifier is None
+                or not self._source_verifier.verify(
+                    bulk.get("g1_attestation"),
+                    trace_id=trace_id, pair=source["pair"],
+                    closed_epoch=epoch, source_digest=digest, now=now,
+                )):
+            return _reject("G1_ISSUER_RECEIPT_UNVERIFIED", digest=digest,
                            candidate_pair=source["pair"])
         if self._caller is None:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,
