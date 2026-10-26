@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**Milestone aktif M02:** validasi satu observasi pasar publik langsung pada host dengan koneksi Indodax; tidak menggunakan private key, provider AI ataupun order. Status resmi, bukti dan next action selalu dibaca dari ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M03-A:** M02 public BTC/IDR sudah berhasil diobservasi langsung di VPS (exit 0). Kini ada scanner awal public IDR → top30/watchlist max2, tetapi belum terverifikasi lewat tes dan VPS public scan. Progress terbaru ada di ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -57,3 +57,16 @@ bash ops/bootstrap_v2_vps.sh sync-and-probe
 ```
 
 Tidak menghapus folder, menghentikan service, menyentuh credential Indodax, atau mengaktifkan LIVE. M02_EXIT_CODE=0 hanya membuktikan data publik terbaca, tidak mengesahkan sinyal G1 maupun izin trading.
+
+## M03-A: Uji scanner awal pada VPS (tanpa order)
+
+Setelah `git pull --ff-only origin main` pada checkout V2, jalankan hanya scoped test baru dan satu scan publik:
+
+```bash
+INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN \
+  python3 -B -m unittest -v tests/test_m03a_scanner.py
+INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03a.sqlite3 --scan-once
+```
+
+Scanner hanya memakai endpoint publik Indodax `/api/pairs`, `/api/server_time`, `/api/ticker_all` dan membuat shortlist awal. Volume 24 jam bukan sinyal scalp yang cukup: **G1 issuer tetap unverified, Final REJECT, order OFF**. M03-B akan mengonfirmasi candle 1/5/15m, BTC, trade-flow dan bukti microstructure sebelum 3 AI.
