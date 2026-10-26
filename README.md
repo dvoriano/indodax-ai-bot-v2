@@ -2,7 +2,7 @@
 
 **MISI UTAMA: SCALPING HARIAN INDODAX (24/7 market monitoring, intraday spot trading IDR → BUY → SELL → IDR).** Bot baru untuk spot scalping Indodax, dibangun modular **dari nol** dan **terpisah dari bot lama**. Target akhir: market scanner G1, 3 AI (MARKET → RISK → STRATEGY), Final Decision PASS/REJECT via Telegram MANUAL/AUTO, modal IDR dinamis, protective FLOKI/PEPE, BUY → SELL → IDR reconciliation, monitoring, dan operasi VPS yang aman.
 
-> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M03-I accepted for 8/8 VPS tests and real aligned 8-of-20 public cohort. M04-A shadow source guard passed 18/18 scoped VPS tests and real 20-pair no-provider run. M04-B configurable Sumopod adapter is CODED with 11 new mock tests pending VPS; production paid models remain OFF. Telegram, capital and executor are not enabled. **Trading LIVE OFF.** Target laba bukan jaminan.
+> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M03-I accepted for 8/8 VPS tests and real aligned 8-of-20 public cohort. M04-A shadow source guard passed 18/18 scoped VPS tests and real 20-pair no-provider run. M04-B Sumopod mock adapter passed 11/11 scoped VPS tests; M04-A 10/10. M04-C independent G1 issuer receipt guard CODED, not yet VPS-proven. Paid models and trading remain OFF. Telegram, capital and executor are not enabled. **Trading LIVE OFF.** Target laba bukan jaminan.
 
 ## Mulai di sini
 
@@ -196,3 +196,11 @@ Sumopod's official documentation confirms OpenAI-compatible Chat Completions at 
 
 Run two affected tests on VPS only: `test_m04a_three_role_shadow.py` (role input SHA changed) and `test_m04b_sumopod_adapter.py` (11 new mock adapter cases), followed by one public DRY_RUN bulk probe to confirm 0 provider roles/calls and Final REJECT. **Do not run a paid model probe or provide credentials yet.**
 
+
+## M04-C: internal issuer receipt verification is not Indodax provenance
+
+New `g1_receipt.py` validates a separate INTERNAL issuer MAC over trace, pair, candle epoch, local full market-evidence digest and expiry. The existing 3-role shadow requires this receipt before a model caller can run, regardless of Boolean trust flags. Public G1 emits no verified receipt and production does not load a key or verifier.
+
+**Internal HMAC does not authenticate Indodax or prove complete exchange trades.** Only after a real independent G1 issuer validates actual origin, freshness, complete necessary market coverage and sound replay boundaries should a receipt be issued. This stage cannot enable real paid inference or orders.
+
+M04-A/B synthetic unit tests were updated to use a test-only signing key; ten new M04-C cases exercise tamper, expiry, replay and wrong issuer/key rejection. Run only these three changed-scope suites on VPS before one DRY_RUN public bulk probe. No Sumopod credentials are required.
