@@ -325,6 +325,17 @@ def probe_official_public_ws(
     acked = False
     disconnect_recorded = False
     received = 0
+    # Distinguish publications recovered during subscription from those
+    # seen in live frames. Count only new SQLite inserts, not replay frames.
+    publications_at_start = journal.read_count(pair)
+    recovered_new_publications = 0
+    server_replay_rows = 0
+    resume_requested = False
+    resume_requested_offset = None
+    server_ack_offset = None
+    server_ack_epoch = None
+    publications_after_ack = publications_at_start
+    recovery_diagnostic = "NOT_SUBSCRIBED"
     heartbeat_confirmed = False
     other_frames = 0
     timeout_reads = 0
@@ -350,7 +361,11 @@ def probe_official_public_ws(
                 break
         if not authenticated:
             raise StreamEvidenceError("PUBLIC_WS_AUTH_TIMEOUT")
-        ws.send(json.dumps(journal.subscription(pair)))
+        subscribe_request = journal.subscription(pair)
+        params = subscribe_request["params"]
+        resume_requested = params.get("recover") is True
+        resume_requested_offset = params.get("offset")
+        ws.send(json.dumps(subscribe_request))
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             try:
@@ -361,7 +376,30 @@ def probe_official_public_ws(
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
             msg = json.loads(raw)
             if isinstance(msg, dict) and msg.get("id") == 2:
-                journal.acknowledge(pair, msg)
+                result = msg.get("result")
+                if not isinstance(result, dict):
+                    raise StreamEvidenceError("INVALID_WS_SUBSCRIPTION_ACK")
+                replay = result.get("publications", [])
+                if not isinstance(replay, list):
+                    raise StreamEvidenceError("INVALID_WS_RECOVERED_PUBLICATIONS")
+                server_replay_rows = len(replay)
+                server_ack_offset = result.get("offset")
+                server_ack_epoch = result.get("epoch")
+                subscription_state = journal.acknowledge(pair, msg)
+                publications_after_ack = journal.read_count(pair)
+                recovered_new_publications = publications_after_ack - publications_at_start
+                if recovered_new_publications < 0:
+                    raise StreamEvidenceError("PUBLIC_WS_RECOVERY_COUNTER_INVALID")
+                if not resume_requested:
+                    recovery_diagnostic = "INITIAL_SUBSCRIPTION"
+                elif subscription_state["stream_status"] == "GAP":
+                    recovery_diagnostic = "REPLAY_GAP_UNRESOLVED"
+                elif recovered_new_publications:
+                    recovery_diagnostic = "REPLAY_NEW_PUBLICATIONS_PERSISTED"
+                elif server_replay_rows:
+                    recovery_diagnostic = "REPLAY_BOUNDARY_ONLY"
+                else:
+                    recovery_diagnostic = "RESUME_NO_NEW_PUBLICATIONS"
                 acked = True
                 break
         if not acked:
@@ -390,6 +428,11 @@ def probe_official_public_ws(
             else:
                 other_frames += 1
         during_probe = journal.status(pair)
+        live_publications_persisted = (
+            during_probe["persisted_publications"] - publications_after_ack
+        )
+        if live_publications_persisted < 0:
+            raise StreamEvidenceError("PUBLIC_WS_LIVE_COUNTER_INVALID")
         # This is a bounded probe, not a daemon. Report the persisted
         # post-close state truthfully rather than a stale ACTIVE snapshot.
         persisted = journal.mark_disconnected(pair)
@@ -399,6 +442,16 @@ def probe_official_public_ws(
             "stream_status_during_probe": during_probe["stream_status"],
             "public_ws_probe_completed": True,
             "received_publications_in_this_probe": received,
+            "live_publications_newly_persisted": live_publications_persisted,
+            "publications_persisted_before_subscription": publications_at_start,
+            "publications_persisted_after_subscription": publications_after_ack,
+            "resume_requested": resume_requested,
+            "resume_requested_offset": resume_requested_offset,
+            "server_ack_epoch": server_ack_epoch,
+            "server_ack_offset": server_ack_offset,
+            "server_replayed_publication_frames": server_replay_rows,
+            "recovered_publications_newly_persisted": recovered_new_publications,
+            "recovery_diagnostic": recovery_diagnostic,
             "subscription_acknowledged": acked,
             "protocol_heartbeat_confirmed": heartbeat_confirmed,
             "unrecognized_frame_count": other_frames,
