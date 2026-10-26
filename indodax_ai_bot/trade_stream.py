@@ -183,6 +183,16 @@ class PublicTradeStreamJournal:
                         "UPDATE ws_stream_state SET status='GAP' WHERE pair=?", (pair,),
                     )
                 else:
+                    if stored[2] == "GAP" and not publications:
+                        # A gap cannot be declared repaired without replay.
+                        return self.status(pair)
+                    if stored[2] == "GAP":
+                        # Only ACK-provided replay is allowed to repair a gap;
+                        # an ordinary live frame must never bypass it.
+                        con.execute(
+                            "UPDATE ws_stream_state SET status='RECOVERING' WHERE pair=?",
+                            (pair,),
+                        )
                     # Recovery ack may contain publications after old offset.
                     # Only contiguous publications may bridge the old cursor
                     # to the newly announced server offset.
@@ -226,6 +236,13 @@ class PublicTradeStreamJournal:
                 raise StreamEvidenceError("WS_SUBSCRIPTION_NOT_ACKNOWLEDGED")
             self._advance(con, pair, epoch_row[0], offset, rows)
         return self.status(pair)
+
+    def read_count(self, pair: str) -> int:
+        channel_for_pair(pair)
+        with self._connect() as con:
+            return int(con.execute(
+                "SELECT COUNT(*) FROM ws_trade_publications WHERE pair=?", (pair,),
+            ).fetchone()[0])
 
     def mark_disconnected(self, pair: str) -> dict[str, Any]:
         channel_for_pair(pair)
