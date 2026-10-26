@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**Milestone aktif M03-C:** M03-B VPS 7/7 tests PASS dan public BTC/IDR + ETH/IDR deep pilot exit 0, selalu REJECT. M03-C rolling deep 2-pair per cycle sudah CODED; tes baru belum diuji pada VPS. Handover/checklist terbarunya di ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M03-D:** M03-C sudah 7/7 VPS PASS dan real rolling BTC+ETH exit0. M03-D shared-minute BTC regime guard has been coded on same rolling path; tests and VPS proof pending. All outcomes remain REJECT. Handover in ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -100,3 +100,18 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 ```
 
 Output sukses public-only: `PUBLIC_ROLLING_UNATTESTED`, `reserved_pairs`, `next_index`, `cross_cycle_ranking_allowed=false`, `final_decision=REJECT` dan `execution_allowed=false`. Jika dijalankan kembali dalam kurang dari 12 detik, akan `PUBLIC_ROLLING_BLOCKED`/exit3. Ini tidak memanggil model AI/akun pribadi/order.
+
+## M03-D: Same-minute BTC regime alignment, public-only
+
+Updated existing rolling path, no new scanner or AI. Every pair and BTC context must have the same **closed 1m epoch** and timely observations, otherwise `same_window.status` is a REJECT reason and the list of synchronized diagnostics is empty. An aligned result is still **PUBLIC UNATTESTED**, not qualified for G2, never an execution permission.
+
+Check changed tests on VPS after pulling current SHA:
+
+```bash
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m03[c-d]*.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03d-samewindow.sqlite3 --rolling-deep-once
+```
+
+Do not mix candidate scores from different one-minute candle closes. Historical coverage across 20-40 assets is future work, not evidence of one synchronous decision. Final remains REJECT.
