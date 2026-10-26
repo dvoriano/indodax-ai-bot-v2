@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**Milestone aktif M03-A:** M02 public BTC/IDR sudah berhasil diobservasi langsung di VPS (exit 0). Kini ada scanner awal public IDR → top30/watchlist max2, tetapi belum terverifikasi lewat tes dan VPS public scan. Progress terbaru ada di ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M03-B:** M03-A sudah lulus 9/9 tes dan real public scan (398 IDR pairs, shortlist 30) di VPS pada SHA bdcd9f5. M03-B deep-indicator pilot dan pemisahan MAIN sudah CODED, masih perlu tes VPS. Baca ROADMAP untuk evidence dan satu next action. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -70,3 +70,18 @@ INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MOD
 ```
 
 Scanner hanya memakai endpoint publik Indodax `/api/pairs`, `/api/server_time`, `/api/ticker_all` dan membuat shortlist awal. Volume 24 jam bukan sinyal scalp yang cukup: **G1 issuer tetap unverified, Final REJECT, order OFF**. M03-B akan mengonfirmasi candle 1/5/15m, BTC, trade-flow dan bukti microstructure sebelum 3 AI.
+
+## M03-B: Verifikasi deep-scoring publik, NON-LIVE
+
+MAIN kini mengecualikan PEPE/FLOKI (dana khusus) dan USDT/USDC (stablecoin settlement). `--deep-once` memakai satu scanner dan maksimal dua deep observations dengan EMA8/21, RSI14, volume, spread, visible flow/book. Ini hasil analisis observasi, **bukan** rekomendasi BUY.
+
+Pada VPS checkout V2 terbaru, jalankan tes scope yang berubah, bukan audit seluruh kode:
+
+```bash
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m0[23]*.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03b.sqlite3 --deep-once
+```
+
+Deep pilot hanya 2 pair, **belum** 20-40 full coverage. Visible trade sample tidak berarti trade history lengkap. G1 issuer tetap unverified, Final REJECT dan eksekusi selalu OFF.
