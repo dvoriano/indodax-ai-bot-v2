@@ -353,3 +353,104 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
         screening.all_idr_pairs, len(screening.shortlist),
         tuple(found), limit, same_window=synchronized,
     )
+
+
+def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
+                          *, limit: int = 20) -> dict:
+    """M03-G: source-efficient SAME-CYCLE 20–40 pair diagnostic attempt.
+
+    This is NOT a multi-minute rank aggregator. Per-pair 4 public GET requests
+    are used with the scanner's 3 already counted shared public responses.
+    The 180/min published limit is per IP; this local budget is not a global
+    cross-process limiter. Abort if observations cannot stay timely.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 20 <= limit <= 40:
+        raise PublicDataError("BULK_LIMIT_MUST_BE_20_TO_40")
+    context = screening.scan_context
+    if context is None:
+        raise PublicDataError("BULK_REQUIRES_SHARED_PUBLIC_SCAN_CONTEXT")
+    if len(screening.shortlist) < limit:
+        raise PublicDataError("BULK_SHORTLIST_BELOW_REQUESTED_LIMIT")
+    selected = tuple(x.pair for x in screening.shortlist[:limit])
+    if len(set(selected)) != len(selected):
+        raise PublicDataError("BULK_DUPLICATE_PAIRS")
+    # Scanner: pairs + server_time + ticker_all => 3 HTTP GET.
+    # Each observe(pair, scan_context) fetches 1m/15m OHLC, trades and depth
+    # => 4 GET. Fetch BTC context once if outside selected. Headroom 12 GET
+    # reserves capacity for noise, but OTHER PROCESSES on the IP aren't tracked.
+    extra_btc = "btc_idr" not in selected
+    expected_gets = 3 + 4 * len(selected) + (4 if extra_btc else 0)
+    if expected_gets > 168:
+        raise PublicDataError("PUBLIC_RATE_BUDGET_EXCEEDED")
+    if abs(context.observed_epoch - screening.observed_epoch) > 0:
+        raise PublicDataError("BULK_SCAN_CONTEXT_MISMATCH")
+
+    observations: dict[str, PublicObservation] = {}
+    candidates: list[DeepCandidate] = []
+    attempted = 0
+    window_expired = False
+    for pair in selected:
+        if int(market._clock()) - screening.observed_epoch > 30:
+            window_expired = True
+            break
+        attempted += 1
+        try:
+            obs = market.observe(pair, scan_context=context)
+            if (obs.snapshot.source.observed_epoch - screening.observed_epoch > 30
+                    or int(market._clock()) - screening.observed_epoch > 30):
+                window_expired = True
+                break
+        except PublicDataError as exc:
+            candidates.append(DeepCandidate(
+                pair, None, "REJECT_SOURCE_ERROR", str(exc)))
+            continue
+        observations[pair] = obs
+        candidates.append(analyze_observation(obs))
+    completed = attempted == len(selected) and len(candidates) == len(selected)
+    valid = completed and not window_expired and all(c.score is not None for c in candidates)
+    guard = {
+        "status": "REJECT_INCOMPLETE_OR_EXPIRED_BULK_COVERAGE",
+        "ranked_same_window_diagnostics": [],
+        "provisional_watchlist_preview": [],
+        "cross_cycle_ranking_allowed": False,
+        "g2_candidate_authorized": False,
+        "live_trading_authorized": False,
+        "trade_history_complete": False,
+        "source_trust_verified": False,
+    }
+    if valid:
+        btc = observations.get("btc_idr")
+        if btc is None:
+            try:
+                if int(market._clock()) - screening.observed_epoch > 30:
+                    raise PublicDataError("EXPIRED_BTC_CONTEXT_WINDOW")
+                btc = market.observe("btc_idr", scan_context=context)
+            except PublicDataError:
+                btc = None
+        guard = _same_window_gate(screening, tuple(candidates), observations, btc)
+
+    diagnostic = sorted(candidates, key=lambda x: (
+        x.score is None, -(x.score if x.score is not None else -1), x.pair
+    ))
+    return {
+        "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
+        "shortlist_size": len(screening.shortlist),
+        "requested_pairs": list(selected),
+        "attempted_count": attempted,
+        "analyzed_count": len(candidates),
+        "candidate_valid_count": sum(c.score is not None for c in candidates),
+        "candidate_rejected_count": sum(c.score is None for c in candidates),
+        "window_expired": window_expired,
+        "estimated_requests_including_discovery": expected_gets,
+        "public_limit_per_minute": 180,
+        "local_budget_headroom": 12,
+        "other_process_requests_accounted_for": False,
+        "shared_public_scan_context": True,
+        "ranked_diagnostics_top10": [x.summary() for x in diagnostic[:10]],
+        "same_window": guard,
+        "full_universe_deep_verified": False,
+        "g1_verified": False,
+        "g2_candidate_authorized": False,
+        "trade_authorized": False,
+        "execution_allowed": False,
+    }
