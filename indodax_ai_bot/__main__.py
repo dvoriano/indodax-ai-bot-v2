@@ -26,11 +26,15 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-ws-once", action="store_true", help="One public BTC trade-activity WS probe; persisted offset, no trades")
     group.add_argument("--public-ws-collect", action="store_true",
                        help="Bounded multi-session PUBLIC WS collection; durable SQLite, never trades")
+    group.add_argument("--public-ws-supervised-once", action="store_true",
+                       help="One public WS service batch with file lock and fail-stop; NO automatic deployment")
     parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
     parser.add_argument("--collector-sessions", type=int, default=2,
                         help="PUBLIC WS collector: 2..10 sessions per bounded invocation")
     parser.add_argument("--collector-pause-seconds", type=int, default=1,
                         help="PUBLIC WS collector: 0..10 seconds between sessions")
+    parser.add_argument("--supervisor-status-file", default=None,
+                        help="Optional atomic status of last PUBLIC WS batch, not certified trade evidence")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
@@ -42,7 +46,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.health:
             result = app.health()
         else:
-            if args.public_ws_collect:
+            if args.public_ws_supervised_once:
+                outcome = app.run_public_ws_supervised_cycle(
+                    uuid4().hex, db_path=args.db, pair=args.pair,
+                    sessions=args.collector_sessions,
+                    seconds=args.stream_seconds,
+                    pause_seconds=args.collector_pause_seconds,
+                    status_file=args.supervisor_status_file,
+                )
+            elif args.public_ws_collect:
                 outcome = app.run_public_ws_collect_cycle(
                     uuid4().hex, db_path=args.db, pair=args.pair,
                     sessions=args.collector_sessions,
@@ -71,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
-            if args.public_ws_once or args.public_ws_collect:
+            if args.public_ws_once or args.public_ws_collect or args.public_ws_supervised_once:
                 result["public_ws"] = outcome.public_ws
                 result["live_trading_authorized"] = False
             if args.bulk_deep_once:
@@ -118,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.public_ws_once and outcome.reason.startswith("PUBLIC_WS_PROBE_REJECTED:"):
             return 3
         if args.public_ws_collect and outcome.reason == "PUBLIC_WS_COLLECTION_INTERRUPTED":
+            return 3
+        if args.public_ws_supervised_once and outcome.reason == "PUBLIC_WS_SUPERVISION_INTERRUPTED":
             return 3
         return 0
     except (ConfigurationError, OSError, ValueError) as exc:

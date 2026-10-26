@@ -14,6 +14,7 @@ from .scanner import DailyPairScanner
 from .deep_analysis import deep_scan, bulk_public_deep_scan
 from .three_role_ai import ThreeRoleShadow
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
+from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,36 @@ class DailyScalpingOrchestrator:
                 "execution_allowed": False,
             }
             reason = "PUBLIC_WS_COLLECTION_INTERRUPTED"
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(
+            trace_id, FinalDecision.REJECT, reason, False,
+            public_ws=report,
+        )
+
+    def run_public_ws_supervised_cycle(
+        self, trace_id: str, *, db_path: str, pair: str = "btc_idr",
+        sessions: int = 10, seconds: int = 30, pause_seconds: int = 1,
+        status_file: str | None = None,
+    ) -> CycleResult:
+        """One lock-protected PUBLIC service batch, no paid AI or orders."""
+        try:
+            report = supervised_public_ws_batch(
+                db_path, pair=pair, sessions=sessions, seconds=seconds,
+                pause_seconds=pause_seconds, status_file=status_file,
+            )
+        except PublicWSSupervisorError:
+            report = {
+                "stage": "M04J_PUBLIC_WS_SUPERVISION_SLICE",
+                "status": "REJECT",
+                "reason": "PUBLIC_WS_SUPERVISOR_LOCK_OR_BOUNDS_BLOCKED",
+                "g1_receipt_issuance_allowed": False,
+                "g2_provider_call_allowed": False,
+                "execution_allowed": False,
+                "restart_only_after_clean_batch": False,
+            }
+        reason = ("PUBLIC_WS_SUPERVISION_UNATTESTED"
+                  if report["status"] == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
+                  else "PUBLIC_WS_SUPERVISION_INTERRUPTED")
         self.journal.record_reject(trace_id, reason)
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
