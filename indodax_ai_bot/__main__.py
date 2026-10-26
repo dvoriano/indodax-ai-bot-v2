@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
+    group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     args = parser.parse_args(argv)
 
@@ -29,7 +30,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.health:
             result = app.health()
         else:
-            if args.scan_once:
+            if args.deep_once:
+                outcome = app.run_deep_cycle(uuid4().hex)
+            elif args.scan_once:
                 outcome = app.run_scan_cycle(uuid4().hex)
             elif args.public_once or args.verify_public:
                 outcome = app.run_public_cycle(uuid4().hex, pair=args.pair)
@@ -42,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
+            if args.deep_once:
+                result["public_deep"] = outcome.deep
+                result["deep_probe_status"] = "PUBLIC_DEEP_UNATTESTED" if outcome.deep is not None else "PUBLIC_DEEP_ERROR"
+                result["live_trading_authorized"] = False
             if args.scan_once:
                 result["public_scanner"] = outcome.screening
                 result["scanner_probe_status"] = "PUBLIC_SCREENED_UNATTESTED" if outcome.screening is not None else "PUBLIC_SCANNER_ERROR"
@@ -57,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.verify_public and not result["verified_public_payload_parsed"]:
             return 3
         if args.scan_once and result["public_scanner"] is None:
+            return 3
+        if args.deep_once and result["public_deep"] is None:
             return 3
         return 0
     except (ConfigurationError, OSError, ValueError) as exc:
