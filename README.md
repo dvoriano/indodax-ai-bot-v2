@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**Milestone aktif M03-B:** M03-A sudah lulus 9/9 tes dan real public scan (398 IDR pairs, shortlist 30) di VPS pada SHA bdcd9f5. M03-B deep-indicator pilot dan pemisahan MAIN sudah CODED, masih perlu tes VPS. Baca ROADMAP untuk evidence dan satu next action. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M03-C:** M03-B VPS 7/7 tests PASS dan public BTC/IDR + ETH/IDR deep pilot exit 0, selalu REJECT. M03-C rolling deep 2-pair per cycle sudah CODED; tes baru belum diuji pada VPS. Handover/checklist terbarunya di ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -85,3 +85,18 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 ```
 
 Deep pilot hanya 2 pair, **belum** 20-40 full coverage. Visible trade sample tidak berarti trade history lengkap. G1 issuer tetap unverified, Final REJECT dan eksekusi selalu OFF.
+
+
+## M03-C: rotasi deep public 2 pair/siklus (belum LIVE/PAPER)
+
+Mode `--rolling-deep-once` memakai **satu scanner dan satu analyzer** yang sudah ada, dengan cursor SQLite dan batas 2 pair per eksekusi; default minimum antarawal scan 12 detik. Reservasi atomik, bisa dilanjutkan setelah restart, dan mencegah dua proses memulai batch serentak. Setiap siklus tetap `REJECT`, data historis antarwaktu **tidak boleh dicampur menjadi ranking live**.
+
+Jalankan pada V2 VPS dengan environment DRY_RUN:
+
+```bash
+python3 -B -m unittest discover -s tests -p 'test_m03c_rotation.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03c.sqlite3 --rolling-deep-once
+```
+
+Output sukses public-only: `PUBLIC_ROLLING_UNATTESTED`, `reserved_pairs`, `next_index`, `cross_cycle_ranking_allowed=false`, `final_decision=REJECT` dan `execution_allowed=false`. Jika dijalankan kembali dalam kurang dari 12 detik, akan `PUBLIC_ROLLING_BLOCKED`/exit3. Ini tidak memanggil model AI/akun pribadi/order.
