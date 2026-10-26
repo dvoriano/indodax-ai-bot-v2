@@ -127,7 +127,7 @@ class PublicTradeStreamJournal:
         if existing is None:
             raise StreamEvidenceError("WS_SUBSCRIPTION_NOT_ACKNOWLEDGED")
         previous_epoch, previous_offset, status = existing
-        if status == "GAP" or epoch != previous_epoch:
+        if status in ("GAP", "DISCONNECTED") or epoch != previous_epoch:
             raise StreamEvidenceError("WS_STREAM_GAP_OR_EPOCH_CHANGED")
         if offset <= previous_offset:
             earlier = con.execute(
@@ -190,30 +190,45 @@ class PublicTradeStreamJournal:
                         "UPDATE ws_stream_state SET status='GAP' WHERE pair=?", (pair,),
                     )
                 else:
+                    # Official replay can INCLUDE the requested last offset.
+                    # That boundary does not establish an unseen publication.
                     if stored[2] == "GAP" and not publications:
-                        # A gap cannot be declared repaired without replay.
-                        return self.status(pair)
-                    if stored[2] == "GAP":
-                        # Only ACK-provided replay is allowed to repair a gap;
-                        # an ordinary live frame must never bypass it.
+                        con.execute(
+                            "UPDATE ws_stream_state SET status='GAP' WHERE pair=?",
+                            (pair,),
+                        )
+                    else:
                         con.execute(
                             "UPDATE ws_stream_state SET status='RECOVERING' WHERE pair=?",
                             (pair,),
                         )
-                    # Recovery ack may contain publications after old offset.
-                    # Only contiguous publications may bridge the old cursor
-                    # to the newly announced server offset.
-                    for pub in publications:
-                        off, rows = self._parse_recovered(pair, pub)
-                        self._advance(con, pair, epoch, off, rows)
-                    latest = con.execute(
-                        "SELECT last_offset,status FROM ws_stream_state WHERE pair=?",
-                        (pair,),
-                    ).fetchone()
-                    if latest[0] != offset or latest[1] == "GAP":
-                        con.execute(
-                            "UPDATE ws_stream_state SET status='GAP' WHERE pair=?", (pair,),
-                        )
+                        for pub in publications:
+                            off, rows = self._parse_recovered(pair, pub)
+                            if off == old_offset:
+                                encoded = json.dumps(rows, separators=(",", ":"), ensure_ascii=True)
+                                prior = con.execute(
+                                    "SELECT payload_sha256 FROM ws_trade_publications "
+                                    "WHERE pair=? AND epoch=? AND offset=?",
+                                    (pair, epoch, old_offset),
+                                ).fetchone()
+                                if prior is not None and prior[0] != sha256(encoded.encode()).hexdigest():
+                                    raise StreamEvidenceError("WS_RESUME_BOUNDARY_COLLISION")
+                                continue
+                            self._advance(con, pair, epoch, off, rows)
+                        latest = con.execute(
+                            "SELECT last_offset,status FROM ws_stream_state WHERE pair=?",
+                            (pair,),
+                        ).fetchone()
+                        if latest[0] != offset or latest[1] == "GAP":
+                            con.execute(
+                                "UPDATE ws_stream_state SET status='GAP' WHERE pair=?",
+                                (pair,),
+                            )
+                        elif latest[1] == "RECOVERING":
+                            con.execute(
+                                "UPDATE ws_stream_state SET status='BASELINE_ONLY' WHERE pair=?",
+                                (pair,),
+                            )
         return self.status(pair)
 
     def _parse_recovered(self, pair: str, publication: Any):
