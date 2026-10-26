@@ -27,10 +27,14 @@ class CycleResult:
 
 
 class DailyScalpingOrchestrator:
-    def __init__(self, settings: Settings, journal: DecisionJournal) -> None:
+    def __init__(self, settings: Settings, journal: DecisionJournal, *,
+                 ai_role_caller=None) -> None:
         settings.require_m01_safety()
         self.settings = settings
         self.journal = journal
+        # Explicit dependency injection seam only. Production CLI supplies
+        # None: paid model calls remain unconfigured and unreachable.
+        self._ai_role_caller = ai_role_caller
 
     def run_cycle(self, trace_id: str) -> CycleResult:
         # No synthetic candles, mock AI authority, private API or phantom orders.
@@ -133,7 +137,7 @@ class DailyScalpingOrchestrator:
             result = evidence
         # One G2 boundary, in the already accepted bulk mainpath. No provider
         # object is configured, no billable requests, no trading permission.
-        ai_shadow = ThreeRoleShadow().run(trace_id, result)
+        ai_shadow = ThreeRoleShadow(caller=self._ai_role_caller).run(trace_id, result)
         self.journal.record_reject(trace_id, reason)
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
