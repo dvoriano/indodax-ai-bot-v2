@@ -26,6 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-ws-once", action="store_true", help="One public BTC trade-activity WS probe; persisted offset, no trades")
     parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
+    parser.add_argument("--ws-db", default=None,
+                        help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
     args = parser.parse_args(argv)
 
     try:
@@ -38,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = app.run_public_ws_cycle(uuid4().hex, db_path=args.db,
                                                   pair=args.pair, seconds=args.stream_seconds)
             elif args.bulk_deep_once:
-                outcome = app.run_bulk_deep_cycle(uuid4().hex)
+                outcome = app.run_bulk_deep_cycle(uuid4().hex, ws_db_path=args.ws_db)
             elif args.rolling_deep_once:
                 outcome = app.run_rolling_deep_cycle(uuid4().hex)
             elif args.deep_once:

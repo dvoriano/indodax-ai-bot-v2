@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import time
+import sqlite3
 
 from .config import Settings
 from .contracts import FinalDecision
@@ -125,7 +128,8 @@ class DailyScalpingOrchestrator:
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, None, None, data)
 
     def run_bulk_deep_cycle(self, trace_id: str, *,
-                            market: IndodaxPublicMarket | None = None) -> CycleResult:
+                            market: IndodaxPublicMarket | None = None,
+                            ws_db_path: str | None = None) -> CycleResult:
         """One bounded 20-pair public attempt; never use stale/replayed ranks."""
         client = market if market is not None else IndodaxPublicMarket()
         try:
@@ -137,6 +141,44 @@ class DailyScalpingOrchestrator:
         else:
             reason = "G1_PUBLIC_BULK_SOURCE_UNVERIFIED"
             result = evidence
+        # M04-H: optional read-only bridge to the EXISTING public WS SQLite
+        # journal, strictly diagnostic. No promotions to g1_verified/issuer
+        # flags. REST and WS may be from DIFFERENT temporal snapshots.
+        if ws_db_path is not None and result is not None:
+            cohort = result.get("eligible_cohort") or {}
+            minute = cohort.get("closed_1m_epoch")
+            if type(minute) is not int:
+                result["btc_ws_closed_minute_sample"] = {
+                    "status": "REJECT",
+                    "reason": "NO_ALIGNED_BTC_CLOSED_MINUTE",
+                    "g1_receipt_issuance_allowed": False,
+                    "g2_provider_call_allowed": False,
+                    "execution_allowed": False,
+                }
+            elif not Path(ws_db_path).is_file():
+                result["btc_ws_closed_minute_sample"] = {
+                    "status": "REJECT",
+                    "reason": "PUBLIC_WS_SQLITE_NOT_FOUND",
+                    "g1_receipt_issuance_allowed": False,
+                    "g2_provider_call_allowed": False,
+                    "execution_allowed": False,
+                }
+            else:
+                try:
+                    result["btc_ws_closed_minute_sample"] = (
+                        PublicTradeStreamJournal(ws_db_path).closed_minute_sample(
+                            "btc_idr", closed_1m_epoch=minute,
+                            now_epoch=int(time.time()),
+                        )
+                    )
+                except (StreamEvidenceError, sqlite3.Error, OSError, ValueError):
+                    result["btc_ws_closed_minute_sample"] = {
+                        "status": "REJECT",
+                        "reason": "PUBLIC_WS_SAMPLE_UNAVAILABLE_OR_INVALID",
+                        "g1_receipt_issuance_allowed": False,
+                        "g2_provider_call_allowed": False,
+                        "execution_allowed": False,
+                    }
         # One G2 boundary, in the already accepted bulk mainpath. No provider
         # object is configured, no billable requests, no trading permission.
         ai_shadow = ThreeRoleShadow(caller=self._ai_role_caller).run(trace_id, result)
