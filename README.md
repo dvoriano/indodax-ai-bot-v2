@@ -228,3 +228,13 @@ No real issuer, AI paid provider, capital account, telegram owner approval or bu
 At V2 SHA `513dc284`, the owner VPS proved M04-F: corrected ACK 1/1 test PASS; two public BTC/IDR 30-second WebSocket sessions (same journal) subscribed/heartbeated successfully, received 2 and 1 live publications, persisted rows 2 then 4, last offset 14642460 then 14642462, Final REJECT and exit0. The difference suggests a recovered publication during reconnect but old output did not separate it from live frames.
 
 The same `trade_stream.py` now emits `recovered_publications_newly_persisted`, `server_replayed_publication_frames`, `live_publications_newly_persisted`, previous resume offset, ACK cursor and persisted before/after counts. Six synthetic tests are authored but NOT run on VPS. A single new 30-second PUBLIC session using `/tmp/indodax-v2-m04f-ws.sqlite3` will measure actual recovery independently. This is observed WebSocket continuity only; never G1 issuer/trade tape authorization, paid AI or order readiness.
+
+## M04-J: staged supervised PUBLIC WebSocket collection (CODED, VPS pending)
+
+Owner VPS at `8be8fbfb` proved M04-I: 7/7 tests PASS, three successive real BTC PUBLIC trade WebSocket sessions, 129 recovered plus 3 live publications, stored total 163, Final REJECT and exit0. This is real witnessed/replayed market-data continuity, not exhaustive trade origin authentication.
+
+M04-J reuses the same `PublicTradeStreamJournal`, `collect_official_public_ws`, and V2 `DailyScalpingOrchestrator` in one finite locked batch, with a redacted atomic JSON last-batch status. The CLI `--public-ws-supervised-once` exits 0 only after a fully safe bounded public-data batch, and returns nonzero on gap, missing heartbeat, lock contention or any incomplete run. It never issues a G1 receipt or authorizes a paid AI model or order.
+
+The unit template `deploy/indodax-v2-public-ws-btc.service` is committed for review only, NOT installed, started or enabled by the repository. It uses `Restart=on-success`, so a clean bounded batch can start the next one only after explicit installation/enablement by the operator, while an unsafe/nonzero failure stops the service. Its runtime DB lives inside this V2 project, not the legacy bot or transient /tmp.
+
+Nine new tests are authored in `tests/test_m04j_ws_supervisor.py` but NOT VPS-tested. Next: nine scoped tests, then one short public-only `--public-ws-supervised-once --db /tmp/indodax-v2-m04j-pilot.sqlite3 --collector-sessions 2 --stream-seconds 10 --collector-pause-seconds 1 --supervisor-status-file /tmp/indodax-v2-m04j-pilot.status.json`. Do not install/enable systemd during this acceptance. The status sidecar is last-batch evidence only, never trading authorization.
