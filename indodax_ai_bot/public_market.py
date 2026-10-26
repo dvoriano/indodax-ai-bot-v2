@@ -204,10 +204,11 @@ class IndodaxPublicMarket:
                 scan_context: PublicScanContext | None = None) -> PublicObservation:
         if not _PAIR_RE.fullmatch(pair):
             raise PublicDataError("INVALID_IDR_PAIR")
-        observed = int(self._clock())
         if scan_context is None:
             pairs = self.idr_pairs()
+            observed = int(self._clock())
         else:
+            observed = int(self._clock())
             if not isinstance(scan_context, PublicScanContext):
                 raise PublicDataError("INVALID_PUBLIC_SCAN_CONTEXT")
             if (observed < scan_context.observed_epoch
