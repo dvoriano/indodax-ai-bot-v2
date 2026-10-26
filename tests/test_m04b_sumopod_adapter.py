@@ -12,7 +12,7 @@ from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from indodax_ai_bot.sumopod_provider import ROLES, SumopodChatAdapter, SumopodProviderError, URL
 from indodax_ai_bot.three_role_ai import ThreeRoleShadow
 from test_m03g_bulk import FakeBulkMarket, fake_screen
-from test_m04a_three_role_shadow import RoleCaller, source
+from test_m04a_three_role_shadow import RoleCaller, signed_role_run
 
 KEY = "sk-unit-test-key"
 MODELS = {"MARKET": "market-example", "RISK": "risk-example", "STRATEGY": "strategy-example"}
@@ -124,7 +124,7 @@ class M04BSumopodTests(unittest.TestCase):
 
     def test_roles_share_evidence_but_strategy_receives_prior_risk_veto_context(self):
         caller=RoleCaller()
-        out=ThreeRoleShadow(caller=caller,clock=lambda:1800000140).run("trace",source(trusted=True))
+        out=signed_role_run(caller)
         self.assertEqual(caller.calls,list(ROLES))
         self.assertEqual([len(x["prior_role_results"]) for x in caller.inputs],[0,1,2])
         self.assertEqual(caller.inputs[2]["prior_role_results"][1]["decision"],"ALLOW")
