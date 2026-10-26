@@ -2,7 +2,7 @@
 
 **MISI UTAMA: SCALPING HARIAN INDODAX (24/7 market monitoring, intraday spot trading IDR → BUY → SELL → IDR).** Bot baru untuk spot scalping Indodax, dibangun modular **dari nol** dan **terpisah dari bot lama**. Target akhir: market scanner G1, 3 AI (MARKET → RISK → STRATEGY), Final Decision PASS/REJECT via Telegram MANUAL/AUTO, modal IDR dinamis, protective FLOKI/PEPE, BUY → SELL → IDR reconciliation, monitoring, dan operasi VPS yang aman.
 
-> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M03-I accepted for 8/8 VPS tests and real aligned 8-of-20 public cohort. M04-A source-bound three-role SHADOW code is wired but not yet tested; no paid model/provider, Telegram, capital or executor is enabled. **Trading LIVE OFF.** Target laba bukan jaminan.
+> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M03-I accepted for 8/8 VPS tests and real aligned 8-of-20 public cohort. M04-A shadow source guard passed 18/18 scoped VPS tests and real 20-pair no-provider run. M04-B configurable Sumopod adapter is CODED with 11 new mock tests pending VPS; production paid models remain OFF. Telegram, capital and executor are not enabled. **Trading LIVE OFF.** Target laba bukan jaminan.
 
 ## Mulai di sini
 
@@ -186,3 +186,13 @@ Verify only affected M02 adapter, M03-G bulk and M03-H suites on the VPS before 
 Unit tests inject synthetic role callers to prove MARKET → RISK → STRATEGY ordering, risk NO_TRADE/EXIT_REVIEW veto, schema/digest binding, stale-source failure and continued Final REJECT. These are NOT real paid AI tests. Sumopod provider adapter remains a separate next milestone.
 
 On VPS: run `test_m04a_three_role_shadow.py` plus affected `test_m03i_valid_cohort.py`, then one public `--bulk-deep-once` with all trading environment flags OFF. Inspect `ai_shadow.reason` and `completed_roles` (should be empty on untrusted G1), and Final REJECT.
+
+
+## M04-B: Sumopod adapter mock-ready, paid network OFF
+
+Sumopod's official documentation confirms OpenAI-compatible Chat Completions at https://ai.sumopod.com/v1/chat/completions. The V2 adapter accepts three independently configured role model IDs through \`SUMOPOD_MODEL_MARKET\`, \`SUMOPOD_MODEL_RISK\`, and \`SUMOPOD_MODEL_STRATEGY\`, plus \`SUMOPOD_API_KEY\` only when deliberately configured in a future release. **Do not paste/store API keys in GitHub or chats.** No model IDs or model prices are assumed current.
+
+\`SumopodChatAdapter.configured_from_env()\` still has paid-network OFF and is not created by the main CLI. A fake injected sender is available for isolated regression tests. The orchestrator has a single optional role-caller injection point for test wiring, but the normal public \`--bulk-deep-once\` always supplies no provider. Role input includes the same bound market microstructure snapshot and prior validated role decisions, with one local SHA digest (not issuer authentication).
+
+Run two affected tests on VPS only: \`test_m04a_three_role_shadow.py\` (role input SHA changed) and \`test_m04b_sumopod_adapter.py\` (11 new mock adapter cases), followed by one public DRY_RUN bulk probe to confirm 0 provider roles/calls and Final REJECT. **Do not run a paid model probe or provide credentials yet.**
+
