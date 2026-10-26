@@ -79,7 +79,8 @@ def _last_continuous(series: tuple[Candle, ...], interval: int, count: int) -> t
     if len(series) < count:
         raise PublicDataError(f"INSUFFICIENT_{interval}S_COVERAGE")
     last = series[-count:]
-    if any(c.interval != interval or (b.start - a.start) != interval for a, b in zip(last, last[1:])):
+    if any(a.interval != interval or b.interval != interval or (b.start - a.start) != interval
+           for a, b in zip(last, last[1:])):
         raise PublicDataError(f"GAPPED_{interval}S_HISTORY")
     return last
 
