@@ -388,9 +388,14 @@ def probe_official_public_ws(
                 received += 1
             else:
                 other_frames += 1
-        result = journal.status(pair)
+        during_probe = journal.status(pair)
+        # This is a bounded probe, not a daemon. Report the persisted
+        # post-close state truthfully rather than a stale ACTIVE snapshot.
+        persisted = journal.mark_disconnected(pair)
+        acked = False  # Already committed post-close state.
         return {
-            **result,
+            **persisted,
+            "stream_status_during_probe": during_probe["stream_status"],
             "public_ws_probe_completed": True,
             "received_publications_in_this_probe": received,
             "subscription_acknowledged": acked,
