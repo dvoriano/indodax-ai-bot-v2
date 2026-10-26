@@ -78,8 +78,10 @@ def supervised_public_ws_batch(
             data = {"status": "REJECT", "reason": "PUBLIC_WS_SESSION_EXCEPTION"}
         except Exception:
             data = {"status": "REJECT", "reason": "PUBLIC_WS_SESSION_UNAVAILABLE"}
+        public_state = journal.status(pair)
         safe = (
-            isinstance(data, dict)
+            public_state["stream_status"] == "DISCONNECTED"
+            and isinstance(data, dict)
             and data.get("status") == "PUBLIC_SAMPLE_COLLECTED_UNATTESTED"
             and data.get("requested_sessions") == sessions
             and data.get("completed_safe_sessions") == sessions
@@ -88,7 +90,6 @@ def supervised_public_ws_batch(
             and data.get("g2_provider_call_allowed") is False
             and data.get("execution_allowed") is False
         )
-        public_state = journal.status(pair)
         result: dict[str, Any] = {
             "stage": "M04J_PUBLIC_WS_SUPERVISION_SLICE",
             "status": "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED" if safe else "REJECT",
@@ -108,7 +109,7 @@ def supervised_public_ws_batch(
             "indodax_trade_tape_completeness_proven": False,
             "source_authenticated_for_g1": False,
             "restart_only_after_clean_batch": safe,
-            "systemd_service_active": False,  # Staged unit, NOT deployed here.
+            "systemd_service_active": None,  # Deployment status cannot be inferred from code.
         }
         if status_file is not None:
             path = Path(status_file)
