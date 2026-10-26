@@ -203,7 +203,10 @@ def _same_window_gate(
     # as one synchronous market picture.
     epochs = {o.snapshot.source.closed_1m_epoch for o in all_observations}
     times = [o.snapshot.source.observed_epoch for o in all_observations]
+    timeframe_contexts = {(o.candle_5m.start, o.candle_15m.start)
+                          for o in all_observations}
     if (len(epochs) != 1 or next(iter(epochs)) != btc_epoch
+            or len(timeframe_contexts) != 1
             or max(times) - min(times) > 45
             or abs(max(times) - screening.observed_epoch) > 60
             or any(o.snapshot.source.pair != o.pair for o in all_observations)):

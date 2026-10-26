@@ -107,6 +107,22 @@ class M03DSameWindowTests(unittest.TestCase):
         self.assertEqual(gate["status"], "REJECT_CANDLE_OR_SNAPSHOT_MISALIGNMENT")
         self.assertEqual(gate["ranked_same_window_diagnostics"], [])
 
+    def test_mismatched_five_and_fifteen_minute_contexts_rejected(self):
+        for timeframe in ("candle_5m", "candle_15m"):
+            with self.subTest(timeframe=timeframe):
+                class MisalignedMarket(MarketFixture):
+                    def observe(self, pair):
+                        obs = super().observe(pair)
+                        if pair == "eth_idr":
+                            candle = getattr(obs, timeframe)
+                            obs = replace(obs, **{timeframe: replace(
+                                candle, start=candle.start - candle.interval)})
+                        return obs
+                out = deep_scan(MisalignedMarket(), screening(), require_btc=True)
+                gate = out.summary()["same_window"]
+                self.assertEqual(gate["status"], "REJECT_CANDLE_OR_SNAPSHOT_MISALIGNMENT")
+                self.assertEqual(gate["ranked_same_window_diagnostics"], [])
+
     def test_public_legacy_deep_diagnostics_remain_without_btc_context(self):
         market = MarketFixture()
         out = deep_scan(market, screening(), require_btc=False)
