@@ -259,6 +259,114 @@ class PublicTradeStreamJournal:
             self._advance(con, pair, epoch_row[0], offset, rows)
         return self.status(pair)
 
+    def closed_minute_sample(self, pair: str, *, closed_1m_epoch: int,
+                             now_epoch: int, max_publications: int = 2000) -> dict[str, Any]:
+        """M04-H: inspect exactly one CLOSED minute of locally persisted WS rows.
+
+        Diagnostic-only cross-source evidence, not an issuer/verified trade tape.
+        A disconnected/restarted short probe cannot establish full minute
+        coverage, even with 100% contiguous publication offsets.
+        """
+        channel_for_pair(pair)
+        if (type(closed_1m_epoch) is not int or closed_1m_epoch <= 0
+                or closed_1m_epoch % 60 != 0
+                or type(now_epoch) is not int or now_epoch <= 0
+                or type(max_publications) is not int
+                or not 1 <= max_publications <= 10000):
+            raise StreamEvidenceError("INVALID_PUBLIC_WS_MINUTE_QUERY")
+        minute_end = closed_1m_epoch + 60
+        base: dict[str, Any] = {
+            "stage": "M04H_PUBLIC_WS_CLOSED_MINUTE_SAMPLE",
+            "pair": pair,
+            "closed_1m_epoch": closed_1m_epoch,
+            "closed_1m_end_epoch": minute_end,
+            "source": "PUBLIC_WS_SQLITE_OBSERVED_SAMPLE_ONLY",
+            "status": "REJECT",
+            "minute_trade_coverage_complete": False,
+            "independent_indodax_origin_verified": False,
+            "g1_receipt_issuance_allowed": False,
+            "g2_provider_call_allowed": False,
+            "execution_allowed": False,
+        }
+        if now_epoch < minute_end:
+            return {**base, "reason": "REJECT_MINUTE_NOT_CLOSED"}
+        with self._connect() as con:
+            state = con.execute(
+                "SELECT epoch,last_offset,status FROM ws_stream_state WHERE pair=?",
+                (pair,),
+            ).fetchone()
+            if state is None:
+                return {**base, "reason": "NO_PUBLIC_WS_BASELINE"}
+            stream_epoch, last_offset, stream_status = state
+            rows = con.execute(
+                "SELECT offset,payload_sha256,rows_json FROM ws_trade_publications "
+                "WHERE pair=? AND epoch=? ORDER BY offset LIMIT ?",
+                (pair, stream_epoch, max_publications + 1),
+            ).fetchall()
+        if len(rows) > max_publications:
+            return {
+                **base, "reason": "REJECT_WS_SNAPSHOT_LIMIT_EXCEEDED",
+                "publication_query_limit": max_publications,
+                "stream_epoch": stream_epoch, "stream_status": stream_status,
+                "last_publication_offset": last_offset,
+            }
+        seen_trade_identity: set[tuple[int, int]] = set()
+        trade_count = 0
+        buy_count = 0
+        sell_count = 0
+        buy_idr = Decimal(0)
+        sell_idr = Decimal(0)
+        min_offset: int | None = None
+        max_offset: int | None = None
+        for offset, digest, raw in rows:
+            if sha256(raw.encode("utf-8")).hexdigest() != digest:
+                return {**base, "reason": "REJECT_WS_JOURNAL_DIGEST_MISMATCH"}
+            try:
+                trades = _trade_rows(json.loads(raw), pair)
+            except (ValueError, TypeError, StreamEvidenceError):
+                return {**base, "reason": "REJECT_WS_JOURNAL_CORRUPT"}
+            for trade in trades:
+                timestamp = trade[1]
+                if closed_1m_epoch <= timestamp < minute_end:
+                    identity = (timestamp, trade[2])
+                    if identity in seen_trade_identity:
+                        return {**base, "reason": "REJECT_WS_DUPLICATE_TRADE_IDENTITY"}
+                    seen_trade_identity.add(identity)
+                    trade_count += 1
+                    min_offset = offset if min_offset is None else min(min_offset, offset)
+                    max_offset = offset if max_offset is None else max(max_offset, offset)
+                    if trade[3] == "buy":
+                        buy_count += 1
+                        buy_idr += Decimal(trade[5])
+                    else:
+                        sell_count += 1
+                        sell_idr += Decimal(trade[5])
+        return {
+            **base,
+            "status": "PUBLIC_SAMPLE_OBSERVED" if trade_count else "PUBLIC_SAMPLE_EMPTY",
+            "reason": "FULL_MINUTE_TRADE_TAPE_NOT_PROVEN",
+            "stream_epoch": stream_epoch,
+            "stream_status": stream_status,
+            "last_publication_offset": last_offset,
+            "sampled_publication_count_total_epoch": len(rows),
+            "sampled_publications_in_minute": (
+                0 if min_offset is None else sum(
+                    1 for offset, _, raw in rows
+                    if any(closed_1m_epoch <= trade[1] < minute_end
+                           for trade in json.loads(raw))
+                )
+            ),
+            "offset_minimum_in_minute": min_offset,
+            "offset_maximum_in_minute": max_offset,
+            "trade_rows_visible_in_minute": trade_count,
+            "buy_trade_rows_visible": buy_count,
+            "sell_trade_rows_visible": sell_count,
+            "buy_idr_volume_visible": str(buy_idr),
+            "sell_idr_volume_visible": str(sell_idr),
+            "total_idr_volume_visible": str(buy_idr + sell_idr),
+            "observed_publications_do_not_imply_full_minute": True,
+        }
+
     def read_count(self, pair: str) -> int:
         channel_for_pair(pair)
         with self._connect() as con:
