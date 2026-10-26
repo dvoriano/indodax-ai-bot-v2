@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "indodax-ai-bot-v2"
+version = "0.1.0"
+description = "Fail-closed daily spot scalping bot foundation for Indodax"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+indodax-bot = "indodax_ai_bot.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["indodax_ai_bot*"]

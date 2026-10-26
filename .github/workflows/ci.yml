@@ -1,0 +1,28 @@
+name: M01 safe foundation
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  m01:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile changed Python scope
+        run: python -m compileall -q indodax_ai_bot tests
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: End-to-end safe CLI
+        env:
+          INDODAX_TRADING_ENABLED: "NO"
+          INDODAX_ALLOW_LIVE_EXECUTION: "NO"
+          INDODAX_EXECUTION_MODE: "DRY_RUN"
+        run: |
+          python -m indodax_ai_bot --db /tmp/m01-safe.sqlite3 --once
+          python -m indodax_ai_bot --db /tmp/m01-safe.sqlite3 --health
