@@ -11,16 +11,16 @@
 
 | Bidang | Checkpoint terkonfirmasi / status kerja |
 | --- | --- |
-| **Tahap aktif (satu saja)** | **M03-I VERIFIED_PUBLIC_ONLINE for partial cohort (VPS SHA `c3fe498c`)**: targeted test **8/8 PASS** in 0.062s and real `--bulk-deep-once` public 20/20 processed, **8 scored/12 no 1m volume**, actual83 GET, `M03I_FIX_EXIT_CODE=0`, `eligible_cohort.status=ALIGNED_PUBLIC_UNATTESTED` on common 1m close 1793023680. Full-set `same_window` remains REJECT and Final REJECT. **M04-A source-bound three-AI pipeline next; no model/provider/live claim yet.** |
-| Bukti M03-H REAL | **20/20 examined, 8 scored, 12 rejected, 83 actual attempted public GET, no expiry**. Source reasons: 9 `NO_LAST_1M_VOLUME`, 2 `SCALPING_SPREAD_TOO_WIDE`, 1 `EXTREME_PUBLIC_MOMENTUM_REVIEW_REQUIRED`. Zero incomplete HTTP requests and zero unattempted pairs. `coverage_status=PARTIAL_INVALID_PAIR_EVIDENCE`; complete-population `same_window=REJECT_INCOMPLETE_OR_EXPIRED_BULK_COVERAGE`; Final REJECT. |
-| Pair rejected categories | Zero last 1m volume: SOL, SKYAI, HYPE, PIPPIN, ENA, DOGE, BMT, STRK, CST (all /IDR). Spread: DODO/IDR and PM/IDR. Momentum anomaly: SUI/IDR. **These are one public market sample; not general permanent pair exclusions.** |
-| M03-I CODED | Within existing `deep_analysis.bulk_public_deep_scan`, compare ONLY scored candidates from the **same completed 20-pair source batch**, using existing strict BTC + closed 1m/5m/15m alignment. New `eligible_cohort` diagnostics never upgrade rejected full-population `same_window` result; source trust, G1 and G2 authorization remain false. **8 regression tests** in `tests/test_m03i_valid_cohort.py` authored. At SHA `19e1313`: **7 PASS, 1 test fixture ERROR**. Repair shifts test candle and receipt **60 seconds backward** instead of forward, retaining `observed_epoch >= closed_1m_epoch` invariant and exercising same-minute rejection. `contracts.py`/production source validation NOT weakened. Fix not rerun VPS yet. |
-| Jalur utama | `--bulk-deep-once` → one orchestrator → DailyPairScanner → shared public source → 20-pair deep → rejected pair breakdown + same-window **valid subset only** → journal Final REJECT. No scanner duplicates, no model API, no private account, no execution. |
-| Belum selesai | M03-I targeted fixture retest and real partial-cohort diagnostic PROVEN; M04 three-AI actual provider still pending; 20/20 full population valid not yet achieved (and is not prerequisite for *observation* of subset), trade coverage complete/ G1 trusted source issuer absent, same-price bid/ask snapshot provenance, AI/Telegram, capital and order ownership unbuilt. Global shared-IP limiter, replay/ablation and GitHub CI 0-step still pending. |
-| Trading/VPS | **LIVE OFF.** All JSON diagnostics no trade authorized and G1 untrusted. Bot lama/VPS services/private keys left untouched. |
-| **SATU NEXT ACTION** | **M04-A: connect one source-bound triple-role AI pipeline boundary into the existing `--bulk-deep-once` orchestrator.** Public G1 candidate evidence with `g1_verified=false` must never trigger paid provider or grant BUY. Implement strict Market→Risk→Strategy role contract with risk veto via dependency injection, tests, and report pending real-provider integration separately. |
+| **SATU TAHAP AKTIF** | **M04-A CODED, VPS TEST PENDING.** G1 M03-I accepted VERIFIED_PUBLIC_ONLINE on SHA `c3fe498c`: 8/8 scoped tests PASS 0.062s and real public bulk 20/20, 8 diagnostic-valid/12 zero-last-1m-volume, 83 public GET, aligned 8-pair cohort epoch1793023680, BTC DOWNTREND, preview empty, Final REJECT, exit0. |
+| Mainpath saat ini | `--bulk-deep-once` → existing DailyScalpingOrchestrator → G1 scanner + shared public bulk → eligible same-minute cohort → **ThreeRoleShadow.run** → Journal Final REJECT. Tidak ada G1 trust issuer, actual provider, private Indodax execution, ataupun AI LIVE. |
+| M04-A CODED | `indodax_ai_bot/three_role_ai.py` one MARKET→RISK→STRATEGY shadow pipeline, per-candle source digest binding, strict role output schema, Risk veto NO_TRADE/EXIT_REVIEW, fail-closed malformed/stale/changed source, previews with unresolved quality cautions blocked; `deep_analysis.py` adds screening timestamp/explicit untrusted flags, `orchestrator.py` and CLI expose `ai_shadow`. `tests/test_m04a_three_role_shadow.py` **10 tests CODED only**, never run VPS. |
+| Bukti diterima | M03-A–I accepted for their scoped public evidence, latest M03-I 8/8 PASS on source-cohort only. Current source is `g1_verified=false`, `trade_history_complete=false`, `source_trust_verified=false`. *A local SHA digest does NOT authenticate Indodax source.* |
+| Status AI dan uang | **3 AI roles CONTRACT ONLY**, provider not connected/paid. Public source must not invoke a model or create a trading proposal. LIVE OFF; `final_decision=REJECT`, `execution_allowed=false`, no BUY/SELL. |
+| Remaining | M04-A tests/live-public mainpath proof; provenance/coverage to qualify G1 (trade samples still page-limited), actual Sumopod provider adapter + authorized credentials, 3 model structured API calls, config, timeout/costs, Telegram Final MANUAL/AUTO, private capital, preflight and SELL lifecycle. GitHub Actions 0-step unresolved. |
+| Legacy VPS | Bot lama, its services/files/keys untouched. V2 repo separate in `~/indodax-ai-bot-v2`. |
+| **SATU NEXT ACTION** | **M04-A pull latest SHA V2 to VPS; run tests `test_m04a_three_role_shadow.py` and affected `test_m03i_valid_cohort.py`; then one public `--bulk-deep-once` to prove `ai_shadow.reason` blocks 3-role provider/BUY with real G1 untrusted.** Report SHA, test results and role counts. No paid provider/keys/order. |
 
-**New chat:** follow guideline (0/0A/B/E/F), this checkpoint, M03, evidence. Do not repeat accepted M02/M03-A to H tests unless the affected function changes.
+**New-chat handover:** Guideline 0/0A/B/E/F → this checkpoint → M04 checklist + evidence. Accepted M03 source tests not rerun without functional change. Nothing in M04-A grants LIVE or claims real AI inference.
 
 ## 2. LEGENDA CHECKLIST & BUKTI
 
@@ -111,17 +111,20 @@
 - [ ] Create trusted G1 source issuer with immutable source provenance, G2-ready 1–2 candidates only when complete fresh evidence is proven. RISK and FINAL remain closed until later milestones.
 **Acceptance:** M03 overall is PARTIAL; M03-B score alone is not a trade signal or projected net ROI. NO BUY / LIVE OFF.
 
-### M04 — 3 AI MARKET → RISK → STRATEGY
-**Status: NOT_STARTED. Bergantung G1 sourced candidates.**
-- [ ] Satu AI pipeline berurutan MARKET → RISK → STRATEGY; tidak membuat AI keempat.
-- [ ] Provider adapter configurable (Sumopod/model dapat diganti); pastikan ketersediaan/biaya model sebelum paid calls.
-- [ ] Ketiga role menggunakan snapshot pair + candle yang identik, closed, fresh, berprovenance; reject stale/missing.
-- [ ] MARKET membaca BTC/trend/volume/flow/sinyal teknikal dengan evidence yang bisa ditelusuri.
-- [ ] RISK veto ALLOW/NO_TRADE/EXIT_REVIEW; veto tak bisa dibatalkan oleh Strategy/owner.
-- [ ] STRATEGY menghasilkan entry/qty/exit plan, biaya dan projected net profit/ROI, konsisten dengan veto.
-- [ ] Strict typed response validation, timeout/retry terbatas, invalid JSON/provider errors → REJECT; dedupe per candle.
-- [ ] Integrasi tiga AI sebenarnya ke orchestrator; buktikan provider/test status secara terpisah, bukan fake model sebagai LIVE.
-**Acceptance:** valid source-bound triple-role decisions tersedia, tanpa klaim boleh mengirim order.
+### M04 — 3 AI MARKET → RISK → STRATEGY (ACTIVE)
+**Status: M04-A CODED, not tested on VPS; 3 live/paid AI providers still NOT_CONNECTED.**
+- [x] **M04-A CODED:** One source-bound shadow contract in `three_role_ai.py`. Order exactly MARKET → RISK → STRATEGY; RISK NO_TRADE/EXIT_REVIEW vetchains Strategy and cannot be bypassed.
+- [x] **M04-A CODED:** Stable SHA256 binds local trace/pair/closed epoch, BTC regime and source flags. **This digest does NOT authenticate the public source or establish G1 provenance.**
+- [x] **M04-A CODED:** Fail-closed gate requires compatible source schema, a current closed candle, candidate in same-window preview with zero quality cautions, G1 verified issuer AND complete trade coverage at cohort/root, before even considering model calls. Production public bulk cannot satisfy these gates.
+- [x] **M04-A MAINPATH WIRED:** existing `--bulk-deep-once` → orchestrator source bound `ThreeRoleShadow` → CLI `ai_shadow` → existing persisted Final REJECT. No new scanner, no paid HTTP AI, no exchange executor. Caller injected for **unit tests only**, not a configured production provider.
+- [x] **M04-A 10 CASES AUTHORED:** `tests/test_m04a_three_role_shadow.py` covers real public untrusted blocks, no-preview/cautions, synthetic test-only Market/Risk/Strategy sequence, Risk veto, output hash mismatch, invalid risk/negative ROI, stale source, CLI safety. **Not yet run VPS.**
+- [ ] **M04-A VPS PASS:** test new M04-A contract + affected bulk M03-I and run real public `--bulk-deep-once`, confirm all public/model/execution statuses remain safe, count of actual AI provider calls zero.
+- [ ] **M04-B PROVIDER:** configurable Sumopod adapter + availability/pricing proof, per-role model IDs, provider real structured responses, timeout/cost accounting; must never call paid provider on untrusted or stale G1 evidence. Needs deliberate credential approval/config.
+- [ ] **M04-C QUALIFIED G1:** source issuer and evidence coverage proven, shared pair/candle snapshot to 3 roles, no spoofable trust flag as authorization, safe retry/dedupe/source expiry and historical replay.
+- [ ] MARKET evidence-based BTC/trend/volume/flow assessment from a source-bound snapshot.
+- [ ] RISK veto over downside/liquidity/slippage/listing/balance, no override.
+- [ ] STRATEGY safe sizing and fee/slippage-adjusted net entry/exit; final policy remains separate and two outputs PASS/REJECT only.
+**Acceptance:** actual provider+market evidence and valid Market/Risk/Strategy chain proven independently; synthetic injected responses or a SHA digest never certify real AI/provider/BUY.
 
 ### M05 — Final Binary + Telegram MANUAL/AUTO
 **Status: NOT_STARTED.**
@@ -231,7 +234,8 @@
 | M03-G PUBLIC VPS PASS / PARTIAL EVIDENCE | `567eba1a` user VPS 26 Oct 2026 | M02 11/11, M03-A 9/9 and M03-G 9/9 PASS. 20 attempted, 12 valid, 8 rejected; 83 **estimated** GET, no expiry, no combined ranking, Final REJECT, exit0. | Eight reasons not surfaced; no 20/20 aligned accepted, no order. |
 | M03-H VPS ACCEPTED | `6d413428` owner VPS output | Scoped 26/26 PASS, real 20-pair public bulk: 8 scored/12 rejected, 83 actual attempted GET, no expiry, reasons nine missing 1m volume/two wide spread/one momentum anomaly, Final REJECT, exit0 | Full 20/20 synchronized evidence/G1 trust not achieved; causes are one-time sample only. |
 | M03-I VPS ACCEPTED (source-cohort only) | `c3fe498c` user supplied VPS 26 Oct 2026 | 8/8 tests PASS; 20 public pair analyzed, 8 valid and 12 missing last1m volume, 83 public GET; eligible same-minute cohort 8 on closed epoch1793023680, BTC downtrend, preview empty; Final REJECT exit0 | Still source-untrusted, G1 issuer/trade tape incomplete, no executable proposal or AI. |
-| M03-J–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | G1 source trust/AI/capital execution and follow-up stages |
+| M04-A CODED ONLY | `three_role_ai.py`, `deep_analysis.py`, `orchestrator.py`, `__main__.py`, `tests/test_m04a_three_role_shadow.py` | One source-bound 3-role Market→Risk→Strategy shadow boundary is wired into existing bulk mainpath; source, Risk veto & typed output checks implemented; **10 tests authored, no VPS PASS yet** | Untrusted G1 blocks all real provider calls; Sumopod model adapter and actual 3-role inference still not connected; no BUY |
+| M04-B–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Provider and G1 trust, Telegram, capital, preflight, execution and SELL |
 
 **Catatan:** Tanggal baseline tidak berarti semua isi tersertifikasi hari itu. Ketika bukti baru diverifikasi, tambahkan **satu baris** sesuai milestone. Jika hanya perubahan status, jangan memodifikasi aturan trading di guideline.
 

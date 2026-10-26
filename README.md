@@ -2,7 +2,7 @@
 
 **MISI UTAMA: SCALPING HARIAN INDODAX (24/7 market monitoring, intraday spot trading IDR → BUY → SELL → IDR).** Bot baru untuk spot scalping Indodax, dibangun modular **dari nol** dan **terpisah dari bot lama**. Target akhir: market scanner G1, 3 AI (MARKET → RISK → STRATEGY), Final Decision PASS/REJECT via Telegram MANUAL/AUTO, modal IDR dinamis, protective FLOKI/PEPE, BUY → SELL → IDR reconciliation, monitoring, dan operasi VPS yang aman.
 
-> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M02 pembacaan publik BTC/IDR sudah terverifikasi di VPS; G1 scanner/deep validation, tiga AI, Telegram, dan executor belum siap LIVE. **Trading LIVE OFF.** Target laba bukan jaminan.
+> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M03-I accepted for 8/8 VPS tests and real aligned 8-of-20 public cohort. M04-A source-bound three-role SHADOW code is wired but not yet tested; no paid model/provider, Telegram, capital or executor is enabled. **Trading LIVE OFF.** Target laba bukan jaminan.
 
 ## Mulai di sini
 
@@ -178,3 +178,11 @@ M03-G VPS run processed 20/20 candidates with 12 diagnostic scores and 8 rejects
 M03-H enriches the same code path with `candidate_rejection_reasons`, `candidate_rejection_reason_counts`, `coverage_status`, `not_attempted_pairs`, `attempted_without_result_count` and `public_get_attempt_count_this_client`. Counting is **per single client**, not shared-IP/global, and does not add public GETs. The partial probe status now says `PUBLIC_BULK_INCOMPLETE_UNATTESTED`; Final REJECT and order OFF.
 
 Verify only affected M02 adapter, M03-G bulk and M03-H suites on the VPS before one real public 20-pair bulk probe. Source error reasons are not known until that run. No reruns of accepted unaffected deeper suites.
+
+## M04-A: three-role G2 shadow boundary attached to the existing bulk mainpath
+
+`--bulk-deep-once` now appends `ai_shadow` from exactly one `ThreeRoleShadow` implementation. The contract verifies a current same-closed-candle G1 cohort, a source-bound local SHA256 digest, caution-free candidate preview and full trusted G1 issuer/trade coverage **before calling any provider**. Because public Indodax samples do not prove complete trade tape or issuer authentication, production M04-A must reject without calling models. SHA256 is a local payload commitment, not an authenticated provenance signature.
+
+Unit tests inject synthetic role callers to prove MARKET → RISK → STRATEGY ordering, risk NO_TRADE/EXIT_REVIEW veto, schema/digest binding, stale-source failure and continued Final REJECT. These are NOT real paid AI tests. Sumopod provider adapter remains a separate next milestone.
+
+On VPS: run `test_m04a_three_role_shadow.py` plus affected `test_m03i_valid_cohort.py`, then one public `--bulk-deep-once` with all trading environment flags OFF. Inspect `ai_shadow.reason` and `completed_roles` (should be empty on untrusted G1), and Final REJECT.
