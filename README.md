@@ -44,3 +44,16 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 Perintah memakai hanya `/api/pairs`, `/api/server_time`, `/api/ticker/<id>`, `/api/trades/<id>`, `/api/depth/<id>` dan `/tradingview/history_v2` dari dokumentasi resmi. Candle 5m dibentuk dari lima candle 1m yang lengkap. Keputusan tetap `REJECT` dengan `execution_allowed=false` karena G1 issuer dan coverage trade belum diotorisasi. Jangan melabel output publik sebagai sinyal BUY.
 
 **M02 strict source probe:** `--verify-public` exit 0 means all required public payloads parsed (`PUBLIC_OBSERVED_G1_UNATTESTED`); exit 3 means public source error. Both cases return `final_decision=REJECT`, `execution_allowed=false` and `live_trading_authorized=false`. Exit 0 does not certify G1 source issuer or allow LIVE trading.
+
+## VPS V2 tanpa menyentuh bot lama
+
+Keputusan owner: **jangan bersihkan/reset VPS lama sekarang**. V2 wajib memakai folder, SSH deploy key read-only, dan runtime terpisah. [Script bootstrap V2](ops/bootstrap_v2_vps.sh) mempunyai dua aksi:
+
+```bash
+# Dari checkout V2 (atau gunakan petunjuk setup key awal di chat jika belum bisa clone)
+bash ops/bootstrap_v2_vps.sh prepare-key
+# Daftarkan PUBLIC key pada repo V2 Settings > Deploy keys (READ ONLY).
+bash ops/bootstrap_v2_vps.sh sync-and-probe
+```
+
+Tidak menghapus folder, menghentikan service, menyentuh credential Indodax, atau mengaktifkan LIVE. M02_EXIT_CODE=0 hanya membuktikan data publik terbaca, tidak mengesahkan sinyal G1 maupun izin trading.
