@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .public_market import IndodaxPublicMarket, PublicDataError, _number, _seconds
+from .public_market import IndodaxPublicMarket, PublicDataError, PublicScanContext, _number, _seconds
 
 # MAIN wallet must never use FLOKI/PEPE reserved-strategy buckets; stablecoins
 # are settlement/quote instruments, not intended MAIN daily momentum scalps.
@@ -46,6 +46,7 @@ class ScannerResult:
     watchlist: tuple[ScreenedPair, ...]
     provenance: str = "INDODAX_PUBLIC_TICKER_ALL_UNATTESTED"
     g1_verified: bool = False
+    scan_context: PublicScanContext | None = None
 
     def summary(self) -> dict:
         return {
@@ -132,4 +133,8 @@ class DailyPairScanner:
             excluded_pairs=len(pairs) - len(eligible),
             shortlist=shortlisted,
             watchlist=shortlisted[:2],
+            scan_context=PublicScanContext(
+                observed_epoch=now, exchange_epoch=server_epoch,
+                pairs=pairs, tickers=all_tickers["tickers"],
+            ),
         )

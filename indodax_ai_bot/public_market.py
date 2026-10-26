@@ -61,6 +61,15 @@ class Candle:
 
 
 @dataclass(frozen=True)
+class PublicScanContext:
+    """Shared PUBLIC-only discovery receipt, current cycle only. Not signed provenance."""
+    observed_epoch: int
+    exchange_epoch: int
+    pairs: dict[str, tuple[str, str]]
+    tickers: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class PublicObservation:
     pair: str
     snapshot: MarketSnapshot
@@ -191,24 +200,41 @@ class IndodaxPublicMarket:
                               min(c.low for c in batch), batch[-1].close, sum((c.volume for c in batch), Decimal(0)))
         raise PublicDataError("INCOMPLETE_5M_FROM_1M")
 
-    def observe(self, pair: str = "btc_idr") -> PublicObservation:
+    def observe(self, pair: str = "btc_idr", *,
+                scan_context: PublicScanContext | None = None) -> PublicObservation:
         if not _PAIR_RE.fullmatch(pair):
             raise PublicDataError("INVALID_IDR_PAIR")
-        pairs = self.idr_pairs()
+        observed = int(self._clock())
+        if scan_context is None:
+            pairs = self.idr_pairs()
+        else:
+            if not isinstance(scan_context, PublicScanContext):
+                raise PublicDataError("INVALID_PUBLIC_SCAN_CONTEXT")
+            if (observed < scan_context.observed_epoch
+                    or observed - scan_context.observed_epoch > 30):
+                raise PublicDataError("EXPIRED_PUBLIC_SCAN_CONTEXT")
+            pairs = scan_context.pairs
         if pair not in pairs:
             raise PublicDataError("PAIR_NOT_ACTIVE")
         pair_id, symbol = pairs[pair]
-        observed = int(self._clock())
-        server_data = self._get("/api/server_time")
-        if not isinstance(server_data, dict):
-            raise PublicDataError("INVALID_SERVER_TIME")
-        exchange_now = _seconds(server_data.get("server_time"), "SERVER_TIME")
+        if scan_context is None:
+            server_data = self._get("/api/server_time")
+            if not isinstance(server_data, dict):
+                raise PublicDataError("INVALID_SERVER_TIME")
+            exchange_now = _seconds(server_data.get("server_time"), "SERVER_TIME")
+        else:
+            exchange_now = scan_context.exchange_epoch
         if abs(exchange_now - observed) > 30:
             raise PublicDataError("EXCHANGE_CLOCK_SKEW")
-        ticker = self._get(f"/api/ticker/{pair_id}")
-        if not isinstance(ticker, dict) or not isinstance(ticker.get("ticker"), dict):
+        if scan_context is None:
+            ticker_response = self._get(f"/api/ticker/{pair_id}")
+            ticker = ticker_response.get("ticker") if isinstance(ticker_response, dict) else None
+        else:
+            # Reuse the SAME ticker_all payload already inspected by scanner.
+            # Never infer a ticker value from a different observation minute.
+            ticker = scan_context.tickers.get(pair)
+        if not isinstance(ticker, dict):
             raise PublicDataError("INVALID_TICKER")
-        ticker = ticker["ticker"]
         ticker_sec = _seconds(ticker.get("server_time"), "TICKER_TIME")
         if ticker_sec > observed + 3 or observed - ticker_sec > 60:
             raise PublicDataError("STALE_TICKER")
