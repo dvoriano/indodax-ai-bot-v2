@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from .public_market import Candle, IndodaxPublicMarket, PublicDataError, PublicObservation
 from .scanner import ScannerResult
+from .source_coverage import public_coverage_report
 
 ZERO = Decimal("0")
 HUNDRED = Decimal("100")
@@ -485,6 +486,10 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
     else:
         coverage_state = "ALL_SELECTED_ANALYZED_UNATTESTED"
     actual_requests = getattr(market, "public_get_attempt_count", None)
+    g1_source_admission = public_coverage_report(
+        selected, observations, screening_epoch=screening.observed_epoch,
+        complete_batch=completed, window_expired=window_expired,
+    )
     return {
         "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
         "screening_observed_epoch": screening.observed_epoch,
@@ -501,6 +506,7 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         "not_attempted_pairs": not_attempted,
         "attempted_without_result_count": attempted_without_result,
         "coverage_status": coverage_state,
+        "g1_source_admission": g1_source_admission,
         "synchronized_pair_coverage_complete": valid and guard["status"] == "ALIGNED_PUBLIC_UNATTESTED",
         "eligible_cohort": eligible_cohort,
         "window_expired": window_expired,
