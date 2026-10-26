@@ -115,3 +115,20 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 ```
 
 Do not mix candidate scores from different one-minute candle closes. Historical coverage across 20-40 assets is future work, not evidence of one synchronous decision. Final remains REJECT.
+
+## M03-E: provisional extreme-momentum review gate (non-live)
+
+VPS M03-D 15/15 tests PASS on 5f14be87. Real FARTCOIN/IDR last-minute zero volume was rejected, while BR/IDR yielded diagnostic score 80 with RSI100, 82.89x volume, sampled visible sells much larger than sampled buys. M03-E adds review flags to **existing** deep_analysis, not a new scanner or BUY condition.
+
+Provisional cutoffs: last closed-minute volume >=10x preceding 10-min average combined with RSI >=90 and/or visible sell notional >=3x sampled buy. This is conservative anomaly screening (not evidence of fraud, not an empirically optimized probability). An anomalous candidate gets score `null`, `REJECT_MOMENTUM_ANOMALY`, `anomaly_flags`, and cannot pass same-window diagnostic ranking. Thresholds must be historically replayed before reliance for trading.
+
+One scoped VPS check after updating repository:
+
+```bash
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m03[b-e]*.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03e.sqlite3 --rolling-deep-once
+```
+
+No G1 provenance, trade coverage, AI, Telegram or live exchange permission is enabled by this milestone.
