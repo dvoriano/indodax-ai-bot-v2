@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
     group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
+    group.add_argument("--rolling-deep-once", action="store_true", help="PUBLIC 2-pair rotating deep scan, SQLite persisted and paced, never trades")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     args = parser.parse_args(argv)
 
@@ -30,7 +31,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.health:
             result = app.health()
         else:
-            if args.deep_once:
+            if args.rolling_deep_once:
+                outcome = app.run_rolling_deep_cycle(uuid4().hex)
+            elif args.deep_once:
                 outcome = app.run_deep_cycle(uuid4().hex)
             elif args.scan_once:
                 outcome = app.run_scan_cycle(uuid4().hex)
@@ -45,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
+            if args.rolling_deep_once:
+                result["public_rolling"] = outcome.rolling
+                result["rolling_probe_status"] = ("PUBLIC_ROLLING_UNATTESTED" if outcome.rolling is not None
+                                                  else "PUBLIC_ROLLING_BLOCKED")
+                result["live_trading_authorized"] = False
             if args.deep_once:
                 result["public_deep"] = outcome.deep
                 result["deep_probe_status"] = "PUBLIC_DEEP_UNATTESTED" if outcome.deep is not None else "PUBLIC_DEEP_ERROR"
@@ -66,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.scan_once and result["public_scanner"] is None:
             return 3
         if args.deep_once and result["public_deep"] is None:
+            return 3
+        if args.rolling_deep_once and result["public_rolling"] is None:
             return 3
         return 0
     except (ConfigurationError, OSError, ValueError) as exc:

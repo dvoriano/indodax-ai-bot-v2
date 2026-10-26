@@ -159,12 +159,19 @@ class DeepScan:
         }
 
 
-def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: int = 2) -> DeepScan:
+def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: int = 2,
+              offset: int = 0) -> DeepScan:
     """Bound deep calls; never fetch 30 x 7 requests in a single minute."""
     if not 1 <= limit <= 2:
         raise ValueError("M03B pilot limits deep HTTP work to 1-2 pairs")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("INVALID_DEEP_WINDOW_OFFSET")
+    if not screening.shortlist:
+        raise PublicDataError("NO_PRELIMINARY_CANDIDATES")
     found: list[DeepCandidate] = []
-    for item in screening.shortlist[:limit]:
+    count = min(limit, len(screening.shortlist))
+    for i in range(count):
+        item = screening.shortlist[(offset + i) % len(screening.shortlist)]
         try:
             obs = market.observe(item.pair)
             if abs(obs.snapshot.source.observed_epoch - screening.observed_epoch) > 120:

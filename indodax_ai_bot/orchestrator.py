@@ -20,6 +20,7 @@ class CycleResult:
     market: dict[str, str | int | bool] | None = None
     screening: dict | None = None
     deep: dict | None = None
+    rolling: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -81,13 +82,46 @@ class DailyScalpingOrchestrator:
         self.journal.record_reject(trace_id, reason)
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, None, result)
 
+    def run_rolling_deep_cycle(self, trace_id: str, *,
+                               market: IndodaxPublicMarket | None = None) -> CycleResult:
+        """Persistently rotate a bounded 2-pair deep inspection, never trade.
+
+        No cross-minute scores are merged: each cycle is an isolated diagnostic.
+        The SQLite reservation is atomic and restart-safe, with 12s pacing.
+        """
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            preliminary = DailyPairScanner(client).scan()
+            selected = self.journal.reserve_deep_window(
+                trace_id, tuple(x.pair for x in preliminary.shortlist),
+                observed_epoch=preliminary.observed_epoch,
+            )
+            evidence = deep_scan(client, preliminary, limit=len(selected.pair_ids),
+                                 offset=selected.starting_index)
+            data = evidence.summary()
+            data.update({
+                "reserved_pairs": list(selected.pair_ids),
+                "starting_index": selected.starting_index,
+                "next_index": selected.next_index,
+                "reservation_replayed": selected.replayed,
+                "universe_digest": selected.universe_digest,
+                "full_universe_deep_verified": False,
+                "cross_cycle_ranking_allowed": False,
+            })
+            reason = "G1_ROTATING_PUBLIC_EVIDENCE_UNTRUSTED"
+        except (PublicDataError, ValueError) as exc:
+            reason = f"PUBLIC_ROLLING_SCAN_BLOCKED:{exc}"
+            data = None
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, None, None, data)
+
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M03B_BOUNDED_DEEP_CODED",
+            "release": "M03C_ROLLING_DEEP_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M03B_VPS_PROOF_AND_EXTENDED_COVERAGE",
+            "next_stage": "M03C_VPS_ROLLING_EVIDENCE",
         }
