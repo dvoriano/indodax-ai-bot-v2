@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**Milestone aktif M03-D:** M03-C sudah 7/7 VPS PASS dan real rolling BTC+ETH exit0. M03-D shared-minute BTC regime guard has been coded on same rolling path; tests and VPS proof pending. All outcomes remain REJECT. Handover in ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M03-G:** M03-F accepted: VPS 29/29 scoped tests PASS and real public quality review exit0, preview empty and Final REJECT. M03-G shared-context 20–40 public deep method CODED and tests pending VPS. Handover in ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -149,3 +149,20 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 ```
 
 Actual trade history coverage and G1 issuer are NOT present; Final Decision remains REJECT, private keys and orders OFF.
+
+## M03-G: Optimized public 20–40 source observations, no-trade
+
+Official Indodax Public REST API documents **180 requests/minute**: https://github.com/btcid/indodax-official-api-docs/blob/master/Public-RestAPI.md. Current per-pair adapter historically fetched 7 GET per pair, too expensive for 30+. **New shared-context path** reuses three scanner responses (pairs/server_time/ticker_all), leaving four per-pair GET: OHLC 1m/15m, public trades, depth. For 20 pairs estimate 83 GET (or 87 if BTC outside batch); for 40 163 (or 167 extra BTC). Count is only a single-cycle estimate and does NOT include other processes on the shared VPS public IP. Keep conservative 12 GET reserve.
+
+`--bulk-deep-once` defaults to **20** and stops collecting after 30 seconds from scanner observation. Results are only comparable if every selected pair is valid and aligned to the same closed 1m/5m/15m context with BTC. Otherwise `same_window.status` rejects and any synchronized ranking/preview remains empty. `trade_history_complete=false`, `g1_verified=false`, Final REJECT, order OFF regardless of success.
+
+Only after a clean Git pull on VPS, test changes to M02 adapter, M03-A scanner, and new M03-G:
+
+```bash
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -p 'test_m0[23ag]*.py' -v
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03g-bulk.sqlite3 --bulk-deep-once
+```
+
+Use individual test patterns instead of the compact glob above if environment glob behavior differs. 20 live public pair requests can still fail or time out; this is not a scanner malfunction by itself. Do NOT enable orders.
