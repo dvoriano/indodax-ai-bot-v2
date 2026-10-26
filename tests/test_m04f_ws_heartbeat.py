@@ -134,6 +134,8 @@ class M04FWSProtocolTests(unittest.TestCase):
         self.assertTrue(data["protocol_heartbeat_confirmed"])
         self.assertEqual(data["received_publications_in_this_probe"], 0)
         self.assertEqual(data["ws_activity_diagnostic"], "QUIET_CHANNEL_PROTOCOL_ALIVE")
+        self.assertEqual(data["stream_status_during_probe"], "BASELINE_ONLY")
+        self.assertEqual(data["stream_status"], "DISCONNECTED")
         self.assertTrue(any(item.get("method") == 7 and item.get("id") == 3
                             for item in sock.sent))
         self.assertTrue(sock.closed)
