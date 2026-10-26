@@ -144,8 +144,22 @@ class ThreeRoleShadow:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,
                            candidate_pair=source["pair"])
 
+        raw_market_evidence = bulk.get("ranked_diagnostics_top10")
+        pair_evidence = next(
+            (item for item in raw_market_evidence
+             if isinstance(item, dict) and item.get("pair") == source["pair"]),
+            None,
+        ) if isinstance(raw_market_evidence, list) else None
+        # A provider must not extrapolate from a bare scalar score. If the
+        # detailed candle/microstructure snapshot is missing, fail closed.
+        if (not isinstance(pair_evidence, dict)
+                or pair_evidence.get("closed_1m_epoch") != epoch
+                or pair_evidence.get("trade_authorized") is not False):
+            return _reject("G1_MISSING_BOUND_MARKET_EVIDENCE", digest=digest,
+                           candidate_pair=source["pair"])
         inputs = {
             "source": source,
+            "market_evidence": json.loads(json.dumps(pair_evidence)),
             "evidence_digest_sha256": digest,
             "role_order": list(ROLES),
             "live_execution_enabled": False,
@@ -158,7 +172,10 @@ class ThreeRoleShadow:
             try:
                 # Provider must never receive a mutable reference shared with
                 # the other roles; local source digest stays bound to each input.
-                role_input = json.loads(json.dumps(inputs))
+                role_input = json.loads(json.dumps({
+                    **inputs,
+                    "prior_role_results": validated,
+                }))
                 raw = self._caller(role, role_input)
                 if not isinstance(raw, Mapping):
                     raise ValueError("MALFORMED_RESPONSE")
