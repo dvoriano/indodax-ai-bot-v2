@@ -185,6 +185,40 @@ class DeepScan:
         }
 
 
+def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
+    """M03-F observational caution labels, NOT risk AI/veto or BUY qualification.
+
+    Thresholds are conservative review triggers only. They are uncalibrated
+    against historical PnL and MUST NOT serve as an executable trading rule.
+    """
+    flags: list[str] = []
+    if btc_regime == "BTC_DOWNTREND_DIAGNOSTIC":
+        flags.append("BTC_DOWNTREND_CAUTION")
+    if candidate.score is None:
+        flags.append("NO_VALID_PUBLIC_SCORE")
+    if candidate.rsi14 is None:
+        flags.append("MISSING_RSI")
+    elif candidate.rsi14 >= Decimal("75"):
+        flags.append("OVERBOUGHT_RSI_REVIEW")
+    elif candidate.rsi14 <= Decimal("30"):
+        flags.append("OVERSOLD_RSI_REVIEW")
+    if candidate.volume_ratio is None or candidate.volume_ratio < Decimal("1"):
+        flags.append("BELOW_BASELINE_OR_MISSING_VOLUME")
+    if candidate.book_imbalance is None or candidate.book_imbalance < Decimal("-0.5"):
+        flags.append("ASK_DOMINANT_OR_MISSING_BOOK")
+    if candidate.visible_sell_idr > candidate.visible_buy_idr:
+        flags.append("VISIBLE_SELL_SAMPLE_DOMINANT")
+    return {
+        "pair": candidate.pair,
+        "score": candidate.score,
+        "review_flags": flags,
+        "clear_of_provisional_cautions": not flags,
+        "risk_ai_evaluated": False,
+        "g2_candidate_authorized": False,
+        "trade_authorized": False,
+    }
+
+
 def _same_window_gate(
     screening: ScannerResult,
     candidates: tuple[DeepCandidate, ...],
@@ -253,6 +287,13 @@ def _same_window_gate(
     else:
         regime = "BTC_MIXED_DIAGNOSTIC"
     ranked = sorted(candidates, key=lambda c: (-int(c.score), c.pair))
+    reviews = [_quality_review(c, regime) for c in ranked]
+    # This is a PUBLIC-ONLY PREVIEW of current-minute candidates, not a
+    # qualified G1 receipt. Prior scan batch scores are never included.
+    provisional_watchlist = [
+        item["pair"] for item in reviews
+        if item["clear_of_provisional_cautions"]
+    ][:2]
     return dict(
         base,
         status="ALIGNED_PUBLIC_UNATTESTED",
@@ -261,6 +302,10 @@ def _same_window_gate(
         ranked_same_window_diagnostics=[
             {"pair": c.pair, "score": c.score} for c in ranked
         ],
+        provisional_quality_reviews=reviews,
+        provisional_watchlist_preview=provisional_watchlist,
+        watchlist_is_trade_signal=False,
+        provisional_thresholds_backtested=False,
     )
 
 
