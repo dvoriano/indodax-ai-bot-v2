@@ -2,7 +2,7 @@
 
 **MISI UTAMA: SCALPING HARIAN INDODAX (24/7 market monitoring, intraday spot trading IDR → BUY → SELL → IDR).** Bot baru untuk spot scalping Indodax, dibangun modular **dari nol** dan **terpisah dari bot lama**. Target akhir: market scanner G1, 3 AI (MARKET → RISK → STRATEGY), Final Decision PASS/REJECT via Telegram MANUAL/AUTO, modal IDR dinamis, protective FLOKI/PEPE, BUY → SELL → IDR reconciliation, monitoring, dan operasi VPS yang aman.
 
-> **Status otoritatif: [ROADMAP.md](docs/ROADMAP.md).** M02 official public market adapter telah CODED dan lulus 16/16 tes lokal (termasuk regresi M01). Observasi penuh REST publik dari VPS, CI, G1 issuer, AI, Telegram, dan order belum terbukti. **Trading LIVE OFF.** Target laba bukan jaminan.
+> **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M02 pembacaan publik BTC/IDR sudah terverifikasi di VPS; G1 scanner/deep validation, tiga AI, Telegram, dan executor belum siap LIVE. **Trading LIVE OFF.** Target laba bukan jaminan.
 
 ## Mulai di sini
 
