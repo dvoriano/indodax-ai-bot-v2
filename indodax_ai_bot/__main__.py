@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--once", action="store_true")
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
+    group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     args = parser.parse_args(argv)
 
@@ -28,7 +29,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.health:
             result = app.health()
         else:
-            outcome = app.run_public_cycle(uuid4().hex, pair=args.pair) if (args.public_once or args.verify_public) else app.run_cycle(uuid4().hex)
+            if args.scan_once:
+                outcome = app.run_scan_cycle(uuid4().hex)
+            elif args.public_once or args.verify_public:
+                outcome = app.run_public_cycle(uuid4().hex, pair=args.pair)
+            else:
+                outcome = app.run_cycle(uuid4().hex)
             result = {
                 "trace_id": outcome.trace_id,
                 "final_decision": outcome.final_decision.value,
@@ -36,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
+            if args.scan_once:
+                result["public_scanner"] = outcome.screening
+                result["scanner_probe_status"] = "PUBLIC_SCREENED_UNATTESTED" if outcome.screening is not None else "PUBLIC_SCANNER_ERROR"
+                result["live_trading_authorized"] = False
         if args.verify_public:
             # Exit zero means only public payload parsing succeeded, never
             # market-source authorization, Risk ALLOW or LIVE trading readiness.
@@ -45,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
             result["live_trading_authorized"] = False
         print(json.dumps(result, sort_keys=True))
         if args.verify_public and not result["verified_public_payload_parsed"]:
+            return 3
+        if args.scan_once and result["public_scanner"] is None:
             return 3
         return 0
     except (ConfigurationError, OSError, ValueError) as exc:
