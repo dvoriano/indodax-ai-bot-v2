@@ -72,6 +72,14 @@ class PublicObservation:
     depth_levels_visible: int
     ready: bool
     reason: str
+    # These are source-derived facts, not fabricated completed trade coverage.
+    candles_1m: tuple[Candle, ...] = ()
+    candles_15m: tuple[Candle, ...] = ()
+    visible_closed_1m_buy_idr: Decimal = Decimal("0")
+    visible_closed_1m_sell_idr: Decimal = Decimal("0")
+    visible_closed_1m_trade_count: int = 0
+    bid_depth_top5_idr: Decimal = Decimal("0")
+    ask_depth_top5_idr: Decimal = Decimal("0")
 
     def summary(self) -> dict[str, str | int | bool]:
         return {
@@ -226,16 +234,27 @@ class IndodaxPublicMarket:
         trades = self._get(f"/api/trades/{pair_id}")
         if not isinstance(trades, list):
             raise PublicDataError("INVALID_TRADES")
+        buy_flow = Decimal("0")
+        sell_flow = Decimal("0")
+        visible_trade_count_closed = 0
         for trade in trades:
             if not isinstance(trade, dict):
                 raise PublicDataError("INVALID_TRADE_ROW")
             ts = _seconds(trade.get("date"), "TRADE_TIME")
             if ts > observed + 3:
                 raise PublicDataError("FUTURE_TRADE")
-            _number(trade.get("price"), "TRADE_PRICE")
-            _number(trade.get("amount"), "TRADE_AMOUNT")
+            price = _number(trade.get("price"), "TRADE_PRICE")
+            amount = _number(trade.get("amount"), "TRADE_AMOUNT")
             if trade.get("type") not in ("buy", "sell"):
                 raise PublicDataError("INVALID_TRADE_SIDE")
+            # The public response is capped/page-limited. This is a VISIBLE
+            # sample only, never a claim of complete 1m trade coverage.
+            if latest_1.start <= ts < latest_1.start + 60:
+                visible_trade_count_closed += 1
+                if trade["type"] == "buy":
+                    buy_flow += price * amount
+                else:
+                    sell_flow += price * amount
         depth = self._get(f"/api/depth/{pair_id}")
         if not isinstance(depth, dict) or not isinstance(depth.get("buy"), list) or not isinstance(depth.get("sell"), list):
             raise PublicDataError("INVALID_DEPTH")
@@ -252,6 +271,15 @@ class IndodaxPublicMarket:
         source = SourceReceipt(pair, latest_1.start + 60, observed, "INDODAX_PUBLIC_OHLC_V2_UNATTESTED", False)
         snapshot = MarketSnapshot(source, bid, ask)
         # Public REST trades are page-limited; a sampled history is not a complete 1h ledger.
-        return PublicObservation(pair, snapshot, latest_1, five, latest_15,
-                                 len(trades), False, len(depth["buy"]) + len(depth["sell"]),
-                                 False, "G1_PROVENANCE_AND_TRADE_COVERAGE_UNVERIFIED")
+        bid_depth5 = sum((_number(x[0], "DEPTH_PRICE") * _number(x[1], "DEPTH_AMOUNT")
+                          for x in depth["buy"][:5]), Decimal("0"))
+        ask_depth5 = sum((_number(x[0], "DEPTH_PRICE") * _number(x[1], "DEPTH_AMOUNT")
+                          for x in depth["sell"][:5]), Decimal("0"))
+        return PublicObservation(
+            pair, snapshot, latest_1, five, latest_15,
+            len(trades), False, len(depth["buy"]) + len(depth["sell"]),
+            False, "G1_PROVENANCE_AND_TRADE_COVERAGE_UNVERIFIED",
+            tuple(one), tuple(fifteen),
+            buy_flow, sell_flow, visible_trade_count_closed,
+            bid_depth5, ask_depth5,
+        )
