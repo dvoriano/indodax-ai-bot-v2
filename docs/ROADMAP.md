@@ -214,7 +214,7 @@
 | M03-D VPS ACCEPTED (rejection branch) | `5f14be87` supplied VPS output 26 Oct 2026 | 15/15 tests PASS, public rolling with FARTCOIN missing last-1m volume and BR score80/RSI100/82.89x volume. `same_window=REJECT_CANDIDATE_EVIDENCE_INCOMPLETE`, empty ranking, Final REJECT | Aligned positive public gate still not observed. Echoed M03D_EXIT_CODE not provided. No G1 authorization |
 | M03-E VPS ACCEPTED | `4cf220a7`, owner supplied 26 Oct 2026 | 29/29 scoped tests PASS (0.367s), BTC+ETH same-window aligned public on epoch 1793017500, BTC downtrend, both diagnostic30, no anomaly flags, Final REJECT, exit0 | Untrusted coverage, all-30 deep same-window, replay/AI/order not proven |
 | M03-F CODED | `deep_analysis.py`, `tests/test_m03f_quality.py` (7 cases) | Public-only quality cautions, aligned <=2 preview and empty rejected preview committed. **No tests or online output observed on this new code yet.** | VPS affected tests and public run; thresholds require replay. No G2/trading authorization |
-| M03-F–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | G1 source completeness, 20–40 simultaneous scored evidence, AI, capital and execution |
+| M03-G–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | G1 source completeness, 20–40 synchronous scored evidence, AI, capital and execution |
 
 **Catatan:** Tanggal baseline tidak berarti semua isi tersertifikasi hari itu. Ketika bukti baru diverifikasi, tambahkan **satu baris** sesuai milestone. Jika hanya perubahan status, jangan memodifikasi aturan trading di guideline.
 
