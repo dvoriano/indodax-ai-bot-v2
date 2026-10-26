@@ -64,7 +64,7 @@ Setelah `git pull --ff-only origin main` pada checkout V2, jalankan hanya scoped
 
 ```bash
 INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN \
-  python3 -B -m unittest -v tests/test_m03a_scanner.py
+  python3 -B -m unittest discover -s tests -p 'test_m03a_scanner.py' -v
 INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN \
   python3 -B -m indodax_ai_bot --db /tmp/indodax-v2-m03a.sqlite3 --scan-once
 ```
