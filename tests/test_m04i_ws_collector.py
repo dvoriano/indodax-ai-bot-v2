@@ -107,6 +107,8 @@ class M04IBoundedCollectorTests(unittest.TestCase):
             def probe(journal, *, pair, seconds):
                 call.append(1)
                 if len(call)==1:
+                    journal.acknowledge(pair, ack(100))
+                    journal.mark_disconnected(pair)
                     return report(journal)
                 raise StreamEvidenceError("PUBLIC_WS_CONNECTION_OR_FRAME_FAILED")
             result=collect_official_public_ws(
