@@ -11,14 +11,14 @@
 
 | Bidang | Checkpoint terkonfirmasi / status kerja |
 | --- | --- |
-| **Tahap aktif (satu saja)** | **M02 — sambungkan sumber pasar PUBLIK Indodax** ke DailyScalpingOrchestrator, tanpa private GET, tanpa AI berbayar, tanpa order. |
-| Terakhir dibangun | M01, fondasi Python fail-closed, commit kode [b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d). |
-| Jalur runtime TERBUKTI hingga M01 | CLI → Settings → DailyScalpingOrchestrator → DecisionJournal SQLite → Final REJECT (G1_SOURCE_NOT_CONNECTED), execution_allowed=false. **Tidak ada eksekutor trade.** |
-| Bukti yang sudah tercatat | Guideline menyebut **7/7 unit test lokal PASS** dan CLI --once/--health PASS untuk M01. Ini **laporan pengujian lokal**, bukan GitHub CI/PAPER/LIVE. Tidak perlu rerun tes accepted tak berubah. |
-| Hambatan terbuka | [GitHub Actions run 40297122063](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40297122063) FAILURE **sebelum steps** (0 steps), maka CI belum terverifikasi. Penyebab belum dipastikan. |
+| **Tahap aktif (satu saja)** | **M02 — partial CODED + TESTED_OFFLINE**, real Indodax public market verification pending. Tidak boleh naik M03 sebelum satu observasi source publik dievaluasi. |
+| Terakhir dibangun | **M02 public REST adapter** `indodax_ai_bot/public_market.py`, official IDs/ticker/trades/depth/OHLC 1m dan 15m, 5m aggregate, `--public-once`, source-unattested mainpath. Kode exact source cocok hash Git blob dengan pengujian lokal. |
+| Jalur runtime TERBUKTI hingga M01 | **M02 fixture-scoped:** CLI `--public-once` → DailyScalpingOrchestrator.run_public_cycle → IndodaxPublicMarket.observe → `SourceReceipt(verified=False)` → SQLite Journal REJECT. `--once` legacy tetap no network. **Tidak ada eksekutor trade.** |
+| Bukti yang sudah tercatat | **16/16 Python unittest lokal PASS** (7 M01 affected by orchestrator/journal + **9 baru M02**), compile PASS, `--once` dan `--health` CLI PASS, warning SQLite fixed. Remote source **5/5 hash blob identik**. Fake fixtures tidak membuktikan HTTP market benar-benar tersedia. |
+| Hambatan terbuka | Observasi lengkap M02 dari public REST pada host VPS **belum dilakukan**; endpoint `server_time` dapat diverifikasi lewat web, tetapi endpoint lain tidak dapat diverifikasi dari lingkungan uji ini. [GitHub Actions 40297122063](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40297122063) 0-step FAIL, CI belum hijau (penyebab belum pasti). |
 | Status uang nyata | **LIVE OFF.** Tidak ada validasi saldo akun, private GET baru, paid AI, transaksi BUY/SELL, ataupun keuntungan nyata yang diakui. |
 | Bot lama | dvoriano/crypto-bot hanya referensi; tidak boleh diubah atau berbagi state/secrets. Tanpa koordinasi aset lintas bot, jangan aktifkan dua executor LIVE di akun yang sama. |
-| **SATU NEXT ACTION** | **M02: implementasikan public Indodax adapter dan closed 1m source receipt** ke single orchestrator; periksa bid/ask/trades/timestamp/coverage, jalankan satu observasi public nyata. Jika bukti belum valid, tetap REJECT. |
+| **SATU NEXT ACTION** | **M02: jalankan SATU observasi `--public-once --pair btc_idr` pada VPS/host berinternet**, inspeksi output tanpa secrets; jika source error, perbaiki hanya kontrak endpoint yang benar-benar terpengaruh, catat status dan lanjut M03 ketika bukti terpenuhi. |
 
 **Protokol mulai chat baru:** (1) buka guideline bagian 0/0A/B/E/F; (2) baca tabel checkpoint di atas; (3) cari satu milestone aktif di bagian 3; (4) periksa kode hanya pada scope milestone; (5) kerjakan vertical slice berikut dan update **file ini**. Jangan review ulang M00/M01 hanya karena pindah chat.
 
@@ -58,16 +58,16 @@
 **Bukti kode:** [commit b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d), [test file](../tests/test_m01_foundation.py). **Batas:** belum ada scanner, AI, akun, Telegram, orders. M01 bukan VERIFIED_LIVE.
 
 ### M02 — Public Indodax Market Data & Source Trust (AKTIF)
-**Status: NOT_STARTED. Implementasikan langsung ke runtime yang ada.**
-- [ ] Buat Indodax public-only API adapter untuk daftar seluruh IDR pairs, ticker, bid/ask, trades, order book, dan candle/ohlcv sesuai kontrak API nyata.
-- [ ] Normalisasi market data, presisi IDR, timezone UTC/WIB; jangan salah format pair atau harga.
-- [ ] Ambil candle 1m closed, agregasi/konfirmasi 5m dan 15m, deteksi candle ongoing dan interval nol transaksi secara benar.
-- [ ] Simpan source receipt tiap pair/candle dengan timestamp, provenance, observed_at, coverage dan freshness.
-- [ ] Tandai data historis terpotong/pagination incomplete; validasi kesinambungan trades/candles, serta stale clock.
-- [ ] Sambungkan data publik asli ke **DailyScalpingOrchestrator**; tanpa valid source tetap Final REJECT, order tidak mungkin.
-- [ ] Unit/contract tests untuk malformed/stale/incomplete feed dan 1 targeted public live observation tanpa private API atau orders.
-- [ ] Catat SHA, evidence, pair teramati, kondisi sumber, alasan REJECT jika belum admissible.
-**Acceptance:** sumber publik asli konsisten lintas timeframe mencapai mainpath, tidak dipalsukan sebagai izin BUY. **Satu next action:** implementasikan adapter + source receipt closed 1m.
+**Status: PARTIAL, CODED + TESTED_OFFLINE (9 tests new; 16/16 focused suite PASS). VERIFIED_PUBLIC_ONLINE belum terbukti.**
+- [x] Kode Indodax public-only API adapter daftar IDR pairs, ticker, bid/ask, trades, depth, OHLC 1m/15m **sesuai dokumentasi resmi**; belum terbukti semua endpoint sukses HTTP live.
+- [x] Normalisasi `ticker_id=btc_idr`, `id=btcidr`, symbol `BTCIDR`, harga Decimal, server_time milliseconds → epoch seconds (UTC); WIB khusus reporting, jangan ubah candle timestamp. Verifikasi precision fee/order tetap tahap M07.
+- [x] Parser closed 1m dan native closed 15m; 5m agregasi **hanya bila lima candle 1m lengkap**. Candle ongoing dibuang; zero-volume yang benar-benar ada di response dipertahankan, tidak sintesis candle yang hilang.
+- [x] Buat SourceReceipt 1m close/observed/provenance `INDODAX_PUBLIC_OHLC_V2_UNATTESTED`, `verified=False`, snapshot quotes, visible trades/depth dan `trade_history_complete=False`; return envelope ke mainpath. Bukti eksistensi schema ≠ trusted G1 issuer.
+- [ ] **FULL COVERAGE/CONTINUITY** trade history per 1h/15m belum diverifikasi; page-limited REST secara konservatif selalu `trade_history_complete=False`. Parser sudah menolak incomplete 5m, stale clock, ticker, candle, invalid trades/book; tetapi belum membuktikan coverage dan trade→candle join yang lengkap.
+- [x] Sambungan **CLI `--public-once` → DailyScalpingOrchestrator → IndodaxPublicMarket → persisted REJECT** teruji dengan fixture berbentuk API resmi. Tidak ada private API, provider, order, atau path approval positif.
+- [x] **9/9 M02 offline tests PASS**, 16/16 total pada 26 Okt 2026, hash isi remote cocok dengan local. [ ] **SATU public live observation** pada host dengan koneksi Indodax belum diterima; jangan sebut VERIFIED_PUBLIC_ONLINE.
+- [x] Catatan scope/source/hasil test dan alasan `G1_PROVENANCE_NOT_VERIFIED` pada fixture ada di evidence register. [ ] Perlu catat **pair/timestamp/hasil public nyata** setelah perintah dijalankan di VPS.
+**Acceptance belum penuh:** source publik nyata lintas timeframe belum diamati. **Satu next action:** pada host/VPS berinternet, jalankan tanpa private key: `env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN python3 -m indodax_ai_bot --db /tmp/indodax-v2-m02-public.sqlite3 --public-once --pair btc_idr`. Perintah harus berada di checkout commit V2 terbaru. Hasil tetap REJECT karena belum ada G1 issuer.
 
 ### M03 — G1 Daily Scalping Scanner, Ranking & Microstructure
 **Status: NOT_STARTED. Bergantung M02.**
@@ -189,7 +189,8 @@
 | M00 | Dokumen guideline, AGENTS, README yang committed pada main | Kebijakan, Iron Rules dan roadmap spesifikasi tersedia | Bot trading LIVE |
 | M01 | [b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d); [tests/test_m01_foundation.py](../tests/test_m01_foundation.py) | Menurut guideline: 7/7 tes lokal, compile, CLI --once/--health PASS; orchestrator+SQLite memproduksi REJECT fail-closed | GitHub runner CI, sumber pasar asli, 3 AI, real execution |
 | M01 CI | [run 40297122063](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40297122063) | Dikonfirmasi job gagal sebelum menjalankan langkah apa pun (0 steps) | Alasan runner/workflow failure, CI PASS |
-| M02–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Implementasi dan bukti stage masing-masing |
+| M02 CODED | `indodax_ai_bot/public_market.py`, `orchestrator.py`, `__main__.py`, `journal.py`, `tests/test_m02_public_market.py` (lima Git blob SHA diverifikasi sama dengan salinan lokal) | 9/9 M02 scoped + 7/7 M01 affected regression = **16/16 local PASS**; parser closed 1/5/15m dan safe REJECT. Official docs: https://github.com/btcid/indodax-official-api-docs/blob/master/Public-RestAPI.md | **No full public HTTP observation**, no trade coverage issuer, GitHub CI 0-step blocked |
+| M03–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Implementasi dan bukti stage masing-masing |
 
 **Catatan:** Tanggal baseline tidak berarti semua isi tersertifikasi hari itu. Ketika bukti baru diverifikasi, tambahkan **satu baris** sesuai milestone. Jika hanya perubahan status, jangan memodifikasi aturan trading di guideline.
 
