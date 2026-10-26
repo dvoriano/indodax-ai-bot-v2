@@ -11,16 +11,16 @@
 
 | Bidang | Checkpoint terkonfirmasi / status kerja |
 | --- | --- |
-| **Tahap aktif (satu saja)** | **M03-A CODED, test/scan VPS pending.** M02 sudah terverifikasi menerima data BTC/IDR nyata, dengan safeguard G1 untrusted tetap REJECT. Scanner semua IDR → preliminary top30/watchlist2 sudah ada di source dan tersambung ke mainpath. |
-| Terakhir dibangun | **M03-A public scanner** `indodax_ai_bot/scanner.py`, `DailyScalpingOrchestrator.run_scan_cycle`, CLI `--scan-once`, 9 tes baru di `tests/test_m03a_scanner.py`. Tes baru BELUM memiliki PASS terverifikasi. |
-| Jalur runtime TERBUKTI hingga M01 | **M02 VPS ONLINE:** CLI `--verify-public` → DailyScalpingOrchestrator → IndodaxPublicMarket.observe → public market snapshot → SQLite Journal → Final REJECT. **M03-A CODED ONLY:** CLI `--scan-once` → orchestrator.run_scan_cycle → DailyPairScanner.scan → public pair list/ticker_all → REJECT. Belum ada order. |
-| Bukti yang sudah tercatat | **M02 actual VPS SHA 7002387:** repo cloned, `M02_EXIT_CODE=0`, verified public payload parsed true, BTC/IDR bid 1459037000 ask 1459038000, trades visible 500, depth 300, closed 1m epoch 1793009880, 5m start 1793009400, 15m start 1793008800, observed 1793009915. Final REJECT, G1 issuer=false, trade_history_complete=false. **M03 9 tests CODED belum diuji.** |
-| Hambatan terbuka | M02 public feed teramati nyata, tetapi `trade_history_complete=false` dan G1 issuer belum ada; tetap **REJECT**. M03-A belum diuji atau dijalankan di VPS. GitHub Actions masih 0-step failure, CI belum PASS. VPS bot lama tidak disentuh. |
-| Status uang nyata | **LIVE OFF.** Tidak ada validasi saldo akun, private GET baru, paid AI, transaksi BUY/SELL, ataupun keuntungan nyata yang diakui. |
-| Bot lama / Keputusan VPS | **Pembersihan/reset VPS lama DITUNDA atas keputusan owner.** Bot lama dan semua service, folder, data, credential, dan SSH key lama **tidak disentuh**. V2 dipersiapkan terpisah pada `~/indodax-ai-bot-v2`, key `~/.ssh/indodax_ai_bot_v2`, sementara trading tetap OFF. Bersihkan bot lama **hanya nanti setelah backup, inventaris service/posisi dan izin hapus eksplisit**. Tanpa koordinasi aset lintas bot, jangan aktifkan dua executor LIVE di akun yang sama. |
-| **SATU NEXT ACTION** | **M03-A: pada VPS pull commit V2 terbaru, jalankan scoped test `tests/test_m03a_scanner.py` dan satu `--scan-once`.** Catat SHA, hasil tes, universe IDR, shortlist, watchlist, Final REJECT. Jika sumber gagal, perbaiki hanya komponen terdampak. |
+| **Tahap aktif (satu saja)** | **M03-B CODED, VPS proof PENDING.** M03-A PASS di VPS pada commit `bdcd9f5`; scanner nyata 398 IDR / 312 valid / shortlist30 / max2. M03-B sekarang mengukur candle 1/5/15m, sampled flow dan book evidence pada pilot maksimal 2 pair. |
+| Terakhir dibangun | `scanner.py` MAIN exclusion PEPE/FLOKI/USDT/USDC; `public_market.py` typed observed 1m/15m history, sampled closed-minute trade flow dan top5 depth; `deep_analysis.py` EMA8/EMA21/RSI14, volume, spread, 5m/15m, and source continuity checks; orchestrator dan CLI `--deep-once`; 6 M03-B tests ditulis belum PASS. |
+| Mainpath accepted | **M03-A VPS:** CLI `--scan-once` → orchestrator → `DailyPairScanner` → SQLite Journal → REJECT. **M03-B CODED, belum VPS:** CLI `--deep-once` → orchestrator → same G1 scanner → bounded deep 2 → IndodaxPublicMarket.observe → evidence diagnostic → Journal REJECT. |
+| Accepted proof M03-A | Owner VPS output `bdcd9f5`: 9/9 tests PASS (0.069s), 398 IDR, 312 eligible, 86 excluded, shortlist30, watchlist2 = USDT/IDR & BTC/IDR **sebelum pemisahan MAIN**, `M03A_EXIT_CODE=0`, epoch 1793010913; `g1_issuer_verified=false`, `execution_allowed=false`, Final REJECT. M02 public BTC/IDR probe juga accepted di `7002387`. |
+| Blocker yang masih terbuka | **M03-B changed-scope tests dan VPS `--deep-once` belum dilakukan.** Deep hanya 2 pair dalam pilot, bukan analisis lengkap 20–40. M02 trade coverage belum lengkap/verified, source owner G1 belum diotorisasi, AI belum terhubung, CI GitHub masih gagal 0-step. |
+| Status uang nyata | **LIVE OFF.** Tidak ada private Indodax account/trading, AI berbayar, order ataupun realized PnL pada bot V2. |
+| Bot lama / keputusan VPS | **Pembersihan VPS lama DITUNDA.** Semua service, file, API credentials dan kunci bot lama tidak disentuh. V2 di `~/indodax-ai-bot-v2`, key khusus V2. Dua executor tidak boleh trading akun yang sama tanpa ownership/cash coordination. |
+| **SATU NEXT ACTION** | **M03-B: git pull V2 terbaru di VPS, jalankan test changed scope M02+M03-A+M03-B, lalu satu public `--deep-once`.** Periksa skor observasi atau alasan fail-closed, source epoch dan Final REJECT; perbaiki hanya jika ada temuan. |
 
-**Protokol mulai chat baru:** (1) buka guideline bagian 0/0A/B/E/F; (2) baca tabel checkpoint di atas; (3) cari satu milestone aktif di bagian 3; (4) periksa kode hanya pada scope milestone; (5) kerjakan vertical slice berikut dan update **file ini**. Jangan review ulang M00/M01 hanya karena pindah chat.
+**Cara lanjut chat baru:** baca guideline 0/0A/B/E/F → tracker ini checkpoint 1 → milestone 3 → evidence 4. Jangan audit ulang accepted M03-A selama fungsi tidak berubah; pengujian terarah tetap perlu untuk **perubahan fungsi scanner dan adapter** sejak `bdcd9f5`.
 
 ## 2. LEGENDA CHECKLIST & BUKTI
 
@@ -72,22 +72,21 @@
 **Observasi public M02 telah terbukti lintas timeframe di VPS.** Acceptance deep coverage/issuer tetap terbuka; tidak boleh dianggap izin BUY. **Bloker akses sebelumnya sudah terselesaikan lewat identitas V2 khusus:** `git ls-remote` PASS di VPS; clone dan verifikasi HTTP public M02 SUDAH PASS pada satu observasi. **Owner memutuskan tunda pembersihan VPS**; siapkan lingkungan V2 terpisah tanpa menghapus/mematikan service lama. Bootstrap read-only SUDAH dijalankan dan menghasilkan exit 0. Gunakan SSH deploy key read-only unik dan pastikan `git ls-remote` berhasil sebelum memulai probe. **M02 public observation accepted.** Tidak perlu mengulang probe identik jika fungsinya tidak berubah. Selanjutnya M03-A scanner top IDR dan tes scoped. 
 
 ### M03 — G1 Daily Scalping Scanner, Ranking & Microstructure (AKTIF)
-**Status: M03-A CODED, test & public VPS scanner belum verified. M03-B deep technical/microstructure NOT_STARTED.**
-- [x] CODED: `scanner.py` memakai public adapter M02: `/api/pairs`, `/api/server_time`, `/api/ticker_all` (3 GET per scan), IDR filter, freshness, Decimal turnover/spread/24h range, tie-break deterministik.
-- [x] CODED: shortlist default 30 (allowed 20–40), watchlist max 2, `g1_verified=false`, `trade_authorized=false`; **hanya discovery, bukan sinyal BUY**.
-- [x] CODED: `--scan-once` → `run_scan_cycle` → `DailyPairScanner` → DecisionJournal → Final REJECT, tidak ada executor.
-- [x] 9 pengujian baru DIBUAT pada `tests/test_m03a_scanner.py`, belum dilabel PASS.
-- [ ] VPS scoped test M03-A benar-benar PASS (bukti output belum ada).
-- [ ] Observasi publik `--scan-once` menunjukkan IDR universe, shortlist dan max-2, Final REJECT (bukti output belum ada).
-- [ ] Scanner semua pair IDR aktif serta filter listing, liquidity, spread, volume dan minimum order sah.
-- [ ] Scoring awal → shortlist deep 20–40 pair → ranking deterministik → maksimal top 1–2 untuk tiga AI.
-- [ ] Analisis EMA/RSI/Bollinger, candle 1m/5m/15m dan rezim BTC.
-- [ ] Analisis order book imbalance, visible trade flow, surge/pullback, breakout/false breakout, volume ratio, volatility dan rejection.
-- [ ] Safety terhadap gaps, no-volume, stale bid/ask, partial trade history, low liquidity dan spiky manipulation.
-- [ ] Historical replay/ablation, tie-break/threshold test dan ranking reproducible tanpa look-ahead bias.
-- [ ] Hubungkan pilihan G1 ke orchestrator dan G2 candidate input, tanpa scanner paralel.
-- [ ] Bukti scoped tests + 1 observasi online public scanner → candidate receipt.
-**Acceptance:** kandidat bersumber jelas, maksimal dua, NO_TRADE bila bukti tidak cukup.
+**Status: M03-A VERIFIED_PUBLIC_ONLINE (VPS 9/9 PASS pada `bdcd9f5`); M03-B CODED, belum ada bukti test/VPS terbaru.**
+- [x] M03-A real source: `/api/pairs`, `/api/server_time`, `/api/ticker_all` dalam satu `--scan-once`, 398 pair IDR, filter awal 312, ranking preliminary 30 dan watchlist max2, real source.
+- [x] M03-A tes scoped **9/9 PASS pada VPS**, exit0, Journal Final REJECT, G1 issuer false. Bukti sebelum perubahan filter MAIN yang baru; jangan klaim perubahan terbaru sudah PASS.
+- [x] **M03-B CODED:** `MAIN_EXCLUDED_PAIRS` = PEPE/FLOKI/USDT/USDC, untuk mencegah pembauran dana MAIN vs reserve/rebuy asset. Saldo riil tetap belum dibaca.
+- [x] **M03-B CODED:** tambah bukti `PublicObservation` berupa closed 1m/15m history, sampled closed-minute buy/sell trade value, top5 bid/ask depth notional, semuanya tidak diklaim sebagai cakupan trade lengkap.
+- [x] **M03-B CODED:** `deep_analysis.py` indikator EMA8/21, RSI14, volume ratio, 5m/15m trend, spread, imbalance, sample flow, source continuity + stale/candle receipt checks. Skor hanya **diagnostik**, bukan ROI atau BUY signal.
+- [x] **M03-B WIRED CODE:** `--deep-once` → one orchestrator → existing scanner shortlist → bounded max2 `observe` calls → `deep_scan` → Journal Final REJECT.
+- [x] **M03-B TEST CASES WRITTEN:** 6 tes baru `tests/test_m03b_deep.py` (belum dijalankan), termasuk segregasi MAIN, source gap, no trade sample, wide spread, per-pair failure, mainpath reject.
+- [ ] **M03-B SCOPED PASS:** jalankan affected M02 source tests, M03-A scanner tests dan M03-B indicator tests pada VPS sesudah commit terbaru.
+- [ ] **M03-B PUBLIC VPS PROBE:** satu `--deep-once` dengan hasil source-bound 1m/5m/15m, source untrusted, no trade, REJECT, tulis SHA/reasons di evidence register.
+- [ ] **M03-C:** tingkatkan deep 20–40 menggunakan scheduler/rate budget. Indodax batas publik 180 request/menit, hindari 30 × multi-call sekaligus. Tambah BTC regime dan true 1/5/15m source joins.
+- [ ] Validasi minimum notional per pair, listing/suspend risk dan BOT capital ownership before qualified G1 proposals.
+- [ ] Trade/candle coverage terverifikasi, G1 provenance issuer yang sah, antarmuka ke G2 tiga AI tanpa duplikasi scanner dan 1–2 final candidates yang dibuktikan.
+- [ ] Replay historical ablation, volume/imbalance/false-breakout evidence dan look-ahead prevention secara scoped.
+**Acceptance penuh M03 belum tercapai.** M03-A public scanning verified, M03-B feature analysis masih observasional, G1 source trust dan G2 belum terhubung. Tidak boleh BUY.
 
 ### M04 — 3 AI MARKET → RISK → STRATEGY
 **Status: NOT_STARTED. Bergantung G1 sourced candidates.**
@@ -199,7 +198,8 @@
 | M01 CI | [run 40297122063](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40297122063) | Dikonfirmasi job gagal sebelum menjalankan langkah apa pun (0 steps) | Alasan runner/workflow failure, CI PASS |
 | M02 CODED | `public_market.py`, `orchestrator.py`, `__main__.py`, `journal.py`, `tests/test_m02_public_market.py` | Earlier 9/9 M02 + 7/7 M01 local PASS on unchanged prior scope; 2 new CLI probe tests have **no verified runner PASS yet**. API docs: https://github.com/btcid/indodax-official-api-docs/blob/master/Public-RestAPI.md | No real public observation from VPS, G1 issuer, or CI PASS; no trading |
 | M02 REAL PUBLIC VPS | `7002387f` output dari user pada 26 Okt 2026 | Repo clone/pull dan market BTC/IDR public REST valid, candle 1/5/15m, 500 trade visible, 300 depth visible, exit0 dan Final REJECT | Trade history lengkap, G1 trusted issuer, BUY/order |
-| M03-A CODED | `scanner.py`, `orchestrator.py`, `__main__.py`, `tests/test_m03a_scanner.py` | Public IDR universe/discovery preliminary top30/watchlist2 dan 9 tests dibuat; **belum ada PASS aktual tes M03-A** | Jalankan tes dan public scanner VPS, deep signal/AI/BUY semua belum |
+| M03-A VPS PASS | `bdcd9f5` owner VPS console 26 Okt 2026 | **9/9 tests PASS**, 398 pairs IDR, 312 eligible, 86 rejected, shortlist30, watchlist USDT/IDR + BTC/IDR, epoch 1793010913, exit0, Final REJECT | New MAIN exclusion not yet tested; deep source/AI/BUY absent |
+| M03-B CODED | `scanner.py`, `public_market.py`, `deep_analysis.py`, `orchestrator.py`, `__main__.py`, `tests/test_m03b_deep.py` | Changed-source implementation committed; 6 new tests authored. **No PASS claimed for changes yet.** | VPS scoped tests, public deep probe, 20–40 scheduling/issuer/AI and order path pending |
 | M03-B–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Implementasi dan bukti stage masing-masing |
 
 **Catatan:** Tanggal baseline tidak berarti semua isi tersertifikasi hari itu. Ketika bukti baru diverifikasi, tambahkan **satu baris** sesuai milestone. Jika hanya perubahan status, jangan memodifikasi aturan trading di guideline.
