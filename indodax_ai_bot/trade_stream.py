@@ -324,6 +324,9 @@ def probe_official_public_ws(
     ws = None
     acked = False
     received = 0
+    heartbeat_confirmed = False
+    other_frames = 0
+    timeout_reads = 0
     try:
         ws = websocket.create_connection(WS_URL, timeout=5, enable_multithread=True)
         ws.settimeout(1.0)
@@ -362,24 +365,43 @@ def probe_official_public_ws(
                 break
         if not acked:
             raise StreamEvidenceError("PUBLIC_WS_SUBSCRIBE_TIMEOUT")
+        # Documented WS method 7 heartbeat distinguishes a quiet channel
+        # from a connection that cannot reply to control frames.
+        ws.send(json.dumps({"method": 7, "id": 3}))
         until = time.monotonic() + seconds
         while time.monotonic() < until:
             try:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException:
+                timeout_reads += 1
                 continue
             if not isinstance(raw, str) or len(raw) > 512_000:
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
             msg = json.loads(raw)
-            if (isinstance(msg, dict) and isinstance(msg.get("result"), dict)
+            if not isinstance(msg, dict):
+                raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SHAPE")
+            if msg.get("id") == 3 and set(msg) == {"id"}:
+                heartbeat_confirmed = True
+            elif (isinstance(msg.get("result"), dict)
                     and msg["result"].get("channel") == channel_for_pair(pair)):
                 journal.ingest(pair, msg)
                 received += 1
+            else:
+                other_frames += 1
         result = journal.status(pair)
         return {
             **result,
             "public_ws_probe_completed": True,
             "received_publications_in_this_probe": received,
+            "subscription_acknowledged": acked,
+            "protocol_heartbeat_confirmed": heartbeat_confirmed,
+            "unrecognized_frame_count": other_frames,
+            "socket_read_timeouts": timeout_reads,
+            "ws_activity_diagnostic": (
+                "PUBLIC_TRADE_FRAMES_RECEIVED" if received
+                else "QUIET_CHANNEL_PROTOCOL_ALIVE" if heartbeat_confirmed
+                else "NO_TRADE_FRAMES_HEARTBEAT_UNCONFIRMED"
+            ),
             "probe_wall_elapsed_seconds": round(time.monotonic() - started, 2),
         }
     except StreamEvidenceError:
