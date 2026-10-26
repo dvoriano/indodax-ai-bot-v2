@@ -323,6 +323,7 @@ def probe_official_public_ws(
     started = time.monotonic()
     ws = None
     acked = False
+    disconnect_recorded = False
     received = 0
     heartbeat_confirmed = False
     other_frames = 0
@@ -392,7 +393,7 @@ def probe_official_public_ws(
         # This is a bounded probe, not a daemon. Report the persisted
         # post-close state truthfully rather than a stale ACTIVE snapshot.
         persisted = journal.mark_disconnected(pair)
-        acked = False  # Already committed post-close state.
+        disconnect_recorded = True  # Cleanup state, NOT subscription ACK.
         return {
             **persisted,
             "stream_status_during_probe": during_probe["stream_status"],
@@ -422,5 +423,5 @@ def probe_official_public_ws(
                 pass
         # The next invocation MUST request replay from the last persisted
         # offset. Disconnect is not a certified continuous trade tape.
-        if acked:
+        if acked and not disconnect_recorded:
             journal.mark_disconnected(pair)
