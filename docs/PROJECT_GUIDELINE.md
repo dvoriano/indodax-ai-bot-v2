@@ -3,7 +3,7 @@
 
 **Repository:** dvoriano/indodax-ai-bot-v2 (PRIVATE)  
 **Baseline:** 26 Oktober 2026  
-**Canonical source:** dokumen ini. **GitHub = source of truth; VPS = environment pengujian/runtime; Indodax = sumber data saldo, order, dan fill nyata.**
+**Canonical policy/specification:** dokumen ini. **Canonical execution tracker:** [ROADMAP.md](ROADMAP.md). **GitHub = source of truth; VPS = environment pengujian/runtime; Indodax = sumber data saldo, order, dan fill nyata.**
 
 > **BACA DULU SETIAP CHAT / SESI CODING:** Bagian A (checkpoint), B (keputusan tetap), C (arsitektur), D (kontrak dan keselamatan), E (roadmap), F (cara kerja). Tidak perlu meninjau ulang arsip panjang ataupun mengulang tes PASS jika fungsi tidak berubah.
 
@@ -44,21 +44,13 @@ Bot beroperasi **24/7 untuk memantau pasar**, tetapi hanya trading pada kesempat
 
 **Acceptance khusus scalping** (baru bisa DONE setelah terbukti): satu siklus scanner closed 1m nyata → ranking real → trio model valid → MANUAL/AUTO Final → preflight source+balance → accepted Indodax order → matched BUY fills → managed protective/target SELL → matched SELL fills → profit bersih nyata dan IDR settlement. Sebelum Live GO, buktikan end-to-end deterministic/offline/PAPER tanpa klaim order nyata. Untuk M01, cukup **satu no-trade vertical slice fail-closed yang benar-benar runnable**, bukan menyatakan kemampuan trading sudah ada.
 
-## A. CHECKPOINT PROYEK (SATU-SATUNYA STATUS KANONIS)
+## A. CHECKPOINT DAN ATURAN HANDOVER
 
-| Item | Status awal |
-| --- | --- |
-| Sasaran | **DAILY SCALPING INTRADAY 24/7** sebagai misi inti. Membangun bot spot scalping Indodax V2 dari repository baru dengan satu jalur online G1 → 3 AI → keputusan → execution → position/SELL → IDR dan kontrol Telegram. |
-| Implementasi | **M01 CODED & TESTED_OFFLINE (7/7 local PASS)**. Foundation CLI/single orchestrator/journal is runnable. Tidak ada scanner market, 3 paid AI, private API, Telegram trading, ataupun order nyata. GitHub Actions workflow run 40296427169 **FAIL before steps** (0 langkah dieksekusi), penyebab belum terverifikasi; bukan kegagalan kode tes yang terbukti. |
-| Milestone aktif | **M02: Indodax PUBLIC market source** (real 1m closed candle + trade/quotes source receipt); sambungkan ke single orchestrator tanpa mengaktifkan order. |
-| Milestone selesai | M00 guideline. **M01:** commit `b73511e38ec863bdc92618426a15e8e54371454d`, 10 file baru, Python local compile & **7/7 unittest PASS**, CLI --once/--health PASS dari salinan sumber; default MANUAL/NO/NO/DRY_RUN, persisted REJECT no-data. Source repo diverifikasi tersedia di main; workflow GitHub belum berhasil memulai job. |
-| Live trading | **OFF / TIDAK DIIJINKAN** sampai seluruh kriteria release terverifikasi dan ada persetujuan owner yang terpisah dan eksplisit untuk order uang nyata. |
-| Bukti penerimaan | Catat pada tabel roadmap: SHA, tes yang lulus, lintasan runtime yang terbukti, keterbatasan, dan langkah berikutnya. |
-| Satu langkah berikutnya | **Implementasikan M02** dengan public Indodax market adapter; buktikan source timestamps, closed 1m, quotes/trade coverage, dan sambungkan satu source receipt asli ke orchestrator. Jangan melompat ke trading. |
+**Tracker checklist dan checkpoint aktif hanya:** [ROADMAP.md](ROADMAP.md), bagian 1 (handover), 3 (checklist M00–M12), 4 (bukti). **Dokumen ini tetap menjadi satu-satunya sumber kebijakan, desain, dan acceptance normatif.** Jangan menggandakan status kerja di sini; perubahan Mxx dicatat di ROADMAP. Perubahan kebijakan owner baru mengubah guideline terlebih dulu.
 
-**Definisi status yang wajib dipakai:** NOT_STARTED, CODED, TESTED_OFFLINE, VERIFIED_PUBLIC_ONLINE, VERIFIED_PRIVATE_READONLY, VERIFIED_PAPER, VERIFIED_LIVE, BLOCKED. Gunakan status paling tinggi yang benar-benar didukung bukti, jangan lompat dari mock ke LIVE. Tanpa bukti, tetap CODED atau BLOCKED.
+**Arah tetap:** DAILY SCALPING spot Indodax, market 1m closed (5m/15m + BTC), G1 → 3 AI → Final PASS/REJECT MANUAL/AUTO → protected capital/Preflight → BUY → protective/target SELL → IDR realized net PnL. Seluruh transaksi LIVE tetap OFF sampai independent GO owner dan verifikasi release.
 
-Setiap checkpoint setelah perubahan cukup memperbarui bagian A dan tabel E. **Jangan membuat file ledger/handover/status/checklist paralel.**
+**Status bukti yang sah:** NOT_STARTED, CODED, TESTED_OFFLINE, VERIFIED_PUBLIC_ONLINE, VERIFIED_PRIVATE_READONLY, VERIFIED_PAPER, VERIFIED_LIVE, BLOCKED. Salah satu jenis bukti tidak menaikkan klaim jenis lain. Jangan mengulang accepted PASS tanpa perubahan fungsi terkait.
 
 ## B. KEPUTUSAN PRODUK YANG TETAP
 
@@ -209,29 +201,31 @@ Setiap message lintas modul membawa request/trace_id, pair, timestamps, candle-c
 
 **Definition of Done LIVE:** koneksi & market/freshness terverifikasi, 3 AI valid, telegram callbacks benar-benar terkonsumsi sekali, permission akun/saldo/protected cash terbukti, BUY→SELL order/fill ownership dan recovery aman, deterministic Final+Preflight+Executor dibuktikan, credential aman, satu runtime service dipasang, owner explicit scoped GO. Pilot LIVE berbatas nominal dan risiko hanya setelah prasyarat ini; jangan mengklaim LIVE dari VIEW/PAPER.
 
-## E. ROADMAP IMPLEMENTASI TUNGGAL
+## E. DEFINISI MILESTONE (NORMATIF, BUKAN TRACKER STATUS)
 
-| ID | Deliverable dan bukti minimum | Status |
-| --- | --- | --- |
-| M00 | Guideline & milestone kanonis, repo private dan link README/AGENTS | DONE (GitHub docs) |
-| M01 | Foundation runnable: `indodax_ai_bot/` config/contracts/policy/journal/orchestrator/CLI; SQLite rejects persistently; compile, unit tests, CLI local | **TESTED_OFFLINE, 7/7 local PASS, SHA b73511e3; GitHub Actions FAIL pre-step (CI NOT VERIFIED)** |
-| **M02** | Indodax public adapter + closed candles/trades/orderbook; provenance, coverage, timestamps; satu public live observation | **NEXT: NOT_STARTED** |
-| M03 | G1 scan all IDR → deep 20–40 → rank top 1–2; technical/microstructure signals, BTC regime dan historical scoring | NOT_STARTED |
-| M04 | 3-role AI provider adapter, schema/evidence validation, same-candle MARKET→RISK→STRATEGY, deterministic veto | NOT_STARTED |
-| M05 | Final binary policy dan Telegram MANUAL default/AUTO, owner auth, 90s one-shot proposals, callback/replay proof | NOT_STARTED |
-| M06 | Private Indodax read-only balance/orders scoped, asset buckets, fresh IDR spendable, reserve protections | NOT_STARTED |
-| M07 | Preflight & execution engine, fee/precision/slippage, idempotency, unknown state, order fill/cancel/reconciliation | NOT_STARTED |
-| M08 | Position + SELL 2/8/11 netto, stop/trailing, partial fill, protective SELL, settled IDR and recovery | NOT_STARTED |
-| M09 | Full-scoped integrated shadow/paper path using production modules, no alternate fake engine, fault/restart matrix | NOT_STARTED |
-| M10 | VPS release pinned commit, secrets/security/systemd, telemetry, owner Telegram LIVE monitoring (orders OFF) | NOT_STARTED |
-| M11 | Security/ownership/atomic account cutoff verification, small controlled LIVE readiness review & owner GO | NOT_STARTED |
-| M12 | Limited real order BUY→SELL→IDR pilot, verified fills/net IDR, then monitored production scale-up | NOT_STARTED |
+**Progress/checklist yang dapat dicentang tersedia di [ROADMAP.md](ROADMAP.md).** Tabel ini hanya mendefinisikan ruang lingkup dan acceptance untuk mencegah drift spesifikasi.
 
-**Gate per fase:** Jangan maju hanya karena log “PASS”. Catat bukti sesuai jenis: source/code/mock/read-only/order. Jika blocker baru relevan, pecahkan blocker itu, jangan memulai audit semua modul yang sudah diterima. Setelah satu milestone sukses, tandai DONE dan pindah ke NEXT. Kembali hanya kalau kode relevan berubah atau regression nyata ditemukan.
+| ID | Ruang lingkup milestone tetap |
+| --- | --- |
+| M00 | Guideline/AGENTS/README dan Iron Rules yang mengikat. |
+| M01 | Fondasi Python runnable, typed contracts, safe config, persistent journal, satu orchestrator, scoped tests. |
+| M02 | Indodax public market adapter: closed 1m, 5m, 15m, trades/orderbook, source freshness/coverage dan observation. |
+| M03 | G1 scan semua IDR → analisis deep 20–40 → ranking top 1–2, indikator dan microstructure + BTC, replay/ablation. |
+| M04 | Tepat 3 AI MARKET → RISK veto → STRATEGY, same-source role contexts, strict response and source validation. |
+| M05 | Final binary PASS/REJECT dan Telegram MANUAL default/AUTO, owner auth, 90s replay-safe proposals. |
+| M06 | Authenticated read-only account+capital, fresh MAIN spendable, FLOKI/PEPE reserve + ownership guard. |
+| M07 | Final preflight, order execution Indodax, fee/precision, idempotency, unknown state, partial/cancel/retry reconciliation. |
+| M08 | Bot-owned position, SELL 2/8/11% net, trailing/stop/time-stop, protective exit dan IDR settlement. |
+| M09 | Integrated real-module shadow/PAPER path, fault/restart and full fail-closed end-to-end tests. |
+| M10 | Pinned VPS/systemd CI/security/telemetry, online G1+AI+Telegram with orders OFF. |
+| M11 | Owner-bound LIVE readiness risk/security proof dan explicit separate scoped order GO. |
+| M12 | Limited real BUY→SELL→IDR pilot with exchange-confirmed fills, actual settled IDR and realized net PnL. |
+
+**Gate per fase:** Selesai hanya dengan kode tersambung, tes scoped, bukti runtime sesuai jenis, dan checkpoint update di roadmap. Jangan mengulang audit PASS yang fungsinya tidak berubah. Jangan menaikkan LIVE hanya berdasarkan VIEW/PAPER.
 
 ## F. ATURAN KERJA AGAR TIDAK MUTER-MUTER
 
-1. **Awal setiap sesi:** baca Bagian A, B, E lalu bagian C/D yang relevan untuk milestone aktif; jangan memulai dari nol.
+1. **Awal setiap sesi:** baca Bagian 0/0A, A, B, E serta bagian C/D sesuai kebutuhan; baca [ROADMAP.md](ROADMAP.md) bagian 1 dan milestone aktif. Jangan memulai dari nol.
 2. Tetapkan **satu milestone aktif** dan satu vertical slice nyata. Selesaikan, sambungkan, tes, catat, lanjut.
 3. **Repository baru** sebagai sumber utama. Tidak membuat kode di VPS lalu lupa menyinkronkan; deploy hanya pinned SHA dari GitHub.
 4. Buat **satu scanner resmi, satu ranking, satu AI pipeline, satu Final, satu Executor, satu Position Manager, satu ledger**; adapter modular diperbolehkan, duplikasi fungsional tidak.
@@ -240,18 +234,18 @@ Setiap message lintas modul membawa request/trace_id, pair, timestamps, candle-c
 7. Setiap hasil dibedakan: SPECIFIED ≠ CODED ≠ TESTED_OFFLINE ≠ VERIFIED_PUBLIC_ONLINE ≠ VERIFIED_PRIVATE_READONLY ≠ VERIFIED_LIVE.
 8. Jangan memalsukan proof, saldo, candle atau order. Jika tidak tersedia: BLOCKED/REJECT, tampilkan sebabnya dan aksi teknis konkret.
 9. Selalu tuliskan setelah perubahan: **apa yang diubah, path/modul, SHA, wiring ke mainpath, apa yang benar-benar diuji, apa yang belum, satu langkah berikutnya.**
-10. Jangan memperbanyak catatan master. Update checkpoint dan roadmap **di file ini saja**. Catatan teknis spesifik boleh dekat kode jika diperlukan untuk maintenance, bukan menduplikasi ledger.
+10. Jangan memperbanyak catatan master. **Update status/checklist/handover hanya di [ROADMAP.md](ROADMAP.md)**; guideline hanya diubah untuk aturan produk, desain, atau acceptance jika keputusan owner berubah. Catatan teknis spesifik boleh dekat kode bila perlu, bukan menggandakan status.
 11. Jangan hapus fitur yang dipakai/rollback hanya karena terlihat mirip; bersihkan duplikat berdasarkan dependency yang dibuktikan.
 12. LIVE order butuh validasi teknis dan explicit owner GO terpisah. Jangan aktifkan otomatis atas dasar “kerjakan”, hasil test mock, atau tombol Telegram PASS yang belum tersambung aman.
 13. Hindari overengineering dan dokumen tanpa kode. Ketika spesifikasi cukup jelas, **implementasikan** modul berikutnya, bukan terus mengusulkan arsitektur yang sama.
 14. Jika ada perubahan kebijakan owner: ubah hanya aturan terdampak di dokumen ini, implementasi, dan affected tests; jelaskan perbedaan, jangan diam-diam mengubah target.
 15. Jika skill/bukti lama dari bot pertama dipakai sebagai referensi, adaptasi ulang secara selektif dan aman; jangan copy .env, key, ledger, user history, atau order state lama.
 
-**IRON RULE REPORT WAJIB PER TAHAP:** (1) kode/modul dibuat, (2) sambungan mainpath, (3) pemeriksaan terverifikasi, (4) belum berfungsi, (5) satu langkah berikutnya. Dilarang berhenti hanya pada rencana atau mengulang laporan lama.
+**IRON RULE REPORT WAJIB PER TAHAP:** (1) kode/modul dibuat, (2) sambungan mainpath, (3) pemeriksaan terverifikasi, (4) belum berfungsi, (5) satu langkah berikutnya. Catat hasil di ROADMAP. Dilarang berhenti hanya pada rencana atau mengulang laporan lama.
 
-**FORMAT HANDOVER RINGKAS SAAT PINDAH CHAT** (tulis di A dan baris E terkait, bukan file baru): current SHA, milestone aktif, accepted evidence, blockers, code path utama, satu langkah berikutnya, unchanged milestones yang tidak perlu dites ulang.
+**FORMAT HANDOVER RINGKAS SAAT PINDAH CHAT** (tulis di ROADMAP bagian 1 dan 4, jangan membuat file baru): current SHA, milestone aktif, accepted evidence, blockers, code path utama, satu langkah berikutnya, unchanged milestones yang tidak perlu dites ulang.
 
-## G. PRIORITAS IMPLEMENTASI PERTAMA
+## G. BUKTI HISTORIS M01 (IMMUTABLE; TRACKER SEKARANG DI ROADMAP)
 
 **M01 foundation telah dibuat** di repository ini (SHA `b73511e3`) dan diuji secara lokal. Berikut isi/hasil scope M01:
 - `indodax_ai_bot` + `python -m indodax_ai_bot --once/--health` (single CLI);
