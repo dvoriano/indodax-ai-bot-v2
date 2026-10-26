@@ -432,6 +432,27 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
     diagnostic = sorted(candidates, key=lambda x: (
         x.score is None, -(x.score if x.score is not None else -1), x.pair
     ))
+    # Report EVERY rejected pair; top-10 scores alone conceal failures.
+    # No new network requests and no change in approval authority.
+    rejected_pairs = [
+        {"pair": c.pair, "state": c.state, "reason": c.rejection_reason}
+        for c in candidates if c.score is None
+    ]
+    reason_counts: dict[str, int] = {}
+    for item in rejected_pairs:
+        key = item["reason"] or item["state"]
+        reason_counts[key] = reason_counts.get(key, 0) + 1
+    not_attempted = list(selected[attempted:])
+    # "attempted" includes the pair that may have crossed the time deadline;
+    # that pair may be absent from candidates if its payload expired post-fetch.
+    attempted_without_result = max(0, attempted - len(candidates))
+    if not completed or window_expired:
+        coverage_state = "TIME_EXPIRED_OR_TRUNCATED"
+    elif rejected_pairs:
+        coverage_state = "PARTIAL_INVALID_PAIR_EVIDENCE"
+    else:
+        coverage_state = "ALL_SELECTED_ANALYZED_UNATTESTED"
+    actual_requests = getattr(market, "public_get_attempt_count", None)
     return {
         "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
         "shortlist_size": len(screening.shortlist),
@@ -440,8 +461,16 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         "analyzed_count": len(candidates),
         "candidate_valid_count": sum(c.score is not None for c in candidates),
         "candidate_rejected_count": sum(c.score is None for c in candidates),
+        "candidate_rejection_reasons": rejected_pairs,
+        "candidate_rejection_reason_counts": dict(sorted(reason_counts.items())),
+        "not_attempted_pairs": not_attempted,
+        "attempted_without_result_count": attempted_without_result,
+        "coverage_status": coverage_state,
+        "synchronized_pair_coverage_complete": valid and guard["status"] == "ALIGNED_PUBLIC_UNATTESTED",
         "window_expired": window_expired,
         "estimated_requests_including_discovery": expected_gets,
+        # None for independently supplied market test doubles.
+        "public_get_attempt_count_this_client": actual_requests,
         "public_limit_per_minute": 180,
         "local_budget_headroom": 12,
         "other_process_requests_accounted_for": False,

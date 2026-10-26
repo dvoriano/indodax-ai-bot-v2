@@ -53,8 +53,12 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.bulk_deep_once:
                 result["public_bulk"] = outcome.bulk
-                result["bulk_probe_status"] = ("PUBLIC_BULK_UNATTESTED" if outcome.bulk is not None
-                                               else "PUBLIC_BULK_BLOCKED")
+                result["bulk_probe_status"] = (
+                    "PUBLIC_BULK_BLOCKED" if outcome.bulk is None
+                    else "PUBLIC_BULK_UNATTESTED"
+                    if outcome.bulk["coverage_status"] == "ALL_SELECTED_ANALYZED_UNATTESTED"
+                    else "PUBLIC_BULK_INCOMPLETE_UNATTESTED"
+                )
                 result["live_trading_authorized"] = False
             if args.rolling_deep_once:
                 result["public_rolling"] = outcome.rolling

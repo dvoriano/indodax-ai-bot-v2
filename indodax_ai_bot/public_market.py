@@ -117,6 +117,9 @@ class IndodaxPublicMarket:
         self._clock = clock
         self._timeout = timeout
         self._fetch = fetch or self._http_json
+        # Per-client diagnostic only: counts attempted PUBLIC GETs in this
+        # instance. No global IP accounting; no authorization impact.
+        self.public_get_attempt_count = 0
 
     def _http_json(self, path: str) -> Any:
         # Every path comes from hardcoded public endpoint constructors.
@@ -132,6 +135,7 @@ class IndodaxPublicMarket:
             raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from exc
 
     def _get(self, path: str) -> Any:
+        self.public_get_attempt_count += 1
         try:
             return self._fetch(path)
         except PublicDataError:
