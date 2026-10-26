@@ -49,12 +49,12 @@ Bot beroperasi **24/7 untuk memantau pasar**, tetapi hanya trading pada kesempat
 | Item | Status awal |
 | --- | --- |
 | Sasaran | **DAILY SCALPING INTRADAY 24/7** sebagai misi inti. Membangun bot spot scalping Indodax V2 dari repository baru dengan satu jalur online G1 → 3 AI → keputusan → execution → position/SELL → IDR dan kontrol Telegram. |
-| Implementasi | **BELUM DIMULAI.** Dokumen ini menyatakan kebutuhan/acceptance, **bukan** bukti bahwa bot sudah aktif. |
-| Milestone aktif | **M01: fondasi runnable**, struktur paket, konfigurasi aman, kontrak data, persistence dan test dasar; jangan mengimplementasikan banyak modul tanpa wiring. |
-| Milestone selesai | M00: guideline/roadmap ditetapkan (dokumen); belum ada software, VPS, AI paid, private API, atau order yang diuji. |
+| Implementasi | **M01 CODED & TESTED_OFFLINE (7/7 local PASS)**. Foundation CLI/single orchestrator/journal is runnable. Tidak ada scanner market, 3 paid AI, private API, Telegram trading, ataupun order nyata. GitHub Actions workflow run 40296427169 **FAIL before steps** (0 langkah dieksekusi), penyebab belum terverifikasi; bukan kegagalan kode tes yang terbukti. |
+| Milestone aktif | **M02: Indodax PUBLIC market source** (real 1m closed candle + trade/quotes source receipt); sambungkan ke single orchestrator tanpa mengaktifkan order. |
+| Milestone selesai | M00 guideline. **M01:** commit `b73511e38ec863bdc92618426a15e8e54371454d`, 10 file baru, Python local compile & **7/7 unittest PASS**, CLI --once/--health PASS dari salinan sumber; default MANUAL/NO/NO/DRY_RUN, persisted REJECT no-data. Source repo diverifikasi tersedia di main; workflow GitHub belum berhasil memulai job. |
 | Live trading | **OFF / TIDAK DIIJINKAN** sampai seluruh kriteria release terverifikasi dan ada persetujuan owner yang terpisah dan eksplisit untuk order uang nyata. |
 | Bukti penerimaan | Catat pada tabel roadmap: SHA, tes yang lulus, lintasan runtime yang terbukti, keterbatasan, dan langkah berikutnya. |
-| Satu langkah berikutnya | Buat skeleton runnable dengan satu entrypoint, interfaces dan failing-safe settings; rangkai lalu uji satu alur vertikal non-live. |
+| Satu langkah berikutnya | **Implementasikan M02** dengan public Indodax market adapter; buktikan source timestamps, closed 1m, quotes/trade coverage, dan sambungkan satu source receipt asli ke orchestrator. Jangan melompat ke trading. |
 
 **Definisi status yang wajib dipakai:** NOT_STARTED, CODED, TESTED_OFFLINE, VERIFIED_PUBLIC_ONLINE, VERIFIED_PRIVATE_READONLY, VERIFIED_PAPER, VERIFIED_LIVE, BLOCKED. Gunakan status paling tinggi yang benar-benar didukung bukti, jangan lompat dari mock ke LIVE. Tanpa bukti, tetap CODED atau BLOCKED.
 
@@ -103,6 +103,31 @@ Indodax public ticker / trades / order book / OHLCV
 → realized PnL, Telegram dan audit trail.
 
 **Satu implementation per tanggung jawab.** Tidak membuat scanner V3/V4/V5 baru ketika sudah ada scanner resmi di V2; tidak membangun bridge alternatif atau dua decision engine yang berkompetisi. Routing jelas dalam satu application orchestrator. Semua engine dikendalikan oleh state yang persisten dan dapat dilanjutkan setelah restart.
+
+### C0. Repository structure: implemented versus target
+
+**Sudah tersedia pada M01 (GitHub):**
+
+```text
+indodax_ai_bot/
+  __main__.py        # main CLI yang berjalan
+  config.py          # default safe; LIVE selalu off pada M01
+  contracts.py       # source, trade, risk, fills, owned lots
+  policy.py          # scalping floors + sell tier parameters
+  journal.py         # persistent idempotent decision record
+  orchestrator.py    # SINGLE application orchestration point
+tests/test_m01_foundation.py
+.github/workflows/ci.yml
+pyproject.toml
+docs/PROJECT_GUIDELINE.md   # canonical roadmap/checkpoint
+AGENTS.md                   # AI coding rules (bukan master kedua)
+README.md
+```
+
+**Modul yang direncanakan, BELUM ADA dan tidak boleh dinyatakan berfungsi:** public data adapter (M02), G1 scanner/ranking/technical (M03), provider tiga AI (M04), Final/Telegram (M05), account/capital (M06), exchange executor/reconciliation (M07), owned position/SELL lifecycle (M08), source-bound end-to-end integration (M09–M12). Implementasikan masing-masing di dalam paket yang sama dan **hubungkan ke `DailyScalpingOrchestrator`**, jangan membangun runtime paralel. Perbaiki kebutuhan struktur bila ada bukti perubahan nyata; jangan buat banyak modul kosong sejak awal.
+
+**Bukti M01:** lokal Python compile dan 7/7 unittest PASS; CLI `--once` menghasilkan `REJECT / G1_SOURCE_NOT_CONNECTED / execution_allowed=false`; `--health` melaporkan `DAILY_SPOT_SCALPING`, `MANUAL`, `DRY_RUN`. Tidak ada exchange connection atau order. GitHub workflow gagal *sebelum steps*, jadi GitHub CI masih pending investigasi layanan/runner, tidak dianggap test-failure source.
+
 
 ### C1. G1 Scanner, ranking dan bukti pasar
 - Discovery seluruh pair aktif yang berdenominasi IDR; filter instrumen, minimum notional, spread, volume, likuiditas dan kondisi listing sesuai data yang tersedia.
@@ -188,9 +213,9 @@ Setiap message lintas modul membawa request/trace_id, pair, timestamps, candle-c
 
 | ID | Deliverable dan bukti minimum | Status |
 | --- | --- | --- |
-| M00 | Guideline & milestone kanonis, repo private dan link README/AGENTS | SPECIFIED |
-| **M01** | Foundation runnable: package layout, config fail-closed, typed contracts, DB, 1 orchestrator, smoke & tests | **NEXT** |
-| M02 | Indodax public adapter + closed candles/trades/orderbook; provenance, coverage, timestamps; satu public live observation | NOT_STARTED |
+| M00 | Guideline & milestone kanonis, repo private dan link README/AGENTS | DONE (GitHub docs) |
+| M01 | Foundation runnable: `indodax_ai_bot/` config/contracts/policy/journal/orchestrator/CLI; SQLite rejects persistently; compile, unit tests, CLI local | **TESTED_OFFLINE, 7/7 local PASS, SHA b73511e3; GitHub Actions FAIL pre-step (CI NOT VERIFIED)** |
+| **M02** | Indodax public adapter + closed candles/trades/orderbook; provenance, coverage, timestamps; satu public live observation | **NEXT: NOT_STARTED** |
 | M03 | G1 scan all IDR → deep 20–40 → rank top 1–2; technical/microstructure signals, BTC regime dan historical scoring | NOT_STARTED |
 | M04 | 3-role AI provider adapter, schema/evidence validation, same-candle MARKET→RISK→STRATEGY, deterministic veto | NOT_STARTED |
 | M05 | Final binary policy dan Telegram MANUAL default/AUTO, owner auth, 90s one-shot proposals, callback/replay proof | NOT_STARTED |
@@ -228,14 +253,14 @@ Setiap message lintas modul membawa request/trace_id, pair, timestamps, candle-c
 
 ## G. PRIORITAS IMPLEMENTASI PERTAMA
 
-Pada langkah berikutnya bangun **M01** di repository ini, tanpa membuat order nyata:
-- satu package Python bernama indodax_ai_bot dan satu entrypoint yang jelas;
-- konfigurasi type-safe dengan default NO/NO/DRY_RUN dan secret redaction;
-- kontrak MarketSnapshot, RiskVeto, TradeProposal, OwnerDecision, ExecutionIntent, Order/Fill/Position;
-- persistence dan idempotency dasar, basic health/status dan shutdown;
-- satu orchestrator fail-closed yang menghubungkan komponen awal;
-- unit test untuk invariant inti dan eksekusi nol order saat missing evidence;
-- README developer yang ringkas bila perlu, CI sesuai paket, serta update checkpoint di dokumen ini.
+**M01 foundation telah dibuat** di repository ini (SHA `b73511e3`) dan diuji secara lokal. Berikut isi/hasil scope M01:
+- `indodax_ai_bot` + `python -m indodax_ai_bot --once/--health` (single CLI);
+- konfigurasi `Settings` fail-closed default NO/NO/DRY_RUN dan MANUAL (tanpa menyentuh exchange/secrets);
+- kontrak typed MarketSnapshot, RiskVeto, TradeProposal, OwnerDecision, ExecutionIntent, OrderState, Fill, PositionLot;
+- SQLite decision journal idempotent dan health/status CLI; restart/replay REJECT 1/1 diuji;
+- satu `DailyScalpingOrchestrator`: no G1 → Final REJECT persisten, execution_allowed=false;
+- 7/7 local unittest PASS, CLI health/once PASS, compile PASS; bukan verifikasi VPS atau exchange;
+- workflow GitHub Actions disimpan, tetapi run #1 `40296427169` gagal sebelum steps sehingga CI belum accepted; jangan menyebut PASS GitHub CI.
 
 **Tujuan final:** bot V2 yang online, modular, dapat diaudit, memakai 3 AI, BUY/SELL/IDR yang terrekonsiliasi, dikontrol Telegram, terlindung dari double-spend/duplicate order dan hanya dapat LIVE setelah syarat keamanan lengkap.
 
