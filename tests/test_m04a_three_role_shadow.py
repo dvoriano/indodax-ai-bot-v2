@@ -164,8 +164,9 @@ class M04AShadowTests(unittest.TestCase):
 
     def test_invalid_risk_decision_rejected_before_strategy(self):
         caller=RoleCaller(risk="OVERRIDE")
-        out=ThreeRoleShadow(caller=caller,clock=lambda:1800000140).run(
-            "trace",source(trusted=True))
+        # Test the RISK response contract using the TEST-ONLY signed
+        # issuer fixture. Unsigned trust flags must never reach any role.
+        out=signed_role_run(caller)
         self.assertEqual(out["reason"],"M04_ROLE_INVALID_OR_UNAVAILABLE")
         self.assertEqual(caller.calls,["MARKET","RISK"])
         self.assertEqual(out["completed_roles"],["MARKET"])
