@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Indodax V2 private runtime state and local account artifacts
+runtime/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+.env.*
+!.env.example
