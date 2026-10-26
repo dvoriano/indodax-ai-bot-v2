@@ -221,3 +221,10 @@ After the first real public BTC stream trial (12.09sec, 0 publications, epoch163
 New tests `tests/test_m04f_ws_heartbeat.py` (7 authored, not VPS-run) cover duplicate boundaries, replay collision, socket reconnect isolation, gaps and fake ping/pong. Run them with the affected existing M04-E suite, then two consecutive 30-second BTC/IDR PUBLIC stream probes using the SAME V2-only SQLite DB. Persisted offsets and recovery must be observed before claiming actual WS resume works. Zero frames after a 30-second session do NOT mean upstream full tape was authenticated.
 
 No real issuer, AI paid provider, capital account, telegram owner approval or buy/sell execution is activated.
+
+
+## M04-G: distinguish recovered publications from live trades (CODED, pending VPS)
+
+At V2 SHA `513dc284`, the owner VPS proved M04-F: corrected ACK 1/1 test PASS; two public BTC/IDR 30-second WebSocket sessions (same journal) subscribed/heartbeated successfully, received 2 and 1 live publications, persisted rows 2 then 4, last offset 14642460 then 14642462, Final REJECT and exit0. The difference suggests a recovered publication during reconnect but old output did not separate it from live frames.
+
+The same `trade_stream.py` now emits `recovered_publications_newly_persisted`, `server_replayed_publication_frames`, `live_publications_newly_persisted`, previous resume offset, ACK cursor and persisted before/after counts. Six synthetic tests are authored but NOT run on VPS. A single new 30-second PUBLIC session using `/tmp/indodax-v2-m04f-ws.sqlite3` will measure actual recovery independently. This is observed WebSocket continuity only; never G1 issuer/trade tape authorization, paid AI or order readiness.
