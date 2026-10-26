@@ -8,7 +8,7 @@ from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
-from .deep_analysis import deep_scan
+from .deep_analysis import deep_scan, bulk_public_deep_scan
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class CycleResult:
     screening: dict | None = None
     deep: dict | None = None
     rolling: dict | None = None
+    bulk: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -115,13 +116,32 @@ class DailyScalpingOrchestrator:
         self.journal.record_reject(trace_id, reason)
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, None, None, data)
 
+    def run_bulk_deep_cycle(self, trace_id: str, *,
+                            market: IndodaxPublicMarket | None = None) -> CycleResult:
+        """One bounded 20-pair public attempt; never use stale/replayed ranks."""
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            preliminary = DailyPairScanner(client).scan()
+            evidence = bulk_public_deep_scan(client, preliminary, limit=20)
+        except PublicDataError as exc:
+            reason = f"PUBLIC_BULK_BLOCKED:{exc}"
+            result = None
+        else:
+            reason = "G1_PUBLIC_BULK_SOURCE_UNVERIFIED"
+            result = evidence
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(
+            trace_id, FinalDecision.REJECT, reason, False,
+            None, None, None, None, result,
+        )
+
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M03C_ROLLING_DEEP_CODED",
+            "release": "M03G_PUBLIC_BULK_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M03C_VPS_ROLLING_EVIDENCE",
+            "next_stage": "M03G_VPS_SHARED_CONTEXT_AND_BUDGET_PROOF",
         }
