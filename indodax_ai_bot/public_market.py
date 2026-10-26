@@ -1,0 +1,257 @@
+"""Official Indodax public REST data only. No authentication or trading endpoints.
+
+Docs: https://github.com/btcid/indodax-official-api-docs/blob/master/Public-RestAPI.md
+Only supported 1m and 15m OHLC endpoints requested; 5m is aggregated from 1m.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+import json
+import re
+from time import time
+from typing import Any, Callable
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from .contracts import MarketSnapshot, SourceReceipt
+
+
+class PublicDataError(ValueError):
+    """Public payload invalid, unavailable or too old."""
+
+
+_PAIR_RE = re.compile(r"^[a-z0-9]+_idr$")
+
+
+def _number(value: Any, label: str, *, zero: bool = False) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        raise PublicDataError(f"INVALID_{label}")
+    try:
+        d = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise PublicDataError(f"INVALID_{label}") from exc
+    if not d.is_finite() or (d < 0 if zero else d <= 0):
+        raise PublicDataError(f"INVALID_{label}")
+    return d
+
+
+def _seconds(v: Any, label: str) -> int:
+    if isinstance(v, bool) or not isinstance(v, (int, str)):
+        raise PublicDataError(f"INVALID_{label}")
+    try:
+        n = int(v)
+    except ValueError as exc:
+        raise PublicDataError(f"INVALID_{label}") from exc
+    if n <= 0:
+        raise PublicDataError(f"INVALID_{label}")
+    # Indodax /api/server_time uses milliseconds; ticker/trades use seconds.
+    return n // 1000 if n > 100_000_000_000 else n
+
+
+@dataclass(frozen=True)
+class Candle:
+    start: int
+    interval: int
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+
+
+@dataclass(frozen=True)
+class PublicObservation:
+    pair: str
+    snapshot: MarketSnapshot
+    candle_1m: Candle
+    candle_5m: Candle
+    candle_15m: Candle
+    trade_count_visible: int
+    trade_history_complete: bool
+    depth_levels_visible: int
+    ready: bool
+    reason: str
+
+    def summary(self) -> dict[str, str | int | bool]:
+        return {
+            "pair": self.pair, "source": self.snapshot.source.provenance,
+            "closed_1m_epoch": self.snapshot.source.closed_1m_epoch,
+            "observed_epoch": self.snapshot.source.observed_epoch,
+            "g1_issuer_verified": self.snapshot.source.verified,
+            "market_data_ready": self.ready, "market_data_reason": self.reason,
+            "best_bid_idr": str(self.snapshot.best_bid_idr),
+            "best_ask_idr": str(self.snapshot.best_ask_idr),
+            "candle_5m_start": self.candle_5m.start,
+            "candle_15m_start": self.candle_15m.start,
+            "trades_visible": self.trade_count_visible,
+            "trade_history_complete": self.trade_history_complete,
+            "depth_levels_visible": self.depth_levels_visible,
+        }
+
+
+class IndodaxPublicMarket:
+    """Bounded public-only HTTP adapter: NEVER sends credentials/private requests."""
+
+    ROOT = "https://indodax.com"
+
+    def __init__(self, *, fetch: Callable[[str], Any] | None = None,
+                 clock: Callable[[], float] = time, timeout: float = 8.0) -> None:
+        self._clock = clock
+        self._timeout = timeout
+        self._fetch = fetch or self._http_json
+
+    def _http_json(self, path: str) -> Any:
+        # Every path comes from hardcoded public endpoint constructors.
+        url = self.ROOT + path
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "indodax-ai-bot-v2-public/0.2"})
+        try:
+            with urlopen(request, timeout=self._timeout) as response:
+                payload = response.read(2_000_001)
+                if len(payload) > 2_000_000:
+                    raise PublicDataError("PUBLIC_RESPONSE_TOO_LARGE")
+            return json.loads(payload)
+        except (OSError, ValueError) as exc:
+            raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from exc
+
+    def _get(self, path: str) -> Any:
+        try:
+            return self._fetch(path)
+        except PublicDataError:
+            raise
+        except (OSError, ValueError, TypeError, TimeoutError) as exc:
+            raise PublicDataError("PUBLIC_REQUEST_FAILED") from exc
+
+    def idr_pairs(self) -> dict[str, tuple[str, str]]:
+        data = self._get("/api/pairs")
+        if not isinstance(data, list):
+            raise PublicDataError("INVALID_PAIRS_PAYLOAD")
+        pairs: dict[str, tuple[str, str]] = {}
+        for item in data:
+            if not isinstance(item, dict) or item.get("base_currency") != "idr":
+                continue
+            ticker_id, pair_id, symbol = (item.get(k) for k in ("ticker_id", "id", "symbol"))
+            if not all(isinstance(s, str) for s in (ticker_id, pair_id, symbol)):
+                continue
+            if not _PAIR_RE.fullmatch(ticker_id) or pair_id != ticker_id.replace("_", ""):
+                continue
+            if symbol.upper() != pair_id.upper():
+                continue
+            if item.get("is_market_suspended") in (1, True, "1") or item.get("is_maintenance") in (1, True, "1"):
+                continue
+            pairs[ticker_id] = (pair_id, symbol.upper())
+        if not pairs:
+            raise PublicDataError("NO_ACTIVE_IDR_PAIRS")
+        return pairs
+
+    @staticmethod
+    def _candles(payload: Any, interval: int, now: int) -> list[Candle]:
+        if not isinstance(payload, list):
+            raise PublicDataError("INVALID_OHLC_PAYLOAD")
+        out: dict[int, Candle] = {}
+        for row in payload:
+            if not isinstance(row, dict):
+                raise PublicDataError("INVALID_OHLC_ROW")
+            start = _seconds(row.get("Time"), "CANDLE_TIME")
+            if start % interval or start > now + 3:
+                raise PublicDataError("INVALID_CANDLE_TIME")
+            o, h, l, c = (_number(row.get(k), k.upper()) for k in ("Open", "High", "Low", "Close"))
+            v = _number(row.get("Volume"), "VOLUME", zero=True)
+            if not l <= min(o, c) <= max(o, c) <= h:
+                raise PublicDataError("INVALID_OHLC_RANGE")
+            if start in out:
+                raise PublicDataError("DUPLICATE_CANDLE")
+            # The currently forming candle MUST NOT be used.
+            if start + interval <= now:
+                out[start] = Candle(start, interval, o, h, l, c, v)
+        return sorted(out.values(), key=lambda x: x.start)
+
+    @staticmethod
+    def _aggregate_5m(candles: list[Candle], now: int) -> Candle:
+        if not candles:
+            raise PublicDataError("MISSING_1M_CANDLE")
+        # Current closing 5m bucket may be incomplete. Use a real full closed bucket.
+        buckets = sorted({c.start - c.start % 300 for c in candles if c.start + 60 <= now}, reverse=True)
+        by_time = {c.start: c for c in candles}
+        for start in buckets:
+            if start + 300 > now:
+                continue
+            expected = [by_time.get(start + i * 60) for i in range(5)]
+            if all(c is not None for c in expected):
+                batch = [c for c in expected if c is not None]
+                return Candle(start, 300, batch[0].open, max(c.high for c in batch),
+                              min(c.low for c in batch), batch[-1].close, sum((c.volume for c in batch), Decimal(0)))
+        raise PublicDataError("INCOMPLETE_5M_FROM_1M")
+
+    def observe(self, pair: str = "btc_idr") -> PublicObservation:
+        if not _PAIR_RE.fullmatch(pair):
+            raise PublicDataError("INVALID_IDR_PAIR")
+        pairs = self.idr_pairs()
+        if pair not in pairs:
+            raise PublicDataError("PAIR_NOT_ACTIVE")
+        pair_id, symbol = pairs[pair]
+        observed = int(self._clock())
+        server_data = self._get("/api/server_time")
+        if not isinstance(server_data, dict):
+            raise PublicDataError("INVALID_SERVER_TIME")
+        exchange_now = _seconds(server_data.get("server_time"), "SERVER_TIME")
+        if abs(exchange_now - observed) > 30:
+            raise PublicDataError("EXCHANGE_CLOCK_SKEW")
+        ticker = self._get(f"/api/ticker/{pair_id}")
+        if not isinstance(ticker, dict) or not isinstance(ticker.get("ticker"), dict):
+            raise PublicDataError("INVALID_TICKER")
+        ticker = ticker["ticker"]
+        ticker_sec = _seconds(ticker.get("server_time"), "TICKER_TIME")
+        if ticker_sec > observed + 3 or observed - ticker_sec > 60:
+            raise PublicDataError("STALE_TICKER")
+        bid = _number(ticker.get("buy"), "BID")
+        ask = _number(ticker.get("sell"), "ASK")
+        if ask < bid:
+            raise PublicDataError("CROSSED_TICKER")
+        history_from = observed - 35 * 60
+        params = lambda tf: urlencode({"from": history_from, "to": observed, "symbol": symbol, "tf": str(tf)})
+        one = self._candles(self._get("/tradingview/history_v2?" + params(1)), 60, observed)
+        fifteen = self._candles(self._get("/tradingview/history_v2?" + params(15)), 900, observed)
+        if not one or not fifteen:
+            raise PublicDataError("MISSING_CLOSED_MULTITIMEFRAME")
+        latest_1 = one[-1]
+        if observed - (latest_1.start + 60) > 120:
+            raise PublicDataError("STALE_CLOSED_1M")
+        five = self._aggregate_5m(one, observed)
+        if latest_1.start - (five.start + 300) > 300:
+            raise PublicDataError("STALE_5M")
+        latest_15 = fifteen[-1]
+        if latest_1.start - (latest_15.start + 900) > 900:
+            raise PublicDataError("STALE_15M")
+        trades = self._get(f"/api/trades/{pair_id}")
+        if not isinstance(trades, list):
+            raise PublicDataError("INVALID_TRADES")
+        for trade in trades:
+            if not isinstance(trade, dict):
+                raise PublicDataError("INVALID_TRADE_ROW")
+            ts = _seconds(trade.get("date"), "TRADE_TIME")
+            if ts > observed + 3:
+                raise PublicDataError("FUTURE_TRADE")
+            _number(trade.get("price"), "TRADE_PRICE")
+            _number(trade.get("amount"), "TRADE_AMOUNT")
+            if trade.get("type") not in ("buy", "sell"):
+                raise PublicDataError("INVALID_TRADE_SIDE")
+        depth = self._get(f"/api/depth/{pair_id}")
+        if not isinstance(depth, dict) or not isinstance(depth.get("buy"), list) or not isinstance(depth.get("sell"), list):
+            raise PublicDataError("INVALID_DEPTH")
+        for side in ("buy", "sell"):
+            for level in depth[side]:
+                if not isinstance(level, list) or len(level) < 2:
+                    raise PublicDataError("INVALID_DEPTH_LEVEL")
+                _number(level[0], "DEPTH_PRICE")
+                _number(level[1], "DEPTH_AMOUNT")
+        if not depth["buy"] or not depth["sell"]:
+            raise PublicDataError("EMPTY_DEPTH")
+        if _number(depth["buy"][0][0], "DEPTH_BID") > _number(depth["sell"][0][0], "DEPTH_ASK"):
+            raise PublicDataError("CROSSED_DEPTH")
+        source = SourceReceipt(pair, latest_1.start + 60, observed, "INDODAX_PUBLIC_OHLC_V2_UNATTESTED", False)
+        snapshot = MarketSnapshot(source, bid, ask)
+        # Public REST trades are page-limited; a sampled history is not a complete 1h ledger.
+        return PublicObservation(pair, snapshot, latest_1, five, latest_15,
+                                 len(trades), False, len(depth["buy"]) + len(depth["sell"]),
+                                 False, "G1_PROVENANCE_AND_TRADE_COVERAGE_UNVERIFIED")
