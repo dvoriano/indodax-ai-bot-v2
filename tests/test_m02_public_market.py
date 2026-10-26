@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from contextlib import redirect_stdout
+from io import StringIO
+import json
+from unittest.mock import patch
+from indodax_ai_bot.__main__ import main
 from pathlib import Path
 import tempfile
 import unittest
@@ -120,6 +125,32 @@ class M02PublicTests(unittest.TestCase):
             self.assertIsNone(result.market)
             self.assertFalse(result.execution_allowed)
 
+    def test_public_probe_ok_reports_untrusted_not_live(self):
+        with tempfile.TemporaryDirectory() as td:
+            output = StringIO()
+            with patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket", return_value=self.client), patch.dict("os.environ", {"INDODAX_TRADING_ENABLED": "NO", "INDODAX_ALLOW_LIVE_EXECUTION": "NO", "INDODAX_EXECUTION_MODE": "DRY_RUN"}, clear=True), redirect_stdout(output):
+                code = main(["--verify-public", "--pair", "btc_idr", "--db", str(Path(td) / "probe.sqlite3")])
+            data = json.loads(output.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(data["verified_public_payload_parsed"])
+            self.assertEqual(data["public_probe_status"], "PUBLIC_OBSERVED_G1_UNATTESTED")
+            self.assertEqual(data["final_decision"], "REJECT")
+            self.assertFalse(data["execution_allowed"])
+            self.assertFalse(data["live_trading_authorized"])
+
+    def test_public_probe_error_is_nonzero_and_not_live(self):
+        self.f.fail_path = "/api/pairs"
+        with tempfile.TemporaryDirectory() as td:
+            output = StringIO()
+            with patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket", return_value=self.client), patch.dict("os.environ", {"INDODAX_TRADING_ENABLED": "NO", "INDODAX_ALLOW_LIVE_EXECUTION": "NO", "INDODAX_EXECUTION_MODE": "DRY_RUN"}, clear=True), redirect_stdout(output):
+                code = main(["--verify-public", "--pair", "btc_idr", "--db", str(Path(td) / "probe.sqlite3")])
+            data = json.loads(output.getvalue())
+            self.assertEqual(code, 3)
+            self.assertFalse(data["verified_public_payload_parsed"])
+            self.assertEqual(data["public_probe_status"], "PUBLIC_SOURCE_ERROR")
+            self.assertIsNone(data["public_market"])
+            self.assertFalse(data["execution_allowed"])
+            self.assertFalse(data["live_trading_authorized"])
 
 if __name__ == "__main__":
     unittest.main()
