@@ -11,14 +11,14 @@
 
 | Bidang | Checkpoint terkonfirmasi / status kerja |
 | --- | --- |
-| **SATU TAHAP AKTIF** | **M04-H CODED / VPS TEST PENDING; M04-G VERIFIED_PUBLIC_ONLINE.** VPS at `037ce7e4`: M04-G **6/6 tests PASS**, real public BTC/IDR WebSocket recovery **27 replay frames = 27 newly persisted, 0 new live frames**, persisted 4→31, same epoch1633996541, offset14642462→14642489, heartbeat and subscription confirmed, `M04G_EXIT_CODE=0`, Final REJECT. |
-| **M04-G evidence limit** | `CONTIGUOUS_OBSERVED` proves this server-replayed/publication sequence only. NOT exhaustive authenticated exchange tape or trading consent. `g1_receipt_issuance_allowed=false`, `g2_provider_call_allowed=false`, `execution_allowed=false`. |
-| **M04-H CODED** | Existing `PublicTradeStreamJournal.closed_minute_sample` aggregates one specified closed-minute BTC WS sample from durable SQLite, with BUY/SELL IDR volume, trade counts, offset range and digest corruption/duplication checks, always untrusted. Same `run_bulk_deep_cycle` optionally joins `public_bulk.btc_ws_closed_minute_sample` from `--ws-db`; normal G1 and ThreeRoleShadow remain fail-closed. **8 tests in `tests/test_m04h_closed_minute_join.py` authored but NOT yet run VPS.** |
-| **ONE MAINPATH** | `--bulk-deep-once --ws-db /tmp/indodax-v2-m04f-ws.sqlite3` → existing scanner and candidate analysis → optional BTC saved WS 1m diagnostic → existing AI shadow → Final REJECT. No extra public GET, scanner, role, executable intent, signed issuer, paid model or private API. |
-| **ONE NEXT ACTION** | Pull latest V2 SHA; run **ONLY M04-H 8 new tests**, then one real PUBLIC `--bulk-deep-once --ws-db /tmp/indodax-v2-m04f-ws.sqlite3` with new decision DB, confirming joined evidence and Final REJECT. Old saved WS minute may not match the current candle; EMPTY is valid, never infer complete coverage. |
-| **REMAINING** | Actual continuous WS collection and verified G1 minute/source qualification; model/provider owner GO and cost control, Telegram manual/auto confirmation, capital and SELL lifecycle, official CI fix. Bot V1 untouched. |
+| **SATU TAHAP AKTIF** | **M04-I BOUNDED PUBLIC WS COLLECTOR CODED, VPS TEST PENDING.** M04-H owner VPS SHA `310944c7`: **8/8 tests PASS** (0.463s); one real `--bulk-deep-once --ws-db` safely produced `NO_ALIGNED_BTC_CLOSED_MINUTE`, `g1_verified=false`, `ai_shadow.completed_roles=[]`, Final REJECT, execution false. This is a correct public fail-closed result, not a real same-minute WS join. Final `M04H_EXIT_CODE` echo was not supplied, do not claim exact exit number. |
+| **M04-I CODED** | Existing `trade_stream.collect_official_public_ws` runs 2–10 bounded PUBLIC sessions using the same durable SQLite journal and the already-verified WS probe, with 3–30 seconds/session and 0–10 sec pauses. Separate ACK/heartbeat/offset-gap/error checks, recovery-vs-live counts, strict interrupted status, no issuer/AI/order permissions. Same `DailyScalpingOrchestrator.run_public_ws_collect_cycle` and CLI `--public-ws-collect`. **Seven new tests `tests/test_m04i_ws_collector.py` authored but not yet tested VPS.** |
+| **SCOPE LIMIT** | This is **bounded multi-session collection**, not a deployed 24/7 background daemon; all connecting sessions are short and gaps still rely on server replay. No complete Indodax tape provenance, no G1 issuer, no actual Sumopod model calls, no BUY/SELL. Original V1 untouched. |
+| **MAINPATH** | Existing V2 CLI `--public-ws-collect` → one DailyScalpingOrchestrator → PublicTradeStreamJournal / already verified PUBLIC WS → same durable SQLite → Final REJECT. The optional `--bulk-deep-once --ws-db` later reads the same recorded journal. No alternate scanner or AI/executor. |
+| **ONE NEXT ACTION** | Pull newest V2 SHA; run **only** `test_m04i_ws_collector.py` (seven newly authored tests). If PASS, run one bounded three-session BTC PUBLIC WS collector probe (20sec/session) on SAME previously accepted VPS DB `/tmp/indodax-v2-m04f-ws.sqlite3`. Observe ACK, heartbeat, restart recovery, Final REJECT. |
+| **REMAINING** | 24/7 supervised continuous WS once collector verified, real same-minute coverage and independent source issuer, owner-authorized model budget + 3 real Sumopod inferences, Telegram Manual/Auto, capital/positions/SELL/PnL, CI fix. |
 
-**Handover:** Only guideline + this roadmap. M04-G accepted for measured public replay; M04-H CODED pending tests, paid AI and trading OFF.
+**New-chat handover:** only PROJECT_GUIDELINE.md + this ROADMAP. M04-H 8/8 tests PASS with real public guarded REJECT; M04-I CODED, no VPS proof yet. Trading + paid models OFF.
 
 ## 2. LEGENDA CHECKLIST & BUKTI
 
@@ -110,7 +110,7 @@
 **Acceptance:** M03 overall is PARTIAL; M03-B score alone is not a trade signal or projected net ROI. NO BUY / LIVE OFF.
 
 ### M04 — 3 AI MARKET → RISK → STRATEGY (ACTIVE)
-**Status: M04-G VERIFIED_PUBLIC_ONLINE (VPS 6/6 PASS, real 27 recovered publications, Final REJECT exit0). M04-H optional saved WS→existing G1 closed-minute diagnostic CODED, 8 tests pending VPS. No authenticated exhaustive Indodax source, paid AI, or orders.**
+**Status: M04-H SCOPED VPS PASS: 8/8 tests PASS and real PUBLIC bulk optional WS join safely returned NO_ALIGNED_BTC_CLOSED_MINUTE, G1 unverified, AI roles none, Final REJECT. Real aligned 1m still not proven. M04-I bounded PUBLIC WS collector CODED, seven tests awaiting VPS.**
 - [x] **M04-A CODED:** One source-bound shadow contract in `three_role_ai.py`. Order exactly MARKET → RISK → STRATEGY; RISK NO_TRADE/EXIT_REVIEW menghentikan Strategy and cannot be bypassed.
 - [x] **M04-A CODED:** Stable SHA256 binds local trace/pair/closed epoch, BTC regime and source flags. **This digest does NOT authenticate the public source or establish G1 provenance.**
 - [x] **M04-A CODED:** Fail-closed gate requires compatible source schema, a current closed candle, candidate in same-window preview with zero quality cautions, G1 verified issuer AND complete trade coverage at cohort/root, before even considering model calls. Production public bulk cannot satisfy these gates.
@@ -144,7 +144,10 @@
 - [x] **M04-G VPS ACCEPTED:** SHA `037ce7e4`, 6/6 PASS 0.339s; real WS reconnect 27 replayed and 27 new SQLite rows, 0 live, total4→31, offset14642462→14642489, epoch1633996541 stable, heartbeat+ACK true, `REPLAY_NEW_PUBLICATIONS_PERSISTED`, Final REJECT, exit0. Only PUBLIC observed/replayed coverage.
 - [x] **M04-H CODED:** `PublicTradeStreamJournal.closed_minute_sample` aggregates one closed-minute diagnostic from existing WS SQLite and guards digest/duplicate/row count; `run_bulk_deep_cycle` optionally joins via CLI `--ws-db`, never upgrades source, role or Final authorization.
 - [x] **M04-H 8 TESTS AUTHORED:** `tests/test_m04h_closed_minute_join.py` checks per-side minute totals, open/empty minute, tampered rows, duplicate trade identity, bounded scan and actual CLI join/missing file. **Not tested VPS.**
-- [ ] **M04-H VPS PROOF:** 8 new tests and one public bulk `--ws-db` observation. Source remains untrusted and Final REJECT.
+- [x] **M04-H VPS SCOPED ACCEPTED:** VPS SHA `310944c7`, 8/8 tests PASS (0.463s). Real `--bulk-deep-once --ws-db` reports `NO_ALIGNED_BTC_CLOSED_MINUTE`, `g1_verified=false`, `ai_shadow.completed_roles=[]`, Final REJECT, execution OFF. Real matched-minute join not yet proven; exit echo not supplied.
+- [x] **M04-I CODED, SAME MAINPATH:** `collect_official_public_ws` reuses SQLite journal and verified WebSocket probe across bounded short sessions. Same V2 orchestrator exposes `--public-ws-collect`; rejects heartbeat failure, GAP, malformed role authority and API errors, never grants trading.
+- [x] **M04-I 7 TESTS AUTHORED:** `tests/test_m04i_ws_collector.py` tests two-session recovery, missing heartbeat, gap stop, mid-collection probe failure, invalid bounds, CLI fail-closed and nonzero interrupted exit. Tests NOT YET run VPS.
+- [ ] **M04-I VPS VERIFICATION:** run 7 new tests and one bounded 3 × 20 sec PUBLIC BTC WebSocket collection using accepted shared SQLite DB. Not a 24/7 background deployment.
 - [ ] **M04-C QUALIFIED G1 ISSUER STILL PENDING:** separate real source issuer, verified upstream origin, complete/appropriate trade evidence, safe replay/dedupe/expiry and historical ablation. Internal MAC alone cannot certify source provenance.
 - [ ] MARKET evidence-based BTC/trend/volume/flow assessment from a source-bound snapshot.
 - [ ] RISK veto over downside/liquidity/slippage/listing/balance, no override.
@@ -266,8 +269,9 @@
 | M04-E VPS ACCEPTED (auth/subscription only) | VPS SHA `14d64a15` | 10/10 tests PASS; real official public BTC/IDR auth+subscribe 12.09sec, epoch1633996541, offset14642052, zero trade publications, Final REJECT and exit0. | Real WS trade data, actual recover, full tape and G1 issuer NOT proven. |
 | M04-F VERIFIED_PUBLIC_ONLINE (PUBLIC WS receive/restart) | owner VPS `513dc284` | Targeted ACK 1/1 PASS; two real BTC/IDR 30s sessions with heartbeat/subscribe true, received 2+1 live publications, total SQLite rows 2→4, offset14642460→14642462, same epoch, Final REJECT and exit0. | Exact recovery count inferred but not proven; live public WS is not complete certified tape. |
 | M04-G VERIFIED_PUBLIC_ONLINE | VPS `037ce7e4` | 6/6 tests PASS; 27 PUBLIC WS replay publications newly persisted, no live frames, rows4→31, offset14642462→14642489, Final REJECT exit0. | Observed stream not complete authenticated exchange tape. |
-| M04-H CODED / VPS PENDING | `trade_stream.py`, `orchestrator.py`, `__main__.py`, `tests/test_m04h_closed_minute_join.py` | Optional closed-minute BTC WS sample in same G1 bulk mainpath; 8 tests written, no extra HTTP GET or permission. | VPS targeted tests + PUBLIC bulk proof pending. |
-| M04-I–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Continuous stream, real trusted G1 issuer, three AI, Telegram, capital, execution and SELL |
+| M04-H VPS SCOPED ACCEPTED | VPS `310944c7` | 8/8 tests PASS; real PUBLIC G1+WS BTC minute join rejected NO_ALIGNED_BTC_CLOSED_MINUTE, source unverified, no role calls, Final REJECT. | Actual same-minute join not proven, exit echo not supplied. |
+| M04-I CODED / VPS PENDING | `trade_stream.py`, `orchestrator.py`, `__main__.py`, `tests/test_m04i_ws_collector.py` | Bounded, durable PUBLIC WS collector through existing orchestrator, 7 tests authored. | VPS new tests and one bounded 3-session real WS probe needed; no 24/7 service or trading release. |
+| M04-J–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Real 24/7 stream, verified issuer, three paid AIs, Telegram, capital, execution and SELL |
 
 **Catatan:** Tanggal baseline tidak berarti semua isi tersertifikasi hari itu. Ketika bukti baru diverifikasi, tambahkan **satu baris** sesuai milestone. Jika hanya perubahan status, jangan memodifikasi aturan trading di guideline.
 
