@@ -408,6 +408,9 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         candidates.append(analyze_observation(obs))
     completed = attempted == len(selected) and len(candidates) == len(selected)
     valid = completed and not window_expired and all(c.score is not None for c in candidates)
+    # Population-wide acceptance remains STRICT: 1 invalid pair blocks it.
+    # But the pairs that DID have valid evidence can be inspected as a
+    # separate same-minute observational cohort, never as a G1 proposal.
     guard = {
         "status": "REJECT_INCOMPLETE_OR_EXPIRED_BULK_COVERAGE",
         "ranked_same_window_diagnostics": [],
@@ -418,16 +421,45 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         "trade_history_complete": False,
         "source_trust_verified": False,
     }
-    if valid:
+    eligible = tuple(c for c in candidates if c.score is not None)
+    cohort_gate = dict(guard, status="REJECT_NO_VALID_COHORT")
+    btc: PublicObservation | None = None
+    if completed and not window_expired and eligible:
         btc = observations.get("btc_idr")
-        if btc is None:
+        if btc is None and "btc_idr" not in selected:
+            # Only one extra BTC request, covered by the preflight estimate.
+            # Never re-fetch a failed BTC source in the selected batch.
             try:
                 if int(market._clock()) - screening.observed_epoch > 30:
                     raise PublicDataError("EXPIRED_BTC_CONTEXT_WINDOW")
                 btc = market.observe("btc_idr", scan_context=context)
             except PublicDataError:
                 btc = None
-        guard = _same_window_gate(screening, tuple(candidates), observations, btc)
+        # Existing gate checks exact 1m/5m/15m close, BTC, times and evidence.
+        cohort_gate = _same_window_gate(screening, eligible, observations, btc)
+        # No post-BTC overrun may be accepted as a synchronized cohort.
+        if int(market._clock()) - screening.observed_epoch > 30:
+            cohort_gate = dict(guard, status="REJECT_POST_CONTEXT_WINDOW_EXPIRED")
+    elif not completed or window_expired:
+        cohort_gate = dict(guard, status="REJECT_TRUNCATED_BULK_COHORT")
+    if valid:
+        guard = cohort_gate
+    # Incomplete population may still have a VALID SUBSET DIAGNOSTIC, but
+    # never upgrades population acceptance or execution/AI authorization.
+    eligible_cohort = {
+        **cohort_gate,
+        "eligible_pair_count": len(eligible),
+        "eligible_pair_ids": [c.pair for c in eligible],
+        "population_pair_count": len(selected),
+        "population_coverage_complete": valid,
+        "partial_population": len(eligible) != len(selected),
+        "cohort_is_trade_signal": False,
+        "g1_verified": False,
+        "g2_candidate_authorized": False,
+        "trade_authorized": False,
+        "execution_allowed": False,
+        "cross_cycle_ranking_allowed": False,
+    }
 
     diagnostic = sorted(candidates, key=lambda x: (
         x.score is None, -(x.score if x.score is not None else -1), x.pair
@@ -467,6 +499,7 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         "attempted_without_result_count": attempted_without_result,
         "coverage_status": coverage_state,
         "synchronized_pair_coverage_complete": valid and guard["status"] == "ALIGNED_PUBLIC_UNATTESTED",
+        "eligible_cohort": eligible_cohort,
         "window_expired": window_expired,
         "estimated_requests_including_discovery": expected_gets,
         # None for independently supplied market test doubles.
