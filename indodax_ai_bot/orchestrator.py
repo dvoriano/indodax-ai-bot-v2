@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from .config import Settings
 from .contracts import FinalDecision
 from .journal import DecisionJournal
+from .public_market import IndodaxPublicMarket, PublicDataError
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,7 @@ class CycleResult:
     final_decision: FinalDecision
     reason: str
     execution_allowed: bool = False
+    market: dict[str, str | int | bool] | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -29,13 +31,28 @@ class DailyScalpingOrchestrator:
         self.journal.record_reject(trace_id, reason)
         return CycleResult(trace_id, FinalDecision.REJECT, reason)
 
+    def run_public_cycle(self, trace_id: str, *, pair: str = "btc_idr",
+                         market: IndodaxPublicMarket | None = None) -> CycleResult:
+        """Real public-only observations; never issues executable trade intents."""
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            observation = client.observe(pair)
+        except PublicDataError as exc:
+            reason = f"PUBLIC_SOURCE_INVALID:{exc}"
+            payload = None
+        else:
+            reason = "G1_SCANNER_NOT_CONNECTED" if observation.snapshot.source.verified else "G1_PROVENANCE_NOT_VERIFIED"
+            payload = observation.summary()
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(trace_id, FinalDecision.REJECT, reason, False, payload)
+
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M01_FOUNDATION",
+            "release": "M02_PUBLIC_SOURCE_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M02_PUBLIC_MARKET_SOURCE",
+            "next_stage": "M02_PUBLIC_ONLINE_VERIFICATION",
         }
