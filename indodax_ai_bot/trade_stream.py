@@ -612,16 +612,22 @@ def collect_official_public_ws(
     samples: list[dict[str, Any]] = []
     total_recovered = 0
     total_live = 0
+    safe_count = 0
+    attempted = 0
     halted_reason: str | None = None
     for index in range(sessions):
         if index:
             wait(pause_seconds)
+        attempted += 1
         try:
             result = session_probe(journal, pair=pair, seconds=session_seconds)
         except StreamEvidenceError as exc:
             # Only stable internal error codes. Never log socket exception
             # text, account credentials or upstream response bodies.
             halted_reason = "WS_SESSION_REJECTED:" + str(exc)
+            break
+        except Exception:
+            halted_reason = "WS_SESSION_UNAVAILABLE"
             break
         if not isinstance(result, dict):
             halted_reason = "WS_SESSION_MISSING_REPORT"
@@ -666,16 +672,17 @@ def collect_official_public_ws(
             break
         total_recovered += recovered
         total_live += live
+        safe_count += 1
     persisted = journal.status(pair)
-    complete = halted_reason is None and len(samples) == sessions
+    complete = halted_reason is None and safe_count == sessions
     return {
         "stage": "M04I_BOUNDED_PUBLIC_WS_COLLECTION",
         "pair": pair,
         "status": "PUBLIC_SAMPLE_COLLECTED_UNATTESTED" if complete else "REJECT",
         "reason": "PUBLIC_WS_SAMPLE_IS_NOT_CERTIFIED_TAPE" if complete else halted_reason,
         "requested_sessions": sessions,
-        "completed_safe_sessions": len(samples) if complete else max(0, len(samples) - 1),
-        "attempted_sessions": len(samples),
+        "completed_safe_sessions": safe_count,
+        "attempted_sessions": attempted,
         "total_recovered_publications_newly_persisted": total_recovered,
         "total_live_publications_newly_persisted": total_live,
         "last_publication_offset": persisted["last_publication_offset"],
