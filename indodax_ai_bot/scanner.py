@@ -11,6 +11,10 @@ from decimal import Decimal
 
 from .public_market import IndodaxPublicMarket, PublicDataError, _number, _seconds
 
+# MAIN wallet must never use FLOKI/PEPE reserved-strategy buckets; stablecoins
+# are settlement/quote instruments, not intended MAIN daily momentum scalps.
+MAIN_EXCLUDED_PAIRS = frozenset({"floki_idr", "pepe_idr", "usdt_idr", "usdc_idr"})
+
 
 @dataclass(frozen=True)
 class ScreenedPair:
@@ -57,6 +61,7 @@ class ScannerResult:
             "trade_authorized": False,
             "ranking_basis": "24h IDR turnover desc; bid-ask spread asc; 24h range desc; pair asc",
             "ranking_scope": "PRELIMINARY_PUBLIC_SCREEN_NOT_ENTRY_SIGNAL",
+            "main_excluded_pairs": sorted(MAIN_EXCLUDED_PAIRS),
         }
 
 
@@ -89,6 +94,8 @@ class DailyPairScanner:
 
         eligible: list[ScreenedPair] = []
         for pair in sorted(pairs):
+            if pair in MAIN_EXCLUDED_PAIRS:
+                continue
             ticker = all_tickers["tickers"].get(pair)
             if not isinstance(ticker, dict):
                 continue
