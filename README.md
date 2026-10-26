@@ -2,7 +2,7 @@
 
 **MISI UTAMA: SCALPING HARIAN INDODAX (24/7 market monitoring, intraday spot trading IDR → BUY → SELL → IDR).** Bot baru untuk spot scalping Indodax, dibangun modular **dari nol** dan **terpisah dari bot lama**. Target akhir: market scanner G1, 3 AI (MARKET → RISK → STRATEGY), Final Decision PASS/REJECT via Telegram MANUAL/AUTO, modal IDR dinamis, protective FLOKI/PEPE, BUY → SELL → IDR reconciliation, monitoring, dan operasi VPS yang aman.
 
-> **Status:** M01 fondasi Python **CODED + TESTED_OFFLINE (7/7 lokal PASS)**; Indodax public G1/AI/Telegram/order belum terhubung. GitHub CI run #1 gagal sebelum menjalankan tes, belum verified CI. **Trading LIVE OFF.** Target laba bukan jaminan.
+> **Status otoritatif: [ROADMAP.md](docs/ROADMAP.md).** M02 official public market adapter telah CODED dan lulus 16/16 tes lokal (termasuk regresi M01). Observasi penuh REST publik dari VPS, CI, G1 issuer, AI, Telegram, dan order belum terbukti. **Trading LIVE OFF.** Target laba bukan jaminan.
 
 ## Mulai di sini
 
@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**M01 foundation sudah di-code dan tercatat tes lokal 7/7 PASS (CI belum terverifikasi)**. Milestone aktif berikutnya **M02**, sambungan market data publik Indodax ke orchestrator. Detail terkini dan status resmi ada di ROADMAP, bukan baris README ini. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M02:** validasi satu observasi pasar publik langsung pada host dengan koneksi Indodax; tidak menggunakan private key, provider AI ataupun order. Status resmi, bukti dan next action selalu dibaca dari ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -31,3 +31,14 @@ python -m indodax_ai_bot --db /tmp/indodax-v2.sqlite3 --health
 ```
 
 Pada M01, tanpa G1 source sah keputusan selalu `REJECT`; `execution_allowed=false`. `INDODAX_TRADING_ENABLED=YES`, `INDODAX_ALLOW_LIVE_EXECUTION=YES` atau mode `LIVE` ditolak saat startup. Belum ada koneksi private/exchange maupun paid AI.
+
+## M02: Observasi Indodax PUBLIK (no order)
+
+Hanya pada checkout repository V2 terkini, dengan koneksi internet ke Indodax:
+
+```bash
+env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION_MODE=DRY_RUN \
+  python3 -m indodax_ai_bot --db /tmp/indodax-v2-m02-public.sqlite3 --public-once --pair btc_idr
+```
+
+Perintah memakai hanya `/api/pairs`, `/api/server_time`, `/api/ticker/<id>`, `/api/trades/<id>`, `/api/depth/<id>` dan `/tradingview/history_v2` dari dokumentasi resmi. Candle 5m dibentuk dari lima candle 1m yang lengkap. Keputusan tetap `REJECT` dengan `execution_allowed=false` karena G1 issuer dan coverage trade belum diotorisasi. Jangan melabel output publik sebagai sinyal BUY.
