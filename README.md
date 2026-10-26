@@ -18,7 +18,7 @@
 
 Baca guideline 0/0A/B/E/F → **ROADMAP 1/3/4** → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checklist/evidence di **ROADMAP.md** → lanjut.
 
-**Milestone aktif M03-G:** M03-F accepted: VPS 29/29 scoped tests PASS and real public quality review exit0, preview empty and Final REJECT. M03-G shared-context 20–40 public deep method CODED and tests pending VPS. Handover in ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**Milestone aktif M03-H:** M03-G VPS 29/29 scoped tests PASS and 20 public pair observations completed (12 valid diagnostics, 8 rejected), Final REJECT. M03-H per-pair rejected evidence and measured GET counter CODED, pending VPS proof. Handover in ROADMAP. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
 
@@ -170,3 +170,11 @@ env INDODAX_TRADING_ENABLED=NO INDODAX_ALLOW_LIVE_EXECUTION=NO INDODAX_EXECUTION
 ```
 
 These are exactly the three affected scopes: M02 public adapter, M03-A scanner and M03-G bulk. Previously accepted M03-B/C/D/E/F are not rerun unless they break due to an actual dependency change. 20 live public pair requests can still fail or time out; this is not a scanner malfunction by itself. Do NOT enable orders.
+
+## M03-H: why each public candidate was rejected
+
+M03-G VPS run processed 20/20 candidates with 12 diagnostic scores and 8 rejects. Source not trusted and synchronized ranking rejected despite process exit0. Previous output showed only top-10 scores, making rejected-pair causes invisible.
+
+M03-H enriches the same code path with `candidate_rejection_reasons`, `candidate_rejection_reason_counts`, `coverage_status`, `not_attempted_pairs`, `attempted_without_result_count` and `public_get_attempt_count_this_client`. Counting is **per single client**, not shared-IP/global, and does not add public GETs. The partial probe status now says `PUBLIC_BULK_INCOMPLETE_UNATTESTED`; Final REJECT and order OFF.
+
+Verify only affected M02 adapter, M03-G bulk and M03-H suites on the VPS before one real public 20-pair bulk probe. Source error reasons are not known until that run. No reruns of accepted unaffected deeper suites.
