@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
     group.add_argument("--rolling-deep-once", action="store_true", help="PUBLIC 2-pair rotating deep scan, SQLite persisted and paced, never trades")
     group.add_argument("--bulk-deep-once", action="store_true", help="PUBLIC up-to-20 same-cycle deep scan; bounded requests and never trades")
+    group.add_argument("--public-ws-once", action="store_true", help="One public BTC trade-activity WS probe; persisted offset, no trades")
+    parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     args = parser.parse_args(argv)
 
@@ -32,7 +34,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.health:
             result = app.health()
         else:
-            if args.bulk_deep_once:
+            if args.public_ws_once:
+                outcome = app.run_public_ws_cycle(uuid4().hex, db_path=args.db,
+                                                  pair=args.pair, seconds=args.stream_seconds)
+            elif args.bulk_deep_once:
                 outcome = app.run_bulk_deep_cycle(uuid4().hex)
             elif args.rolling_deep_once:
                 outcome = app.run_rolling_deep_cycle(uuid4().hex)
@@ -51,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
+            if args.public_ws_once:
+                result["public_ws"] = outcome.public_ws
+                result["live_trading_authorized"] = False
             if args.bulk_deep_once:
                 result["public_bulk"] = outcome.bulk
                 result["ai_shadow"] = outcome.ai_shadow
@@ -91,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.rolling_deep_once and result["public_rolling"] is None:
             return 3
         if args.bulk_deep_once and result["public_bulk"] is None:
+            return 3
+        if args.public_ws_once and outcome.reason.startswith("PUBLIC_WS_PROBE_REJECTED:"):
             return 3
         return 0
     except (ConfigurationError, OSError, ValueError) as exc:

@@ -10,6 +10,7 @@ from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
 from .deep_analysis import deep_scan, bulk_public_deep_scan
 from .three_role_ai import ThreeRoleShadow
+from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, StreamEvidenceError
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class CycleResult:
     rolling: dict | None = None
     bulk: dict | None = None
     ai_shadow: dict | None = None
+    public_ws: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -144,13 +146,32 @@ class DailyScalpingOrchestrator:
             None, None, None, None, result, ai_shadow,
         )
 
+    def run_public_ws_cycle(self, trace_id: str, *, db_path: str,
+                            pair: str = "btc_idr",
+                            seconds: int = 12) -> CycleResult:
+        """Official public trade stream probe, same orchestrator, always REJECT."""
+        journal = PublicTradeStreamJournal(db_path)
+        try:
+            ws_data = probe_official_public_ws(
+                journal, pair=pair, seconds=seconds,
+            )
+            reason = "PUBLIC_WS_TRADE_SAMPLE_UNATTESTED"
+        except StreamEvidenceError as exc:
+            reason = "PUBLIC_WS_PROBE_REJECTED:" + str(exc)
+            ws_data = journal.status(pair) if pair.endswith("_idr") else None
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(
+            trace_id, FinalDecision.REJECT, reason, False,
+            public_ws=ws_data,
+        )
+
     def health(self) -> dict[str, str | int | bool]:
         return {
-            "release": "M04B_SUMOPOD_ADAPTER_CODED_PAID_OFF",
+            "release": "M04E_OFFICIAL_PUBLIC_WS_PROBE_CODED",
             "core_strategy": "DAILY_SPOT_SCALPING",
             "decision_mode": self.settings.decision_mode,
             "execution_mode": self.settings.execution_mode,
             "execution_allowed": False,
             "accepted_decision_records": self.journal.count(),
-            "next_stage": "M04B_VPS_MOCK_ADAPTER_TEST_AND_PUBLIC_NO_CALL",
+            "next_stage": "M04E_VPS_PUBLIC_WS_OFFSET_RECOVERY_PROOF",
         }
