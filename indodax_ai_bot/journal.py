@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
+from typing import Iterator
 from pathlib import Path
 
 from .contracts import FinalDecision
@@ -25,8 +27,14 @@ class DecisionJournal:
                 )"""
             )
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path, timeout=10)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        con = sqlite3.connect(self._db_path, timeout=10)
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
 
     def record_reject(self, trace_id: str, reason: str) -> None:
         if not trace_id or not trace_id.strip() or not reason:
