@@ -7,6 +7,7 @@ complete trade-event coverage. WebSocket client is optional, imported at call.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from pathlib import Path
@@ -96,8 +97,14 @@ class PublicTradeStreamJournal:
                 PRIMARY KEY(pair, epoch, offset)
             )""")
 
+    @contextmanager
     def _connect(self):
-        return sqlite3.connect(self._path, timeout=10)
+        con = sqlite3.connect(self._path, timeout=10)
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
 
     def subscription(self, pair: str) -> dict[str, Any]:
         channel = channel_for_pair(pair)
@@ -248,7 +255,8 @@ class PublicTradeStreamJournal:
         channel_for_pair(pair)
         with self._connect() as con:
             con.execute(
-                "UPDATE ws_stream_state SET status='DISCONNECTED' WHERE pair=?",
+                "UPDATE ws_stream_state SET status=CASE WHEN status='GAP' "
+                "THEN 'GAP' ELSE 'DISCONNECTED' END WHERE pair=?",
                 (pair,),
             )
         return self.status(pair)
