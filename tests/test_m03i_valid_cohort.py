@@ -32,10 +32,14 @@ class MisalignedValidPair(FakeBulkMarket):
         self.calls.append((pair, scan_context))
         obs = observation(pair, no_trade=(pair == "token015_idr"))
         if pair == "token004_idr":
-            shifted = tuple(replace(c, start=c.start + 60)
+            # Shift an entire closed 1m series BACK one minute: the source
+            # receipt stays internally valid (observed_epoch >= close), while
+            # the pair remains deliberately misaligned with BTC. Shifting it
+            # into the future would violate SourceReceipt before testing G1.
+            shifted = tuple(replace(c, start=c.start - 60)
                             for c in obs.candles_1m)
             receipt = replace(obs.snapshot.source,
-                              closed_1m_epoch=obs.snapshot.source.closed_1m_epoch + 60)
+                              closed_1m_epoch=obs.snapshot.source.closed_1m_epoch - 60)
             obs = replace(
                 obs, candles_1m=shifted, candle_1m=shifted[-1],
                 snapshot=MarketSnapshot(
@@ -99,6 +103,7 @@ class M03IValidCohortTests(unittest.TestCase):
     def test_mismatched_valid_candidate_cannot_join_sync_cohort(self):
         data = bulk_public_deep_scan(MisalignedValidPair(), fake_screen())
         self.assertEqual(data["candidate_rejected_count"], 1)
+        self.assertEqual(data["eligible_cohort"]["eligible_pair_count"], 19)
         self.assertEqual(data["eligible_cohort"]["status"], "REJECT_CANDLE_OR_SNAPSHOT_MISALIGNMENT")
         self.assertEqual(data["eligible_cohort"]["ranked_same_window_diagnostics"], [])
         self.assertFalse(data["eligible_cohort"]["cohort_is_trade_signal"])
