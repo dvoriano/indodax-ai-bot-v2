@@ -277,3 +277,100 @@ class PublicTradeStreamJournal:
             "g2_provider_call_allowed": False,
             "execution_allowed": False,
         }
+
+
+def probe_official_public_ws(
+    journal: PublicTradeStreamJournal, *, pair: str = "btc_idr",
+    seconds: int = 12,
+) -> dict[str, Any]:
+    """One bounded public WS session, persisted in the V2-only SQLite DB.
+
+    Only one channel per session; never logs the public token or raw socket
+    exception. websocket-client is an optional dependency for THIS probe.
+    No private authenticated API and no paid model request.
+    """
+    if type(seconds) is not int or not 3 <= seconds <= 30:
+        raise StreamEvidenceError("INVALID_WS_PROBE_SECONDS")
+    channel_for_pair(pair)
+    try:
+        import websocket  # type: ignore[import-not-found]
+    except ImportError:
+        raise StreamEvidenceError("PUBLIC_WS_CLIENT_PACKAGE_MISSING") from None
+    import time
+    started = time.monotonic()
+    ws = None
+    acked = False
+    received = 0
+    try:
+        ws = websocket.create_connection(WS_URL, timeout=5, enable_multithread=True)
+        ws.settimeout(1.0)
+        ws.send(json.dumps({"params": {"token": PUBLIC_TOKEN}, "id": 1}))
+        deadline = time.monotonic() + 8
+        authenticated = False
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            if not isinstance(raw, str) or len(raw) > 512_000:
+                raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+            message = json.loads(raw)
+            if isinstance(message, dict) and message.get("id") == 1:
+                if (not isinstance(message.get("result"), dict)
+                        or not isinstance(message["result"].get("client"), str)):
+                    raise StreamEvidenceError("PUBLIC_WS_AUTH_REJECTED")
+                authenticated = True
+                break
+        if not authenticated:
+            raise StreamEvidenceError("PUBLIC_WS_AUTH_TIMEOUT")
+        ws.send(json.dumps(journal.subscription(pair)))
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            if not isinstance(raw, str) or len(raw) > 512_000:
+                raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+            msg = json.loads(raw)
+            if isinstance(msg, dict) and msg.get("id") == 2:
+                journal.acknowledge(pair, msg)
+                acked = True
+                break
+        if not acked:
+            raise StreamEvidenceError("PUBLIC_WS_SUBSCRIBE_TIMEOUT")
+        until = time.monotonic() + seconds
+        while time.monotonic() < until:
+            try:
+                raw = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            if not isinstance(raw, str) or len(raw) > 512_000:
+                raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+            msg = json.loads(raw)
+            if (isinstance(msg, dict) and isinstance(msg.get("result"), dict)
+                    and msg["result"].get("channel") == channel_for_pair(pair)):
+                journal.ingest(pair, msg)
+                received += 1
+        result = journal.status(pair)
+        return {
+            **result,
+            "public_ws_probe_completed": True,
+            "received_publications_in_this_probe": received,
+            "probe_wall_elapsed_seconds": round(time.monotonic() - started, 2),
+        }
+    except StreamEvidenceError:
+        raise
+    except Exception:
+        # No socket exception text or token in operator output/logs.
+        raise StreamEvidenceError("PUBLIC_WS_CONNECTION_OR_FRAME_FAILED") from None
+    finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+        # The next invocation MUST request replay from the last persisted
+        # offset. Disconnect is not a certified continuous trade tape.
+        if acked:
+            journal.mark_disconnected(pair)
