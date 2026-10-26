@@ -73,6 +73,7 @@ class M04EPublicStreamTests(unittest.TestCase):
             with self.assertRaisesRegex(StreamEvidenceError,"WS_STREAM_GAP"):
                 j.ingest("btc_idr",pub(104))
             self.assertEqual(j.read_count("btc_idr"),0)
+            self.assertEqual(j.mark_disconnected("btc_idr")["stream_status"], "GAP")
 
     def test_recover_gap_requires_exactly_consecutive_publications(self):
         with TemporaryDirectory() as td:
