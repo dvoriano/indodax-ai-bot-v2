@@ -3,7 +3,8 @@
 # Restart ONLY after clean public-data batch exit0. Nonzero failure STOPS.
 [Unit]
 Description=Indodax AI Bot V2 PUBLIC BTC WebSocket collector (no trading)
-After=default.target
+# Deliberately no After=default.target: avoids ordering cycle in user manager.
+# Each batch validates its own PUBLIC WS connectivity; failure stops the unit.
 StartLimitIntervalSec=900
 StartLimitBurst=6
 
