@@ -2,7 +2,7 @@
 
 **MISI UTAMA: SCALPING HARIAN INDODAX (24/7 market monitoring, intraday spot trading IDR → BUY → SELL → IDR).** Bot baru untuk spot scalping Indodax, dibangun modular **dari nol** dan **terpisah dari bot lama**. Target akhir: market scanner G1, 3 AI (MARKET → RISK → STRATEGY), Final Decision PASS/REJECT via Telegram MANUAL/AUTO, modal IDR dinamis, protective FLOKI/PEPE, BUY → SELL → IDR reconciliation, monitoring, dan operasi VPS yang aman.
 
-> **Status saat ini: spesifikasi disusun, kode trading belum dibangun dan LIVE order belum diizinkan.** Target laba bukan jaminan.
+> **Status:** M01 fondasi Python **CODED + TESTED_OFFLINE (7/7 lokal PASS)**; Indodax public G1/AI/Telegram/order belum terhubung. GitHub CI run #1 gagal sebelum menjalankan tes, belum verified CI. **Trading LIVE OFF.** Target laba bukan jaminan.
 
 ## Mulai di sini
 
@@ -17,6 +17,16 @@
 
 Baca checkpoint A → keputusan B → roadmap E → kerjakan **satu** milestone → sambungkan ke mainpath → tes affected scope → update checkpoint di **file yang sama** → lanjut.
 
-**Milestone aktif pertama: M01** fondasi runnable, tipe kontrak, konfigurasi fail-closed, persistence, dan satu orchestrator. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
+**M01 telah diimplementasikan**, milestone aktif berikutnya **M02**, sambungan market data publik Indodax ke orchestrator. Semua private API, provider berbayar, dan trading LIVE wajib otorisasi terpisah dan bukti verifikasi sesuai guideline.
 
 **Repo lama:** dvoriano/crypto-bot adalah referensi saja. Jangan menyalin secrets, posisi atau ledger, dan jangan menjalankan dua executor LIVE pada akun yang sama tanpa koordinasi yang sah.
+
+## Menjalankan fondasi M01 (NON-LIVE)
+
+```bash
+python -m unittest discover -s tests -v
+python -m indodax_ai_bot --db /tmp/indodax-v2.sqlite3 --once
+python -m indodax_ai_bot --db /tmp/indodax-v2.sqlite3 --health
+```
+
+Pada M01, tanpa G1 source sah keputusan selalu `REJECT`; `execution_allowed=false`. `INDODAX_TRADING_ENABLED=YES`, `INDODAX_ALLOW_LIVE_EXECUTION=YES` atau mode `LIVE` ditolak saat startup. Belum ada koneksi private/exchange maupun paid AI.
