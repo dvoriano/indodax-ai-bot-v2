@@ -113,7 +113,7 @@
 
 ### M04 — 3 AI MARKET → RISK → STRATEGY (ACTIVE)
 **Status: M04-A CODED, not tested on VPS; 3 live/paid AI providers still NOT_CONNECTED.**
-- [x] **M04-A CODED:** One source-bound shadow contract in `three_role_ai.py`. Order exactly MARKET → RISK → STRATEGY; RISK NO_TRADE/EXIT_REVIEW vetchains Strategy and cannot be bypassed.
+- [x] **M04-A CODED:** One source-bound shadow contract in `three_role_ai.py`. Order exactly MARKET → RISK → STRATEGY; RISK NO_TRADE/EXIT_REVIEW menghentikan Strategy and cannot be bypassed.
 - [x] **M04-A CODED:** Stable SHA256 binds local trace/pair/closed epoch, BTC regime and source flags. **This digest does NOT authenticate the public source or establish G1 provenance.**
 - [x] **M04-A CODED:** Fail-closed gate requires compatible source schema, a current closed candle, candidate in same-window preview with zero quality cautions, G1 verified issuer AND complete trade coverage at cohort/root, before even considering model calls. Production public bulk cannot satisfy these gates.
 - [x] **M04-A MAINPATH WIRED:** existing `--bulk-deep-once` → orchestrator source bound `ThreeRoleShadow` → CLI `ai_shadow` → existing persisted Final REJECT. No new scanner, no paid HTTP AI, no exchange executor. Caller injected for **unit tests only**, not a configured production provider.
