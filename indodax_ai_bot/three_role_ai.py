@@ -93,6 +93,23 @@ class ThreeRoleShadow:
             indexed[p] = score
         if not all(isinstance(p, str) and p in indexed for p in preview):
             return _reject("INVALID_PREVIEW_PAIR")
+        reviews = cohort.get("provisional_quality_reviews")
+        if not isinstance(reviews, list):
+            return _reject("MISSING_PUBLIC_QUALITY_REVIEWS")
+        quality: dict[str, bool] = {}
+        for review in reviews:
+            if (not isinstance(review, dict)
+                    or not isinstance(review.get("pair"), str)
+                    or review["pair"] in quality
+                    or not isinstance(review.get("review_flags"), list)
+                    or not isinstance(review.get("clear_of_provisional_cautions"), bool)):
+                return _reject("INVALID_QUALITY_REVIEW")
+            quality[review["pair"]] = (
+                review["clear_of_provisional_cautions"]
+                and review["review_flags"] == []
+            )
+        if any(not quality.get(p, False) for p in preview):
+            return _reject("PREVIEW_HAS_UNRESOLVED_QUALITY_CAUTION")
         if not preview:
             return _reject("NO_PROVISIONAL_CANDIDATE")
         now = int(self._clock())
@@ -139,7 +156,10 @@ class ThreeRoleShadow:
             if role == "STRATEGY" and validated[1]["decision"] != "ALLOW":
                 break
             try:
-                raw = self._caller(role, inputs)
+                # Provider must never receive a mutable reference shared with
+                # the other roles; local source digest stays bound to each input.
+                role_input = json.loads(json.dumps(inputs))
+                raw = self._caller(role, role_input)
                 if not isinstance(raw, Mapping):
                     raise ValueError("MALFORMED_RESPONSE")
                 if raw.get("role") != role or raw.get("pair") != source["pair"] or raw.get("evidence_digest_sha256") != digest:
