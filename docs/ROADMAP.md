@@ -190,6 +190,7 @@
 - [x] **M04-P TWO NEW FULL BATCHES ACCEPTED:** owner verified 10/10 sessions twice, epoch1793090018 and1793090352; active unit PID3083762 NRestarts2. SQLite count1297 offset14645357 (+38 after initial1259). One gap marker preserved, complete tape not attested.
 - [x] **M04-Q G1 GAP-AWARE CLOSED-MINUTE CHECK CODED:** same WS journal samples 1m in one snapshot and checks gap ledger, rejects cross-boundary and observed rebaseline-minute data before volume aggregation; same REST/WS quality output includes known gap reason. Historical gap remains visible and no source attestation/AI/execution upgrade.
 - [x] **M04-Q SIX TARGETED TESTS AUTHORED:** same-epoch crossgap, rebaseline minute with partial/zero data, cross-epoch marker, valid postgap sample, invalid ledger, real mainpath Final REJECT. NOT YET VPS accepted.
+- [x] **M04-Q SCOPED VPS RUNNER CODED (NOT PROOF):** `deploy/verify_m04q_once.sh` committed at SHA `216c3e6c`. Only 6 new M04-Q + 8 affected M04-H tests and one real public bulk G1 diagnostic using existing V2 WS SQLite. Prints public source rejection/AI/trade locks and read-only unit state; does not restart service, call private API or place orders. Script shell syntax checked locally; VPS tests and online observation **NOT YET EXECUTED**.
 - [ ] **M04-Q VPS PROOF:** execute 6 new and 8 directly affected M04-H tests; one real public G1 bulk observation against current collector-owned SQLite. No M04-P test reruns, no extra scanner or user systemd restart.
 #### CHECKLIST PENUTUP M04: BERESKAN 3 AI SEBELUM M05
 
