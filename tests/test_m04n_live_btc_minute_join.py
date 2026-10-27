@@ -19,7 +19,8 @@ from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.deep_analysis import bulk_public_deep_scan
 from indodax_ai_bot.trade_stream import PublicTradeStreamJournal
 from test_m03g_bulk import FakeBulkMarket, fake_screen
-from test_m04h_closed_minute_join import MINUTE, prepared_journal
+from test_m04e_trade_stream import ack
+from test_m04h_closed_minute_join import MINUTE, prepared_journal, sample_frame
 
 
 def blocked_cohort(*args, **kwargs):
@@ -31,6 +32,18 @@ def blocked_cohort(*args, **kwargs):
     }
 
 
+def prepared_rest_closed_minute_journal(path: Path):
+    """Fixture REST closes at MINUTE; matching WS trades belong to MINUTE-60."""
+    journal = PublicTradeStreamJournal(path)
+    journal.acknowledge("btc_idr", ack(100))
+    start = MINUTE - 60
+    journal.ingest("btc_idr", sample_frame(101, start+4, "buy", "1000"))
+    journal.ingest("btc_idr", sample_frame(102, start+30, "sell", "2500"))
+    journal.ingest("btc_idr", sample_frame(103, MINUTE+4, "buy", "9000"))
+    journal.mark_disconnected("btc_idr")
+    return journal
+
+
 class M04NPersistentBTCMinuteTests(unittest.TestCase):
     def test_real_observed_btc_minute_available_even_if_cohort_rejected(self):
         with patch("indodax_ai_bot.deep_analysis._same_window_gate",
@@ -38,7 +51,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
             r = bulk_public_deep_scan(FakeBulkMarket(), fake_screen())
         self.assertEqual(r["eligible_cohort"]["status"], "REJECT_TEST_COHORT")
         self.assertIsNone(r["eligible_cohort"]["closed_1m_epoch"])
-        self.assertEqual(r["btc_public_rest_closed_1m_epoch_diagnostic"], MINUTE)
+        self.assertEqual(r["btc_public_rest_closed_1m_epoch_diagnostic"], MINUTE-60)
         self.assertTrue(r["btc_rest_observation_not_source_authentication"])
         self.assertFalse(r["g1_verified"])
         self.assertFalse(r["g1_source_admission"]["g2_provider_call_allowed"])
@@ -46,7 +59,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
     def test_real_mainpath_join_even_when_candidate_cohort_rejects(self):
         with TemporaryDirectory() as td:
             ws = Path(td) / "public.sqlite3"
-            prepared_journal(ws)
+            prepared_rest_closed_minute_journal(ws)
             out = StringIO()
             with patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scanner:
                 scanner.return_value.scan.return_value = fake_screen()
@@ -68,7 +81,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
                              "ACTUAL_PUBLIC_BTC_REST_CLOSED_CANDLE_UNATTESTED")
             self.assertEqual(data["eligible_cohort"]["status"], "REJECT_TEST_COHORT")
             self.assertEqual(data["btc_ws_closed_minute_sample"]["closed_1m_epoch"],
-                             MINUTE)
+                             MINUTE-60)
             self.assertEqual(data["btc_ws_closed_minute_sample"]["trade_rows_visible_in_minute"],2)
             self.assertFalse(data["btc_ws_closed_minute_sample"]["minute_trade_coverage_complete"])
             self.assertFalse(data["g1_verified"])
@@ -80,7 +93,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
     def test_cohort_btc_rest_clock_disagreement_stops_ws_join(self):
         with TemporaryDirectory() as td:
             ws = Path(td) / "public.sqlite3"
-            prepared_journal(ws)
+            prepared_rest_closed_minute_journal(ws)
             out = StringIO()
             def bad_cohort(*a, **kw):
                 return {
@@ -106,6 +119,37 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
             )
             self.assertFalse(obj["execution_allowed"])
             self.assertEqual(obj["final_decision"],"REJECT")
+
+    def test_matching_cohort_end_and_ws_start_does_not_false_reject(self):
+        with TemporaryDirectory() as td:
+            ws = Path(td) / "public.sqlite3"
+            prepared_rest_closed_minute_journal(ws)
+            output = StringIO()
+            def matching_cohort(*args, **kwargs):
+                return {
+                    "status": "ALIGNED_PUBLIC_UNATTESTED",
+                    "closed_1m_epoch": MINUTE,
+                    "g2_candidate_authorized": False,
+                }
+            with patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scanner:
+                scanner.return_value.scan.return_value = fake_screen()
+                with patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket",
+                           return_value=FakeBulkMarket()):
+                    with patch("indodax_ai_bot.deep_analysis._same_window_gate",
+                               side_effect=matching_cohort):
+                        with patch("indodax_ai_bot.orchestrator.time.time",
+                                   return_value=MINUTE+90):
+                            with redirect_stdout(output):
+                                rc = main([
+                                    "--bulk-deep-once", "--ws-db", str(ws),
+                                    "--db", str(Path(td)/"decisions.sqlite3"),
+                                ])
+            data=json.loads(output.getvalue())
+            self.assertEqual(rc,0)
+            self.assertEqual(data["public_bulk"]["btc_ws_closed_minute_sample"]["closed_1m_epoch"],MINUTE-60)
+            self.assertEqual(data["public_bulk"]["btc_ws_closed_minute_sample"]["trade_rows_visible_in_minute"],2)
+            self.assertFalse(data["public_bulk"]["g1_verified"])
+            self.assertEqual(data["final_decision"],"REJECT")
 
     def test_old_publications_do_not_hide_recent_closed_minute(self):
         with TemporaryDirectory() as td:

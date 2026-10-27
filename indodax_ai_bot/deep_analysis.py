@@ -498,13 +498,18 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
     btc_rest_minute = None
     if btc_rest is not None and btc_rest.pair == "btc_idr":
         src = btc_rest.snapshot.source
-        minute_epoch = src.closed_1m_epoch
+        # SourceReceipt.closed_1m_epoch is candle END, but WS sampling
+        # needs its START. Only accept a 60s OHLC candle proving that link.
+        closed_end = src.closed_1m_epoch
+        candle_start = btc_rest.candle_1m.start
         if (src.pair == "btc_idr"
-                and type(minute_epoch) is int and minute_epoch > 0
-                and minute_epoch % 60 == 0
-                and btc_rest.candle_1m.start == minute_epoch
+                and type(closed_end) is int and closed_end > 60
+                and closed_end % 60 == 0
+                and type(candle_start) is int and candle_start > 0
+                and candle_start % 60 == 0
+                and candle_start + 60 == closed_end
                 and 0 <= src.observed_epoch - screening.observed_epoch <= 30):
-            btc_rest_minute = minute_epoch
+            btc_rest_minute = candle_start
     return {
         "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
         "screening_observed_epoch": screening.observed_epoch,

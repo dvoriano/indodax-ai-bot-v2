@@ -156,8 +156,9 @@ class DailyScalpingOrchestrator:
                 "ACTUAL_PUBLIC_BTC_REST_CLOSED_CANDLE_UNATTESTED"
                 if type(minute) is int else "NO_ACTUAL_BTC_REST_CLOSED_CANDLE"
             )
+            # Cohort has REST receipt's END; minute is WS query START.
             if (type(cohort_minute) is int and type(minute) is int
-                    and cohort_minute != minute):
+                    and cohort_minute != minute + 60):
                 result["btc_ws_closed_minute_sample"] = {
                     "status": "REJECT",
                     "reason": "BTC_REST_COHORT_CLOSED_MINUTE_MISMATCH",
