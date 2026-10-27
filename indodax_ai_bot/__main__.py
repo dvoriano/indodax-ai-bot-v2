@@ -9,6 +9,7 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
+from .public_ws_health import public_ws_health
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Bounded multi-session PUBLIC WS collection; durable SQLite, never trades")
     group.add_argument("--public-ws-supervised-once", action="store_true",
                        help="One public WS service batch with file lock and fail-stop; NO automatic deployment")
+    group.add_argument("--public-ws-health", action="store_true",
+                       help="READ-ONLY last-batch public WS SQLite/status diagnostic; no journal writes")
     parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
     parser.add_argument("--collector-sessions", type=int, default=2,
                         help="PUBLIC WS collector: 2..10 sessions per bounded invocation")
@@ -35,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="PUBLIC WS collector: 0..10 seconds between sessions")
     parser.add_argument("--supervisor-status-file", default=None,
                         help="Optional atomic status of last PUBLIC WS batch, not certified trade evidence")
+    parser.add_argument("--health-max-age-seconds", type=int, default=3600,
+                        help="Max age 60..86400s for operator last-batch check; does NOT prove service running")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
@@ -42,6 +47,21 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.public_ws_health:
+            # Important: create NO DecisionJournal here. DB and status are
+            # both read-only, and no G1/role provider/executor is contacted.
+            settings.require_m01_safety()
+            report = public_ws_health(
+                args.db, args.supervisor_status_file or "",
+                max_age_seconds=args.health_max_age_seconds,
+            )
+            print(json.dumps({
+                "public_ws_health": report,
+                "final_decision": "REJECT",
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0 if report["last_batch_recent_and_consistent"] is True else 3
         app = DailyScalpingOrchestrator(settings, DecisionJournal(args.db))
         if args.health:
             result = app.health()
