@@ -496,6 +496,7 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
     # additional HTTP GET, trusted G1 issuer, or G2 promotion.
     btc_rest = observations.get("btc_idr") or btc
     btc_rest_minute = None
+    btc_rest_visible = None
     if btc_rest is not None and btc_rest.pair == "btc_idr":
         src = btc_rest.snapshot.source
         # SourceReceipt.closed_1m_epoch is candle END, but WS sampling
@@ -510,10 +511,30 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                 and candle_start + 60 == closed_end
                 and 0 <= src.observed_epoch - screening.observed_epoch <= 30):
             btc_rest_minute = candle_start
+            # Values have already been parsed/validated by the PUBLIC REST
+            # adapter. Its recent-trades endpoint is page-limited, so count
+            # and BUY/SELL notional describe only VISIBLE closed-minute rows.
+            buy_visible = btc_rest.visible_closed_1m_buy_idr
+            sell_visible = btc_rest.visible_closed_1m_sell_idr
+            btc_rest_visible = {
+                "stage": "M04O_BTC_REST_CLOSED_MINUTE_VISIBLE_SAMPLE",
+                "pair": "btc_idr",
+                "closed_1m_start_epoch": candle_start,
+                "closed_1m_end_epoch": closed_end,
+                "visible_trade_rows": btc_rest.visible_closed_1m_trade_count,
+                "visible_buy_idr": str(buy_visible),
+                "visible_sell_idr": str(sell_visible),
+                "visible_total_idr": str(buy_visible + sell_visible),
+                "rest_recent_trade_window_exhaustive": False,
+                "g1_receipt_issuance_allowed": False,
+                "g2_provider_call_allowed": False,
+                "execution_allowed": False,
+            }
     return {
         "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
         "screening_observed_epoch": screening.observed_epoch,
         "btc_public_rest_closed_1m_epoch_diagnostic": btc_rest_minute,
+        "btc_public_rest_visible_minute_sample": btc_rest_visible,
         "btc_rest_observation_not_source_authentication": True,
         "source_trust_verified": False,
         "trade_history_complete": False,
