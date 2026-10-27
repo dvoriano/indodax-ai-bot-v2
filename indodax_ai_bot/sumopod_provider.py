@@ -16,6 +16,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .ai_budget import AiBudgetError, PersistentAiBudget
+
 ROLES = ("MARKET", "RISK", "STRATEGY")
 URL = "https://ai.sumopod.com/v1/chat/completions"
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:-]{0,127}$")
@@ -116,6 +118,7 @@ class SumopodChatAdapter:
         timeout_seconds: float = 8.0, max_tokens: int = 650,
         max_calls_per_instance: int = 6,
         max_input_bytes_per_call: int = 32768,
+        persistent_budget: PersistentAiBudget | None = None,
     ) -> None:
         if (not isinstance(api_key, str) or not api_key.strip()
                 or len(api_key) > 512 or any(ch.isspace() for ch in api_key)):
@@ -142,6 +145,9 @@ class SumopodChatAdapter:
         if (type(max_input_bytes_per_call) is not int
                 or not 1024 <= max_input_bytes_per_call <= 65536):
             raise SumopodProviderError("INVALID_SUMOPOD_INPUT_BYTES_CAP")
+        if persistent_budget is not None and not isinstance(persistent_budget, PersistentAiBudget):
+            raise SumopodProviderError("INVALID_SUMOPOD_PERSISTENT_BUDGET")
+        self._budget = persistent_budget
         self._max_calls_per_instance = max_calls_per_instance
         self._max_input_bytes_per_call = max_input_bytes_per_call
         self._attempted: set[tuple[str, str, str]] = set()
@@ -212,6 +218,17 @@ class SumopodChatAdapter:
             raise SumopodProviderError("SUMOPOD_DUPLICATE_ROLE_SOURCE")
         if len(self._attempted) >= self._max_calls_per_instance:
             raise SumopodProviderError("SUMOPOD_CYCLE_CALL_CAP_REACHED")
+        # A genuine paid request additionally REQUIRES an atomic durable
+        # reserve BEFORE making any network attempt. A new adapter instance
+        # or restart cannot evade the same-day cap. No CLI paid GO exists.
+        if self._allow_paid_requests:
+            if self._budget is None:
+                raise SumopodProviderError("SUMOPOD_PAID_BUDGET_NOT_CONFIGURED")
+            try:
+                self._budget.reserve(role, pair, digest)
+            except AiBudgetError as exc:
+                # Only stable, non-secret codes from the durable ledger.
+                raise SumopodProviderError(str(exc)) from None
         # Reserve BEFORE any transport. A failed/refused call is still
         # potentially billed, so never auto-retry same role/source.
         self._attempted.add(attempt)
