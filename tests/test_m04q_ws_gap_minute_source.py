@@ -161,6 +161,13 @@ class M04QPublicGapAwareMinuteTests(unittest.TestCase):
                              "REJECT_WS_MINUTE_CROSSES_RECORDED_GAP")
             self.assertEqual(b["btc_rest_ws_observability"]["reason"],
                              "NO_VALID_SAME_MINUTE_WS_SAMPLE")
+            self.assertEqual(
+                b["btc_rest_ws_observability"]["public_ws_gap_rejection_reason"],
+                "REJECT_WS_MINUTE_CROSSES_RECORDED_GAP",
+            )
+            self.assertTrue(
+                b["btc_rest_ws_observability"]["public_ws_gap_in_minute"]
+            )
             self.assertFalse(b["g1_verified"])
             self.assertEqual(data["ai_shadow"]["completed_roles"],[])
             self.assertEqual(data["final_decision"],"REJECT")
