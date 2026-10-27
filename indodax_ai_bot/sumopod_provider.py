@@ -114,6 +114,8 @@ class SumopodChatAdapter:
         self, *, api_key: str, models: Mapping[str, str],
         transport: Transport | None = None, allow_paid_requests: bool = False,
         timeout_seconds: float = 8.0, max_tokens: int = 650,
+        max_calls_per_instance: int = 6,
+        max_input_bytes_per_call: int = 32768,
     ) -> None:
         if (not isinstance(api_key, str) or not api_key.strip()
                 or len(api_key) > 512 or any(ch.isspace() for ch in api_key)):
@@ -130,6 +132,19 @@ class SumopodChatAdapter:
             raise SumopodProviderError("INVALID_SUMOPOD_TOKEN_LIMIT")
         self._timeout = float(timeout_seconds)
         self._max_tokens = max_tokens
+        # One adapter instance is ONE bounded shadow cycle; cap at two
+        # candidates x 3 roles. Caller must instantiate a new adapter for a
+        # later authorized cycle, with a separate durable daily USD budget
+        # gate (not implemented here). This does NOT enable paid calls.
+        if (type(max_calls_per_instance) is not int
+                or not 1 <= max_calls_per_instance <= 6):
+            raise SumopodProviderError("INVALID_SUMOPOD_CALL_CAP")
+        if (type(max_input_bytes_per_call) is not int
+                or not 1024 <= max_input_bytes_per_call <= 65536):
+            raise SumopodProviderError("INVALID_SUMOPOD_INPUT_BYTES_CAP")
+        self._max_calls_per_instance = max_calls_per_instance
+        self._max_input_bytes_per_call = max_input_bytes_per_call
+        self._attempted: set[tuple[str, str, str]] = set()
         self._transport = transport
         self._allow_paid_requests = allow_paid_requests is True
         self.usage_events: list[dict[str, Any]] = []
@@ -168,11 +183,19 @@ class SumopodChatAdapter:
             raise SumopodProviderError("INVALID_SOURCE_BOUND_ROLE_INPUT")
         # Model sees exactly the source received by the ThreeRoleShadow and
         # the previous role output, never unbound market facts.
+        try:
+            encoded_input = json.dumps(
+                evidence, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            )
+        except (ValueError, TypeError):
+            raise SumopodProviderError("INVALID_SUMOPOD_EVIDENCE_JSON") from None
+        if len(encoded_input.encode("utf-8")) > self._max_input_bytes_per_call:
+            raise SumopodProviderError("SUMOPOD_SOURCE_INPUT_TOO_LARGE")
         body = {
             "model": self._models[role],
             "messages": [
                 {"role": "system", "content": ROLE_PROMPTS[role]},
-                {"role": "user", "content": json.dumps(evidence, sort_keys=True, separators=(",", ":"))},
+                {"role": "user", "content": encoded_input},
             ],
             "max_tokens": self._max_tokens,
             "stream": False,
@@ -184,6 +207,14 @@ class SumopodChatAdapter:
         }
         if self._transport is None and not self._allow_paid_requests:
             raise SumopodProviderError("SUMOPOD_PAID_NETWORK_DISABLED")
+        attempt = (role, pair, digest)
+        if attempt in self._attempted:
+            raise SumopodProviderError("SUMOPOD_DUPLICATE_ROLE_SOURCE")
+        if len(self._attempted) >= self._max_calls_per_instance:
+            raise SumopodProviderError("SUMOPOD_CYCLE_CALL_CAP_REACHED")
+        # Reserve BEFORE any transport. A failed/refused call is still
+        # potentially billed, so never auto-retry same role/source.
+        self._attempted.add(attempt)
         try:
             result = (self._transport or _post)(body, headers, self._timeout)
         except SumopodProviderError:
