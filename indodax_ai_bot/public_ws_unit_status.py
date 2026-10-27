@@ -96,7 +96,9 @@ def inspect_public_ws_systemd_unit(
                 "reason": "PUBLIC_WS_STAGED_UNIT_UNSAFE"}
     base["staged_template_present"] = True
     base["staged_template_safety_valid"] = True
-    if installed.is_symlink() or not installed.is_file():
+    if installed.is_symlink():
+        return {**base, "reason": "PUBLIC_WS_INSTALLED_SYMLINK_NOT_ACCEPTED"}
+    if not installed.is_file():
         return {**base, "status": "STAGED_NOT_INSTALLED",
                 "reason": "PUBLIC_WS_UNIT_NOT_INSTALLED_NO_ACTIVATION"}
     base["unit_installed"] = True
