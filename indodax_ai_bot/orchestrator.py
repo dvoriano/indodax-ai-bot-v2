@@ -15,6 +15,7 @@ from .scanner import DailyPairScanner
 from .deep_analysis import deep_scan, bulk_public_deep_scan
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
+from .g1_receipt import G1ReceiptVerifier
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
 
@@ -124,13 +125,18 @@ class CycleResult:
 
 class DailyScalpingOrchestrator:
     def __init__(self, settings: Settings, journal: DecisionJournal, *,
-                 ai_role_caller=None) -> None:
+                 ai_role_caller=None,
+                 source_verifier: G1ReceiptVerifier | None = None) -> None:
         settings.require_m01_safety()
         self.settings = settings
         self.journal = journal
-        # Explicit dependency injection seam only. Production CLI supplies
-        # None: paid model calls remain unconfigured and unreachable.
+        # Production CLI supplies None for BOTH dependencies. A provider
+        # callback alone cannot bypass signed G1 receipt verification.
+        # Injecting a verifier does not authenticate public REST/WS evidence.
+        if source_verifier is not None and not isinstance(source_verifier, G1ReceiptVerifier):
+            raise TypeError("INVALID_G1_SOURCE_VERIFIER")
         self._ai_role_caller = ai_role_caller
+        self._source_verifier = source_verifier
 
     def run_cycle(self, trace_id: str) -> CycleResult:
         # No synthetic candles, mock AI authority, private API or phantom orders.
@@ -306,7 +312,10 @@ class DailyScalpingOrchestrator:
             )
         # One G2 boundary, in the already accepted bulk mainpath. No provider
         # object is configured, no billable requests, no trading permission.
-        ai_shadow = ThreeRoleShadow(caller=self._ai_role_caller).run(trace_id, result)
+        ai_shadow = ThreeRoleShadow(
+            caller=self._ai_role_caller,
+            source_verifier=self._source_verifier,
+        ).run(trace_id, result)
         self.journal.record_reject(trace_id, reason)
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
