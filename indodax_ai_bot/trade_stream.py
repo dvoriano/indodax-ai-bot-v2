@@ -363,6 +363,20 @@ class PublicTradeStreamJournal:
             base["has_explicit_unrecoverable_ws_discontinuity"] = (
                 known_gap_events > 0
             )
+            # Bound historical discontinuity lookup. The marker records when
+            # a fresh baseline was established, NOT when the missing trade
+            # interval began. Absence of a marker inside one minute cannot
+            # establish full exchange trade tape coverage.
+            if known_gap_events > 10_000:
+                return {**base, "reason": "REJECT_WS_GAP_LEDGER_LIMIT_EXCEEDED"}
+            gap_markers = con.execute(
+                "SELECT prior_epoch,prior_offset,new_epoch,new_offset,"
+                "observed_at_epoch FROM ws_stream_discontinuities "
+                "WHERE pair=? ORDER BY id",
+                (pair,),
+            ).fetchall()
+            if len(gap_markers) != known_gap_events:
+                return {**base, "reason": "REJECT_WS_GAP_LEDGER_INCONSISTENT"}
             # An in-minute JSON predicate alone can HIDE tampering: changing
             # rows_json from a valid target-minute publication to [] or to
             # another minute removes it from the selected rows *before* the
@@ -418,6 +432,45 @@ class PublicTradeStreamJournal:
                 "stream_epoch": stream_epoch, "stream_status": stream_status,
                 "last_publication_offset": last_offset,
             }
+        # M04-Q: source-segment integrity check BEFORE exposing BUY/SELL
+        # aggregates. A rebaseline can keep the same server epoch, so a
+        # simple 'epoch equality' test does NOT establish one continuous
+        # interval. Detect offsets on both sides of a recorded discontinuity.
+        # Also reject the wall-clock minute in which rebaseline was recorded,
+        # even if only one side happens to contain visible trade rows.
+        offsets_in_minute = [row[0] for row in rows]
+        first_offset = min(offsets_in_minute, default=None)
+        final_offset = max(offsets_in_minute, default=None)
+        crosses_recorded_gap = False
+        rebaseline_in_minute = False
+        for prior_epoch, prior_offset, new_epoch, new_offset, observed_at in gap_markers:
+            if (not isinstance(prior_epoch, str) or not prior_epoch.isdecimal()
+                    or not isinstance(new_epoch, str) or not new_epoch.isdecimal()
+                    or type(prior_offset) is not int or prior_offset < 0
+                    or type(new_offset) is not int or new_offset < 0
+                    or type(observed_at) is not int or observed_at <= 0
+                    or (prior_epoch == new_epoch and new_offset <= prior_offset)):
+                return {**base, "reason": "REJECT_WS_GAP_LEDGER_INVALID"}
+            if closed_1m_epoch <= observed_at < minute_end:
+                rebaseline_in_minute = True
+            if (prior_epoch == new_epoch == stream_epoch
+                    and first_offset is not None
+                    and first_offset <= prior_offset
+                    and final_offset is not None
+                    and final_offset > new_offset):
+                crosses_recorded_gap = True
+        if crosses_recorded_gap or rebaseline_in_minute:
+            return {
+                **base,
+                "reason": ("REJECT_WS_MINUTE_CROSSES_RECORDED_GAP"
+                           if crosses_recorded_gap
+                           else "REJECT_WS_REBASELINE_IN_CLOSED_MINUTE"),
+                "minute_segment_continuity_status": "RECORDED_GAP_IN_MINUTE",
+                "recorded_gap_crosses_trade_offsets": crosses_recorded_gap,
+                "rebaseline_observed_in_minute": rebaseline_in_minute,
+                "historical_gap_start_time_verified": False,
+                "observed_rows_aggregated": False,
+            }
         seen_trade_identity: set[tuple[int, int]] = set()
         trade_count = 0
         buy_count = 0
@@ -453,6 +506,11 @@ class PublicTradeStreamJournal:
             **base,
             "status": "PUBLIC_SAMPLE_OBSERVED" if trade_count else "PUBLIC_SAMPLE_EMPTY",
             "reason": "FULL_MINUTE_TRADE_TAPE_NOT_PROVEN",
+            "minute_segment_continuity_status": "NO_RECORDED_GAP_IN_MINUTE_UNATTESTED",
+            "recorded_gap_crosses_trade_offsets": False,
+            "rebaseline_observed_in_minute": False,
+            "historical_gap_start_time_verified": False,
+            "observed_rows_aggregated": True,
             "stream_epoch": stream_epoch,
             "stream_status": stream_status,
             "last_publication_offset": last_offset,
