@@ -98,6 +98,9 @@ def public_ws_health(
     try:
         connection = sqlite3.connect(uri, uri=True, timeout=3)
         try:
+            # One consistent read snapshot, even while the already-running
+            # PUBLIC collector commits new offsets between individual SELECTs.
+            connection.execute("BEGIN")
             row = connection.execute(
                 "SELECT epoch,last_offset,status FROM ws_stream_state WHERE pair=?",
                 ("btc_idr",),
@@ -110,7 +113,16 @@ def public_ws_health(
             connection.close()
     except (sqlite3.Error, OSError):
         return {**base, "reason": "WS_HEALTH_READONLY_DB_ERROR"}
-    if (row is None or row[0] != stream_epoch or row[2] != "DISCONNECTED"
+    # The SIDECAR describes the *previous completed* batch, whose status
+    # must be DISCONNECTED. The live journal may now belong to the NEXT
+    # supervised batch: BASELINE_ONLY or CONTIGUOUS_OBSERVED are therefore
+    # normal, not evidence of rollback. GAP/RECOVERING/unknown statuses are
+    # deliberately never accepted by this historical health checker.
+    accepted_current_states = {
+        "DISCONNECTED", "BASELINE_ONLY", "CONTIGUOUS_OBSERVED",
+    }
+    if (row is None or row[0] != stream_epoch
+            or row[2] not in accepted_current_states
             or type(row[1]) is not int
             or offset is None or row[1] < offset
             or type(number) is not int or number < count):
@@ -122,6 +134,9 @@ def public_ws_health(
         **base,
         "status": "RECENT_COMPLETED_PUBLIC_BATCH_UNATTESTED",
         "reason": "LAST_BATCH_ONLY_NO_RUNTIME_LIVENESS_PROOF",
+        # This is just persisted state at read time; it is NOT a socket ping.
+        "current_journal_stream_status": row[2],
+        "completed_batch_stream_status": document["stream_status"],
         "last_batch_recent_and_consistent": True,
         "batch_age_seconds": age,
         "max_age_seconds": max_age_seconds,
