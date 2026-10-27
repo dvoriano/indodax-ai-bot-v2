@@ -12,7 +12,7 @@ from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
-from .deep_analysis import deep_scan, bulk_public_deep_scan
+from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
@@ -121,6 +121,7 @@ class CycleResult:
     bulk: dict | None = None
     ai_shadow: dict | None = None
     public_ws: dict | None = None
+    public_research: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -159,6 +160,31 @@ class DailyScalpingOrchestrator:
             payload = observation.summary()
         self.journal.record_reject(trace_id, reason)
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, payload)
+
+    def run_public_history_research_cycle(
+        self, trace_id: str, *, pair: str = "btc_idr",
+        minutes: int = 180,
+        market: IndodaxPublicMarket | None = None,
+    ) -> CycleResult:
+        """M03-K original orchestrator PUBLIC research, Final always REJECT.
+
+        Fetches at most three public REST endpoints, no source issuer,
+        provider, balance check, Telegram, or trade. Journal records REJECT.
+        """
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            history = client.closed_1m_research_history(pair, minutes=minutes)
+            report = evaluate_source_backed_candle_research(history)
+        except PublicDataError as exc:
+            reason = f"PUBLIC_HISTORY_RESEARCH_BLOCKED:{exc}"
+            report = None
+        else:
+            reason = "PUBLIC_OHLC_RESEARCH_UNATTESTED_NO_TRADE"
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(
+            trace_id, FinalDecision.REJECT, reason, False,
+            public_research=report,
+        )
 
     def run_scan_cycle(self, trace_id: str, *,
                        market: IndodaxPublicMarket | None = None) -> CycleResult:
