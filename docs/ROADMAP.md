@@ -282,8 +282,7 @@
 | M04-I VPS ACCEPTED (bounded public WS) | owner VPS `8be8fbfb` | 7/7 PASS; three successful PUBLIC BTC WS sessions, 129 recovered+3 live, 163 SQLite total, offset14642489→14642621, Final REJECT exit0. | 24/7 service not enabled; full trade source verification missing. |
 | M04-J VPS ACCEPTED (supervised PUBLIC batch only) | VPS `1dbe301d` | 9/9 unit PASS, PUBLIC 2/2 sessions, offset14642933, 0 persisted events pilot DB, Final REJECT, exit0. | systemd NOT installed/enabled; trade tape untrusted and source permission false. |
 | M04-K OPERATOR HEALTH CODED / VPS PENDING | `public_ws_health.py`, updated `public_ws_supervisor.py` and `__main__.py`, `tests/test_m04k_ws_health.py` | Read-only last-batch status, epoch/offset/count and freshness checks; 10 tests written. No G1/AI/trade authority. | Run only 10 new tests + fresh public 2×10s supervised pilot then health; systemd NOT enabled. |
-| M04-K NEXT (health/readiness) | Canonical ROADMAP | Read-only operator source/batch health against existing V2 SQLite + sidecar with staleness/offset checks. | CODE pending; no extra scanner/issuer/AI or service installation. |
-| M04-K–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Verified full-source issuer, paid AIs, Telegram, capital, real execution and SELL |
+| M04-L–M12 | Belum ada acceptance | Tidak boleh dicentang atau dilabel selesai | Sustained public WS, qualified G1 source issuer, paid AIs, Telegram, capital, real execution and SELL |
 
 **Catatan:** Tanggal baseline tidak berarti semua isi tersertifikasi hari itu. Ketika bukti baru diverifikasi, tambahkan **satu baris** sesuai milestone. Jika hanya perubahan status, jangan memodifikasi aturan trading di guideline.
 
