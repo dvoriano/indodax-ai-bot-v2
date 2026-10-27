@@ -250,7 +250,7 @@ def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict
         raise PublicDataError("INVALID_RESEARCH_SOURCE")
     candles = history.candles
     n = len(candles)
-    if (n < 90 or n > 360 or history.to_epoch - history.from_epoch != 60 * n
+    if (n < 90 or n > 4320 or history.to_epoch - history.from_epoch != 60 * n
             or candles[0].start != history.from_epoch
             or candles[-1].start + 60 != history.to_epoch
             or history.observed_epoch < history.to_epoch
@@ -339,6 +339,7 @@ def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict
         "to_epoch": history.to_epoch,
         "observed_epoch": history.observed_epoch,
         "closed_1m_rows_visible": n,
+        "archive_research_window_multiday_eligible": n >= 1440,
         "holdout_start_epoch": candles[holdout_start_index].start,
         "train": stats(train),
         "holdout": stats(holdout),
