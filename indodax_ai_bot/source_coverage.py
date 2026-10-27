@@ -66,3 +66,62 @@ def public_coverage_report(
         "execution_allowed": False,
         "pair_coverage": details,
     }
+
+
+def assess_public_ws_btc_for_g1(
+    ws_sample: Mapping[str, Any] | None,
+    comparison: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """M04-R: source eligibility for the EXISTING bulk G1 admission path.
+
+    A locally continuous WS segment is NOT complete market history. A
+    rebaseline marker cannot date every missing upstream trade. This is
+    diagnostic evidence only and never upgrades an unsigned public source
+    into an independently qualified issuer.
+    """
+    ws = ws_sample if isinstance(ws_sample, Mapping) else {}
+    joined = comparison if isinstance(comparison, Mapping) else {}
+    gaps = ws.get("unrecoverable_gap_rebaseline_count")
+    gap_count = gaps if type(gaps) is int and 0 <= gaps <= 10_000 else None
+    minute = ws.get("closed_1m_epoch")
+    closed_minute = minute if type(minute) is int and minute > 0 and minute % 60 == 0 else None
+    rejected_gap = ws.get("reason") in (
+        "REJECT_WS_MINUTE_CROSSES_RECORDED_GAP",
+        "REJECT_WS_REBASELINE_IN_CLOSED_MINUTE",
+        "REJECT_WS_GAP_LEDGER_INVALID",
+        "REJECT_WS_GAP_LEDGER_LIMIT_EXCEEDED",
+        "REJECT_WS_GAP_LEDGER_INCONSISTENT",
+    )
+    comparable = joined.get("status") in (
+        "PUBLIC_VISIBLE_SAMPLES_MATCH_UNATTESTED",
+        "PUBLIC_VISIBLE_SAMPLES_DIFFER_UNATTESTED",
+    )
+    if rejected_gap:
+        reason = "RECORDED_GAP_IN_BTC_CLOSED_MINUTE"
+    elif ws.get("status") not in ("PUBLIC_SAMPLE_OBSERVED", "PUBLIC_SAMPLE_EMPTY"):
+        reason = "NO_VALID_BTC_WS_CLOSED_MINUTE"
+    elif gap_count is None:
+        reason = "BTC_WS_GAP_HISTORY_NOT_VALIDATED"
+    elif gap_count:
+        reason = "HISTORIC_WS_GAP_AND_TRADE_TAPE_UNATTESTED"
+    else:
+        reason = "PUBLIC_WS_TRADE_TAPE_AND_ORIGIN_UNATTESTED"
+    return {
+        "stage": "M04R_EXISTING_G1_BTC_WS_SOURCE_QUALITY",
+        "status": "REJECT_SOURCE_NOT_QUALIFIED",
+        "reason": reason,
+        "closed_1m_start_epoch": closed_minute,
+        "rest_ws_comparable_public_minute": comparable,
+        "ws_observation_status": ws.get("status") if isinstance(ws.get("status"), str) else None,
+        "ws_minute_source_reason": ws.get("reason") if isinstance(ws.get("reason"), str) else None,
+        "known_unrecoverable_ws_discontinuities": gap_count,
+        "current_minute_recorded_gap": bool(rejected_gap),
+        "observed_ws_segment_cannot_attest_full_tape": True,
+        "rest_recent_trades_not_exhaustive": True,
+        "independent_exchange_origin_verified": False,
+        "full_closed_minute_trade_coverage_proven": False,
+        "real_g1_issuer_connected": False,
+        "g1_receipt_issuance_allowed": False,
+        "g2_provider_call_allowed": False,
+        "execution_allowed": False,
+    }
