@@ -137,7 +137,7 @@ class M04AShadowTests(unittest.TestCase):
         self.assertEqual(result["completed_roles"],list(ROLES))
         self.assertEqual([x["role"] for x in result["role_results"]],list(ROLES))
         self.assertEqual(result["final_decision"],"REJECT")
-        self.assertEqual(result["reason"],"M04_SHADOW_ONLY_FINAL_AND_PREFLIGHT_ABSENT")
+        self.assertEqual(result["reason"],"STRATEGY_BUY_PREFLIGHT_UNVERIFIED")
         self.assertFalse(result["provider_connected"])
         self.assertFalse(result["execution_allowed"])
         self.assertEqual(len({x["evidence_digest_sha256"] for x in caller.inputs}),1)
