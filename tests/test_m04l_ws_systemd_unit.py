@@ -128,6 +128,29 @@ class M04LUnitStatusTests(unittest.TestCase):
             self.assertEqual(out["reason"],"PUBLIC_WS_STAGED_UNIT_UNSAFE")
             self.assertFalse(out["staged_template_safety_valid"])
 
+    def test_staged_unit_uses_dedicated_v2_virtualenv_and_hashed_dependency(self):
+        unit=REPO_TEMPLATE.read_text()
+        dependencies=(REPO_TEMPLATE.parent/"requirements-public-ws.txt").read_text()
+        self.assertIn(
+            "ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot ",
+            unit,
+        )
+        self.assertNotIn("ExecStart=/usr/bin/python3",unit)
+        self.assertIn("websocket-client==1.9.2",dependencies)
+        self.assertIn("--hash=sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce",dependencies)
+
+    def test_staged_template_old_system_python_rejected(self):
+        with TemporaryDirectory() as td:
+            home=Path(td)
+            template=home/"system-python.service"
+            template.write_text(REPO_TEMPLATE.read_text().replace(
+                "ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python",
+                "ExecStart=/usr/bin/python3",
+            ))
+            out=inspect_public_ws_systemd_unit(home=home,template=template)
+            self.assertEqual(out["reason"],"PUBLIC_WS_STAGED_UNIT_UNSAFE")
+            self.assertFalse(out["staged_template_safety_valid"])
+
     def test_absent_template_is_reject(self):
         with TemporaryDirectory() as td:
             out=inspect_public_ws_systemd_unit(
