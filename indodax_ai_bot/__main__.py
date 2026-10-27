@@ -10,6 +10,7 @@ from .config import ConfigurationError, Settings
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
 from .public_ws_health import public_ws_health
+from .public_ws_unit_status import inspect_public_ws_systemd_unit
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="One public WS service batch with file lock and fail-stop; NO automatic deployment")
     group.add_argument("--public-ws-health", action="store_true",
                        help="READ-ONLY last-batch public WS SQLite/status diagnostic; no journal writes")
+    group.add_argument("--public-ws-unit-status", action="store_true",
+                       help="Read-only systemd user UNIT state; never installs or starts any service")
     parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
     parser.add_argument("--collector-sessions", type=int, default=2,
                         help="PUBLIC WS collector: 2..10 sessions per bounded invocation")
@@ -47,6 +50,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.public_ws_unit_status:
+            # No DecisionJournal, no systemctl state change, and no network.
+            settings.require_m01_safety()
+            report = inspect_public_ws_systemd_unit()
+            print(json.dumps({
+                "public_ws_unit_status": report,
+                "final_decision": "REJECT",
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0 if report["status"] in (
+                "STAGED_NOT_INSTALLED", "USER_UNIT_RUNNING_OBSERVED",
+                "USER_UNIT_INACTIVE_OR_FAILED",
+            ) else 3
         if args.public_ws_health:
             # Important: create NO DecisionJournal here. DB and status are
             # both read-only, and no G1/role provider/executor is contacted.
