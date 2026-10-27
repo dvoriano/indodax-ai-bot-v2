@@ -490,9 +490,26 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         selected, observations, screening_epoch=screening.observed_epoch,
         complete_batch=completed, window_expired=window_expired,
     )
+    # M04-N: a *real observed* public BTC REST closed 1m candle is useful
+    # for matching the persistent PUBLIC WS journal even if most altcoin
+    # candidates fail the strict eligible-cohort gate. No invented minute,
+    # additional HTTP GET, trusted G1 issuer, or G2 promotion.
+    btc_rest = observations.get("btc_idr") or btc
+    btc_rest_minute = None
+    if btc_rest is not None and btc_rest.pair == "btc_idr":
+        src = btc_rest.snapshot.source
+        minute_epoch = src.closed_1m_epoch
+        if (src.pair == "btc_idr"
+                and type(minute_epoch) is int and minute_epoch > 0
+                and minute_epoch % 60 == 0
+                and btc_rest.candle_1m.start == minute_epoch
+                and 0 <= src.observed_epoch - screening.observed_epoch <= 30):
+            btc_rest_minute = minute_epoch
     return {
         "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
         "screening_observed_epoch": screening.observed_epoch,
+        "btc_public_rest_closed_1m_epoch_diagnostic": btc_rest_minute,
+        "btc_rest_observation_not_source_authentication": True,
         "source_trust_verified": False,
         "trade_history_complete": False,
         "shortlist_size": len(screening.shortlist),

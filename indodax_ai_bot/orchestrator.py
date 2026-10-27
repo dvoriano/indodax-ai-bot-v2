@@ -147,8 +147,25 @@ class DailyScalpingOrchestrator:
         # flags. REST and WS may be from DIFFERENT temporal snapshots.
         if ws_db_path is not None and result is not None:
             cohort = result.get("eligible_cohort") or {}
-            minute = cohort.get("closed_1m_epoch")
-            if type(minute) is not int:
+            # M04-N: prefer actual PUBLIC BTC REST observation even if other
+            # candidates were rejected. A cohort rejection must not suppress
+            # factual BTC minute diagnostics. Never infer from wall clock.
+            minute = result.get("btc_public_rest_closed_1m_epoch_diagnostic")
+            cohort_minute = cohort.get("closed_1m_epoch")
+            result["btc_ws_minute_reference"] = (
+                "ACTUAL_PUBLIC_BTC_REST_CLOSED_CANDLE_UNATTESTED"
+                if type(minute) is int else "NO_ACTUAL_BTC_REST_CLOSED_CANDLE"
+            )
+            if (type(cohort_minute) is int and type(minute) is int
+                    and cohort_minute != minute):
+                result["btc_ws_closed_minute_sample"] = {
+                    "status": "REJECT",
+                    "reason": "BTC_REST_COHORT_CLOSED_MINUTE_MISMATCH",
+                    "g1_receipt_issuance_allowed": False,
+                    "g2_provider_call_allowed": False,
+                    "execution_allowed": False,
+                }
+            elif type(minute) is not int:
                 result["btc_ws_closed_minute_sample"] = {
                     "status": "REJECT",
                     "reason": "NO_ALIGNED_BTC_CLOSED_MINUTE",

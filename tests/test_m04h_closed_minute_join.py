@@ -119,7 +119,7 @@ class M04HClosedMinuteTests(unittest.TestCase):
             j = prepared_journal(Path(td)/"ws.sqlite3")
             report = j.closed_minute_sample(
                 "btc_idr", closed_1m_epoch=MINUTE, now_epoch=MINUTE+65,
-                max_publications=2,
+                max_publications=1,
             )
             self.assertEqual(report["reason"], "REJECT_WS_SNAPSHOT_LIMIT_EXCEEDED")
             self.assertNotIn("total_idr_volume_visible", report)

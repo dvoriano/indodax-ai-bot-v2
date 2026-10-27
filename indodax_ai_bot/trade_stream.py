@@ -291,6 +291,9 @@ class PublicTradeStreamJournal:
         if now_epoch < minute_end:
             return {**base, "reason": "REJECT_MINUTE_NOT_CLOSED"}
         with self._connect() as con:
+            # One consistent read snapshot while the persistent collector
+            # advances the same SQLite journal concurrently.
+            con.execute("BEGIN")
             state = con.execute(
                 "SELECT epoch,last_offset,status FROM ws_stream_state WHERE pair=?",
                 (pair,),
@@ -298,10 +301,23 @@ class PublicTradeStreamJournal:
             if state is None:
                 return {**base, "reason": "NO_PUBLIC_WS_BASELINE"}
             stream_epoch, last_offset, stream_status = state
+            total_publications = con.execute(
+                "SELECT COUNT(*) FROM ws_trade_publications WHERE pair=? AND epoch=?",
+                (pair, stream_epoch),
+            ).fetchone()[0]
+            # JSON1 filters ONLY publications containing trades from the
+            # specified CLOSED minute, not the earliest N rows of a growing
+            # multi-day journal. This remains a bounded/unattested sample.
             rows = con.execute(
-                "SELECT offset,payload_sha256,rows_json FROM ws_trade_publications "
-                "WHERE pair=? AND epoch=? ORDER BY offset LIMIT ?",
-                (pair, stream_epoch, max_publications + 1),
+                "SELECT p.offset,p.payload_sha256,p.rows_json "
+                "FROM ws_trade_publications AS p "
+                "WHERE p.pair=? AND p.epoch=? AND EXISTS ("
+                " SELECT 1 FROM json_each(p.rows_json) AS j"
+                " WHERE json_extract(j.value,'$[1]')>=?"
+                " AND json_extract(j.value,'$[1]')<?"
+                ") ORDER BY p.offset LIMIT ?",
+                (pair, stream_epoch, closed_1m_epoch, minute_end,
+                 max_publications + 1),
             ).fetchall()
         if len(rows) > max_publications:
             return {
@@ -348,7 +364,7 @@ class PublicTradeStreamJournal:
             "stream_epoch": stream_epoch,
             "stream_status": stream_status,
             "last_publication_offset": last_offset,
-            "sampled_publication_count_total_epoch": len(rows),
+            "sampled_publication_count_total_epoch": total_publications,
             "sampled_publications_in_minute": (
                 0 if min_offset is None else sum(
                     1 for offset, _, raw in rows
