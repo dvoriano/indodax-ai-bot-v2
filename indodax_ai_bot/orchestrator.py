@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import time
 import sqlite3
@@ -15,6 +16,80 @@ from .deep_analysis import deep_scan, bulk_public_deep_scan
 from .three_role_ai import ThreeRoleShadow
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
+
+
+def _btc_rest_ws_observability(rest: dict | None, ws: dict | None) -> dict:
+    """M04-O: compare two PUBLIC partial views of the same BTC closed 1m.
+
+    Matching values are NOT proof of exhaustive market trade coverage,
+    authenticated upstream origin or permission to consult paid AI.
+    """
+    base = {
+        "stage": "M04O_PUBLIC_BTC_REST_WS_OBSERVABILITY",
+        "status": "REJECT",
+        "reason": "OBSERVATION_NOT_YET_ALIGNED",
+        "pair": "btc_idr",
+        "public_rest_recent_trades_exhaustive": False,
+        "public_ws_complete_trade_tape_proven": False,
+        "independent_exchange_origin_verified": False,
+        "observed_values_cannot_establish_complete_coverage": True,
+        "g1_receipt_issuance_allowed": False,
+        "g2_provider_call_allowed": False,
+        "execution_allowed": False,
+    }
+    if not isinstance(rest, dict):
+        return {**base, "reason": "NO_ACTUAL_BTC_REST_MINUTE_SAMPLE"}
+    if not isinstance(ws, dict) or ws.get("status") not in (
+            "PUBLIC_SAMPLE_OBSERVED", "PUBLIC_SAMPLE_EMPTY"):
+        return {**base, "reason": "NO_VALID_SAME_MINUTE_WS_SAMPLE"}
+    minute = rest.get("closed_1m_start_epoch")
+    end = rest.get("closed_1m_end_epoch")
+    if (type(minute) is not int or minute <= 0
+            or type(end) is not int or end != minute + 60
+            or ws.get("closed_1m_epoch") != minute
+            or ws.get("closed_1m_end_epoch") != end
+            or ws.get("minute_trade_coverage_complete") is not False
+            or ws.get("g1_receipt_issuance_allowed") is not False
+            or rest.get("g1_receipt_issuance_allowed") is not False):
+        return {**base, "reason": "REST_WS_CLOSED_MINUTE_OR_TRUST_MISMATCH"}
+    rest_count = rest.get("visible_trade_rows")
+    ws_count = ws.get("trade_rows_visible_in_minute")
+    if (type(rest_count) is not int or rest_count < 0
+            or type(ws_count) is not int or ws_count < 0):
+        return {**base, "reason": "INVALID_PUBLIC_REST_WS_TRADE_COUNT"}
+    try:
+        r_buy = Decimal(rest["visible_buy_idr"])
+        r_sell = Decimal(rest["visible_sell_idr"])
+        w_buy = Decimal(ws["buy_idr_volume_visible"])
+        w_sell = Decimal(ws["sell_idr_volume_visible"])
+        if any(not x.is_finite() or x < 0
+               for x in (r_buy, r_sell, w_buy, w_sell)):
+            raise ValueError("invalid flow")
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return {**base, "reason": "INVALID_PUBLIC_REST_WS_FLOW"}
+    values_match = (rest_count == ws_count and r_buy == w_buy
+                    and r_sell == w_sell)
+    return {
+        **base,
+        "status": ("PUBLIC_VISIBLE_SAMPLES_MATCH_UNATTESTED" if values_match
+                   else "PUBLIC_VISIBLE_SAMPLES_DIFFER_UNATTESTED"),
+        "reason": "REST_AND_WS_ARE_NONEXHAUSTIVE_OBSERVATIONS",
+        "closed_1m_start_epoch": minute,
+        "closed_1m_end_epoch": end,
+        "rest_visible_trade_rows": rest_count,
+        "ws_visible_trade_rows": ws_count,
+        "trade_row_delta_ws_minus_rest": ws_count - rest_count,
+        "rest_visible_buy_idr": str(r_buy),
+        "ws_visible_buy_idr": str(w_buy),
+        "buy_idr_delta_ws_minus_rest": str(w_buy - r_buy),
+        "rest_visible_sell_idr": str(r_sell),
+        "ws_visible_sell_idr": str(w_sell),
+        "sell_idr_delta_ws_minus_rest": str(w_sell - r_sell),
+        "rest_visible_total_idr": str(r_buy + r_sell),
+        "ws_visible_total_idr": str(w_buy + w_sell),
+        "total_idr_delta_ws_minus_rest": str(w_buy + w_sell - r_buy - r_sell),
+        "public_samples_match_without_completeness_proof": values_match,
+    }
 
 
 @dataclass(frozen=True)
@@ -198,6 +273,13 @@ class DailyScalpingOrchestrator:
                         "g2_provider_call_allowed": False,
                         "execution_allowed": False,
                     }
+            # These are two observed, NON-exhaustive public data views.
+            # Explicitly preserve difference/mismatch instead of promoting
+            # a public subset to signed G1 evidence or calling paid models.
+            result["btc_rest_ws_observability"] = _btc_rest_ws_observability(
+                result.get("btc_public_rest_visible_minute_sample"),
+                result.get("btc_ws_closed_minute_sample"),
+            )
         # One G2 boundary, in the already accepted bulk mainpath. No provider
         # object is configured, no billable requests, no trading permission.
         ai_shadow = ThreeRoleShadow(caller=self._ai_role_caller).run(trace_id, result)
