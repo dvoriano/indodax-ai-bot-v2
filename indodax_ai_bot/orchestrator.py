@@ -41,7 +41,21 @@ def _btc_rest_ws_observability(rest: dict | None, ws: dict | None) -> dict:
         return {**base, "reason": "NO_ACTUAL_BTC_REST_MINUTE_SAMPLE"}
     if not isinstance(ws, dict) or ws.get("status") not in (
             "PUBLIC_SAMPLE_OBSERVED", "PUBLIC_SAMPLE_EMPTY"):
-        return {**base, "reason": "NO_VALID_SAME_MINUTE_WS_SAMPLE"}
+        ws_reason = ws.get("reason") if isinstance(ws, dict) else None
+        # Expose specifically a known local discontinuity rejection to G1's
+        # existing REST-vs-WS source quality diagnostic; never grant trust.
+        gap_reason = ws_reason if ws_reason in (
+            "REJECT_WS_MINUTE_CROSSES_RECORDED_GAP",
+            "REJECT_WS_REBASELINE_IN_CLOSED_MINUTE",
+            "REJECT_WS_GAP_LEDGER_INVALID",
+            "REJECT_WS_GAP_LEDGER_LIMIT_EXCEEDED",
+            "REJECT_WS_GAP_LEDGER_INCONSISTENT",
+        ) else None
+        return {
+            **base, "reason": "NO_VALID_SAME_MINUTE_WS_SAMPLE",
+            "public_ws_gap_rejection_reason": gap_reason,
+            "public_ws_gap_in_minute": gap_reason is not None,
+        }
     minute = rest.get("closed_1m_start_epoch")
     end = rest.get("closed_1m_end_epoch")
     if (type(minute) is not int or minute <= 0
