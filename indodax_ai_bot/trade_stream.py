@@ -354,6 +354,14 @@ class PublicTradeStreamJournal:
                 "SELECT COUNT(*) FROM ws_trade_publications WHERE pair=? AND epoch=?",
                 (pair, stream_epoch),
             ).fetchone()[0]
+            known_gap_events = con.execute(
+                "SELECT COUNT(*) FROM ws_stream_discontinuities WHERE pair=?",
+                (pair,),
+            ).fetchone()[0]
+            base["unrecoverable_gap_rebaseline_count"] = known_gap_events
+            base["has_explicit_unrecoverable_ws_discontinuity"] = (
+                known_gap_events > 0
+            )
             # An in-minute JSON predicate alone can HIDE tampering: changing
             # rows_json from a valid target-minute publication to [] or to
             # another minute removes it from the selected rows *before* the
