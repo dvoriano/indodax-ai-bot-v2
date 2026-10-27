@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from hashlib import sha256
 
-from .public_market import Candle, IndodaxPublicMarket, PublicDataError, PublicObservation
+from .public_market import Candle, IndodaxPublicMarket, PublicCandleHistory, PublicDataError, PublicObservation
 from .scanner import ScannerResult
 from .source_coverage import public_coverage_report
 
@@ -229,6 +230,132 @@ def replay_closed_market_structure(
     }
 
 
+
+
+
+
+def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict:
+    """M03-K deterministic time-split/embargo evaluation of M03-J labels.
+
+    The input is public closed OHLC, NOT authenticated complete trade history.
+    No optimized thresholds, order fills, fee model, net ROI or live signal.
+    Training outcomes must end before the holdout period begins.
+    """
+    if (not isinstance(history, PublicCandleHistory)
+            or history.source_trust_verified is not False
+            or history.trade_history_complete is not False
+            or history.provenance != "INDODAX_PUBLIC_OHLC_V2_UNATTESTED"
+            or not isinstance(history.pair, str)
+            or not history.pair.endswith("_idr")):
+        raise PublicDataError("INVALID_RESEARCH_SOURCE")
+    candles = history.candles
+    n = len(candles)
+    if (n < 90 or n > 360 or history.to_epoch - history.from_epoch != 60 * n
+            or candles[0].start != history.from_epoch
+            or candles[-1].start + 60 != history.to_epoch
+            or history.observed_epoch < history.to_epoch
+            or abs(history.observed_epoch - history.exchange_epoch) > 30
+            or any(c.interval != 60 or c.close <= ZERO
+                   for c in candles)
+            or any(b.start - a.start != 60
+                   for a, b in zip(candles, candles[1:]))):
+        raise PublicDataError("INVALID_RESEARCH_CANDLE_WINDOW")
+    # Canonical digest binds the report to the exact observed OHLC payload,
+    # not to exchange-signed provenance or a complete public trade tape.
+    serialized = "\n".join(
+        ",".join(map(str, (c.start, c.open, c.high, c.low, c.close, c.volume)))
+        for c in candles
+    )
+    source_digest = sha256(serialized.encode("utf-8")).hexdigest()
+    holdout_start_index = n * 7 // 10
+    train: list[tuple[str, Decimal, bool]] = []
+    holdout: list[tuple[str, Decimal, bool]] = []
+    purged = 0
+    for i in range(_STRUCTURE_WINDOW - 1, n - 3):
+        prior = candles[i-10:i]
+        current = candles[i]
+        try:
+            label = classify_closed_market_structure(
+                tuple(candles[i-_STRUCTURE_WINDOW+1:i+1])
+            )["label"]
+        except PublicDataError:
+            # Never silently drop a low-volume/invalid row and present a
+            # selected surviving subset as an unbiased holdout.
+            raise PublicDataError("RESEARCH_STRUCTURE_WINDOW_INVALID") from None
+        body = (abs(current.close - current.open) /
+                (current.high - current.low)
+                if current.high > current.low else ZERO)
+        breakout_without_volume = (
+            current.close > max(c.high for c in prior)
+            and current.close > current.open
+            and body >= _STRUCTURE_MIN_BODY_FRACTION
+        )
+        outcome = ((candles[i+3].close / current.close)-Decimal(1))*Decimal(10000)
+        record = (label, outcome, breakout_without_volume)
+        if i + 3 < holdout_start_index:
+            train.append(record)
+        elif i >= holdout_start_index:
+            holdout.append(record)
+        else:
+            # Embargo outcomes straddling train/holdout cutoff.
+            purged += 1
+
+    def stats(rows: list[tuple[str, Decimal, bool]]) -> dict:
+        def mean(vals: list[Decimal]) -> str | None:
+            return str((sum(vals, ZERO) / len(vals)).quantize(Decimal("0.01"))) if vals else None
+        surge = [ret for name, ret, _ in rows
+                 if name == "SURGE_BREAKOUT_OBSERVED"]
+        unfiltered_breakout = [ret for _, ret, raw in rows if raw]
+        return {
+            "decision_windows": len(rows),
+            "all_windows_mean_forward_3m_gross_bps": mean([r for _, r, _ in rows]),
+            "surge_breakout_events": len(surge),
+            "surge_breakout_mean_forward_3m_gross_bps": mean(surge),
+            "no_volume_filter_breakout_events": len(unfiltered_breakout),
+            "no_volume_filter_breakout_mean_forward_3m_gross_bps": mean(unfiltered_breakout),
+            "labels": {
+                tag: {
+                    "count": sum(name == tag for name, _, _ in rows),
+                    "mean_forward_3m_gross_bps": mean(
+                        [r for name, r, _ in rows if name == tag]
+                    ),
+                }
+                for tag in (
+                    "SURGE_BREAKOUT_OBSERVED",
+                    "PULLBACK_REBOUND_OBSERVED",
+                    "FALSE_BREAKOUT_RISK",
+                    "REVERSAL_ATTEMPT_OBSERVED",
+                )
+            },
+        }
+
+    return {
+        "stage": "M03K_PUBLIC_OHLC_TIME_SPLIT_RESEARCH",
+        "status": "HOLDOUT_DESCRIPTIVE_ONLY_NOT_VALIDATED",
+        "pair": history.pair,
+        "source": history.provenance,
+        "source_digest_sha256": source_digest,
+        "from_epoch": history.from_epoch,
+        "to_epoch": history.to_epoch,
+        "observed_epoch": history.observed_epoch,
+        "closed_1m_rows_visible": n,
+        "holdout_start_epoch": candles[holdout_start_index].start,
+        "train": stats(train),
+        "holdout": stats(holdout),
+        "purged_boundary_windows": purged,
+        "ablation": "surge_breakout WITH vs WITHOUT provisional volume >=2x condition, price-only",
+        "rules_fixed_prior_to_observation": True,
+        "forward_outcome_only_used_for_reporting": True,
+        "overlapping_3m_forward_windows_not_independent": True,
+        "full_exchange_trade_tape_proven": False,
+        "source_trust_verified": False,
+        "g1_verified": False,
+        "out_of_sample_validated": False,
+        "net_roi_verified": False,
+        "fee_slippage_fills_measured": False,
+        "g2_candidate_authorized": False,
+        "execution_allowed": False,
+    }
 
 
 def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Decimal("80")) -> DeepCandidate:
