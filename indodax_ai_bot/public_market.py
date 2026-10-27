@@ -330,7 +330,8 @@ class IndodaxPublicMarket:
         )
 
     def closed_1m_research_history(self, pair: str = "btc_idr", *,
-                                   minutes: int = 180) -> PublicCandleHistory:
+                                   minutes: int = 180,
+                                   end_epoch: int | None = None) -> PublicCandleHistory:
         """M03-K: bounded PUBLIC OHLC research, not a source-trust upgrade.
 
         Three official GETs: pairs, server_time, tradingview 1m. Missing
@@ -350,8 +351,20 @@ class IndodaxPublicMarket:
         exchange_epoch = _seconds(response.get("server_time"), "SERVER_TIME")
         if abs(exchange_epoch - observed_epoch) > 30:
             raise PublicDataError("EXCHANGE_CLOCK_SKEW")
-        to_epoch = (min(observed_epoch, exchange_epoch) // 60) * 60
+        latest_closed_epoch = (min(observed_epoch, exchange_epoch) // 60) * 60
+        # Historical backfill is explicit and bound to an already closed
+        # minute. Never allow a future or partially formed candle.
+        if end_epoch is not None:
+            if (type(end_epoch) is not int or end_epoch <= 0
+                    or end_epoch % 60 != 0
+                    or end_epoch > latest_closed_epoch):
+                raise PublicDataError("INVALID_RESEARCH_HISTORY_END")
+            to_epoch = end_epoch
+        else:
+            to_epoch = latest_closed_epoch
         from_epoch = to_epoch - minutes * 60
+        if from_epoch <= 0:
+            raise PublicDataError("INVALID_RESEARCH_HISTORY_RANGE")
         symbol = pairs[pair][1]
         path = "/tradingview/history_v2?" + urlencode({
             "from": from_epoch, "to": to_epoch,
