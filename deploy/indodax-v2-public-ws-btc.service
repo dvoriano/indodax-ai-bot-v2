@@ -11,7 +11,7 @@ StartLimitBurst=6
 [Service]
 Type=simple
 WorkingDirectory=%h/indodax-ai-bot-v2
-ExecStart=/usr/bin/python3 -B -m indodax_ai_bot --public-ws-supervised-once --pair btc_idr --db runtime/public_ws_btc.sqlite3 --collector-sessions 10 --stream-seconds 30 --collector-pause-seconds 1 --supervisor-status-file runtime/public_ws_btc.status.json
+ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --public-ws-supervised-once --pair btc_idr --db runtime/public_ws_btc.sqlite3 --collector-sessions 10 --stream-seconds 30 --collector-pause-seconds 1 --supervisor-status-file runtime/public_ws_btc.status.json
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN

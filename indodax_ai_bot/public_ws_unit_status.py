@@ -78,7 +78,7 @@ def inspect_public_ws_systemd_unit(
         or sum(1 for name, _ in entries if name == "Restart") != 1
         or sum(1 for name, _ in entries if name == "WorkingDirectory") != 1
         or any(name == "ExecStart" and
-               (not value.startswith("/usr/bin/python3 -B -m indodax_ai_bot ")
+               (not value.startswith("%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot ")
                 or "--public-ws-supervised-once" not in value
                 or "--pair btc_idr" not in value)
                for name, value in entries)
