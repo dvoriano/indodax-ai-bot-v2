@@ -38,6 +38,9 @@ class DeepCandidate:
     visible_sell_idr: Decimal = ZERO
     book_imbalance: Decimal | None = None
     anomaly_flags: tuple[str, ...] = ()
+    # M03-J closed-candle research only, never an entry or risk decision.
+    market_structure_diagnostic: dict | None = None
+    structure_replay: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -53,6 +56,8 @@ class DeepCandidate:
             "visible_sell_idr": str(self.visible_sell_idr),
             "book_imbalance": None if self.book_imbalance is None else str(self.book_imbalance.quantize(Decimal("0.001"))),
             "anomaly_flags": list(self.anomaly_flags),
+            "market_structure_diagnostic": self.market_structure_diagnostic,
+            "structure_replay": self.structure_replay,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -94,6 +99,138 @@ def _last_continuous(series: tuple[Candle, ...], interval: int, count: int) -> t
     return last
 
 
+
+# M03-J explicit provisional, UNCALIBRATED research definitions. These labels
+# DO NOT change the score, source trust, eligibility, AI gate or Final policy.
+# Use only closed, consecutive 1m bars. Any historical performance measured
+# from these candles is PRICE-ONLY and never a realized net trade return.
+_STRUCTURE_WINDOW = 22
+_STRUCTURE_BASELINE_BARS = 10
+_STRUCTURE_SURGE_VOLUME = Decimal("2")
+_STRUCTURE_MIN_BODY_FRACTION = Decimal("0.5")
+
+
+def classify_closed_market_structure(candles: tuple[Candle, ...]) -> dict:
+    """Classify one closed 1m observation with NO future bars or public trade claims.
+
+    Caller supplies only the historical window ending at the decision candle.
+    Must be fully contiguous; 5m/15m/BTC and source trust remain external gates.
+    """
+    minute = _last_continuous(candles, 60, _STRUCTURE_WINDOW)
+    current = minute[-1]
+    earlier = minute[-11:-1]
+    if (current.volume < ZERO or any(x.volume < ZERO for x in earlier)
+            or any(x.high < max(x.open, x.close) or
+                   x.low > min(x.open, x.close) or x.high < x.low for x in minute)):
+        raise PublicDataError("INVALID_STRUCTURE_CANDLE")
+    baseline = sum((x.volume for x in earlier), ZERO) / Decimal(len(earlier))
+    if baseline <= ZERO:
+        raise PublicDataError("NO_STRUCTURE_VOLUME_BASELINE")
+    high = max(x.high for x in earlier)
+    low = min(x.low for x in earlier)
+    candle_range = current.high - current.low
+    body_fraction = ((abs(current.close - current.open) / candle_range)
+                     if candle_range > ZERO else ZERO)
+    volume_ratio = current.volume / baseline
+    label = "NO_CLOSED_CANDLE_SETUP"
+
+    # Rejection must take precedence over breakout when a high briefly
+    # exceeds visible resistance but the same CLOSED candle finishes below.
+    if (current.high > high and current.close <= high
+            and current.close < current.high):
+        label = "FALSE_BREAKOUT_RISK"
+    elif (current.close > high and current.close > current.open
+          and volume_ratio >= _STRUCTURE_SURGE_VOLUME
+          and body_fraction >= _STRUCTURE_MIN_BODY_FRACTION):
+        label = "SURGE_BREAKOUT_OBSERVED"
+    else:
+        prev_closes = tuple(x.close for x in minute[:-1])
+        ema8_before = _ema(prev_closes, 8)
+        ema21_before = _ema(prev_closes, 21)
+        previous = minute[-2]
+        previous_down = (minute[-4].close > minute[-3].close >
+                         minute[-2].close)
+        if (previous_down and previous.close < previous.open
+                and current.open <= previous.close
+                and current.close > previous.open
+                and current.close > current.open):
+            label = "REVERSAL_ATTEMPT_OBSERVED"
+        elif (ema8_before > ema21_before
+              and current.low <= ema8_before
+              and current.close >= ema8_before
+              and current.close > current.open):
+            label = "PULLBACK_REBOUND_OBSERVED"
+
+    return {
+        "label": label,
+        "closed_1m_epoch": current.start + 60,
+        "reference_prior_10m_high": str(high),
+        "reference_prior_10m_low": str(low),
+        "visible_1m_volume_vs_prior_10m": str(volume_ratio),
+        "closed_1m_body_fraction": str(body_fraction),
+        "lookback_closed_1m": _STRUCTURE_WINDOW,
+        "full_trade_flow_proven": False,
+        "g1_verified": False,
+        "calibrated": False,
+        "trade_signal": False,
+    }
+
+
+def replay_closed_market_structure(
+    candles: tuple[Candle, ...], *, forward_bars: int = 3,
+) -> dict:
+    """Historical candle-only *diagnostic* replay, no fill/fee/ROI claims.
+
+    For sample ending at index k, classifier sees ONLY candles[:k+1].
+    Its outcome refers to close at k+forward_bars, never used in that label.
+    Missing bar/time continuity refuses the WHOLE replay (no invented bars).
+    """
+    if type(forward_bars) is not int or forward_bars != 3:
+        raise PublicDataError("STRUCTURE_REPLAY_REQUIRES_3_CLOSED_BARS")
+    if len(candles) < _STRUCTURE_WINDOW + forward_bars:
+        return {
+            "status": "INSUFFICIENT_HISTORY_FOR_REPLAY",
+            "sample_count": 0,
+            "events": [],
+            "g1_verified": False,
+            "price_only_not_net_roi": True,
+            "out_of_sample_validated": False,
+        }
+    if any(a.interval != 60 or b.interval != 60 or b.start - a.start != 60
+           for a, b in zip(candles, candles[1:])):
+        raise PublicDataError("GAPPED_STRUCTURE_REPLAY_HISTORY")
+    if any(c.close <= ZERO for c in candles):
+        raise PublicDataError("INVALID_STRUCTURE_REPLAY_PRICE")
+    events = []
+    # Replay at most a few dozen candles per snapshot; preserve every event
+    # in this bounded history without selecting on its future performance.
+    for end in range(_STRUCTURE_WINDOW, len(candles)-forward_bars+1):
+        current = candles[end-1]
+        label = classify_closed_market_structure(tuple(candles[end-_STRUCTURE_WINDOW:end]))["label"]
+        if label != "NO_CLOSED_CANDLE_SETUP":
+            future = candles[end+forward_bars-1]
+            gross_bps = (future.close / current.close - Decimal(1)) * Decimal(10000)
+            events.append({
+                "label": label,
+                "closed_1m_epoch": current.start + 60,
+                "forward_3m_close_to_close_gross_bps": str(gross_bps),
+            })
+    return {
+        "status": "CANDLE_ONLY_REPLAY_UNCALIBRATED",
+        "sample_count": len(candles) - _STRUCTURE_WINDOW - forward_bars + 1,
+        "labeled_event_count": len(events),
+        "events": events,
+        "g1_verified": False,
+        "price_only_not_net_roi": True,
+        "fees_slippage_fills_not_measured": True,
+        "out_of_sample_validated": False,
+        "ablation_validated": False,
+        "trade_signal": False,
+    }
+
+
+
+
 def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Decimal("80")) -> DeepCandidate:
     """One pair; reject incomplete/stale evidence rather than create synthetic candles."""
     pair = obs.pair
@@ -124,6 +261,20 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
         imbalance = ((obs.bid_depth_top5_idr - obs.ask_depth_top5_idr)
                      / (obs.bid_depth_top5_idr + obs.ask_depth_top5_idr))
         buy, sell = obs.visible_closed_1m_buy_idr, obs.visible_closed_1m_sell_idr
+        # Retain the exact approved score and veto logic. These are labels
+        # for observational review, not a new executable ranking or Risk AI.
+        structure = classify_closed_market_structure(tuple(minute))
+        try:
+            replay = replay_closed_market_structure(obs.candles_1m)
+        except PublicDataError:
+            replay = {
+                "status": "REJECT_GAPPED_OR_INVALID_REPLAY_HISTORY",
+                "sample_count": 0,
+                "events": [],
+                "g1_verified": False,
+                "price_only_not_net_roi": True,
+                "out_of_sample_validated": False,
+            }
         # Public trade flow is a VISIBLE SAMPLE, never complete trade history.
         # Conservative review when volume explosions are combined with extreme
         # RSI or visible selling. These are anomaly flags, not proof of fraud.
@@ -139,6 +290,7 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
                 "EXTREME_PUBLIC_MOMENTUM_REVIEW_REQUIRED",
                 obs.snapshot.source.closed_1m_epoch, rsi, ema8, ema21,
                 volume_ratio, spread_bps, buy, sell, imbalance, tuple(flags),
+                market_structure_diagnostic=structure, structure_replay=replay,
             )
 
         # Deterministic indicators, NOT a trading probability or expected ROI.
@@ -155,7 +307,9 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
         ))
         return DeepCandidate(pair, score, "PUBLIC_EVIDENCE_UNATTESTED", None,
                              obs.snapshot.source.closed_1m_epoch, rsi, ema8, ema21,
-                             volume_ratio, spread_bps, buy, sell, imbalance)
+                             volume_ratio, spread_bps, buy, sell, imbalance,
+                             market_structure_diagnostic=structure,
+                             structure_replay=replay)
     except PublicDataError as exc:
         return DeepCandidate(pair, None, "REJECT_INCOMPLETE_EVIDENCE", str(exc))
 
