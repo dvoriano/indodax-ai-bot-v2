@@ -18,7 +18,9 @@
 | **SCOPED OWNER GO RECEIVED** | User approved M04-M **public BTC/IDR data collection 24/7 only**. This DOES NOT authorize paid AI, private Indodax API, BUY, SELL or any trading. No VPS installation, service start, or daemon change has occurred from this GitHub documentation commit. Existing trading flags stay `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`; paid AI OFF, Final REJECT. |
 | **Remaining after explicit GO** | Prove supervised public collector keeps running and refreshing offsets, real closed 1-minute source-alignment/coverage, independently qualified G1 issuer, then three paid AI calls with owner budget controls, Telegram MANUAL/AUTO, IDR capital/SELL lifecycle and CI repair. |
 
-**M04-M latest blocker:** VPS failed PRE-INSTALL due to system-python missing websocket; V2 local venv + pinned dependency patch coded, not yet tested. No user systemd activation occurred.\n\n**New-chat handover:** Only PROJECT_GUIDELINE.md + docs/ROADMAP.md. M04-L accepted 11/11 and real read-only STAGED_NOT_INSTALLED; M04-M pending explicit PUBLIC-only systemd activation. Do not rerun accepted tests or create another master handover.
+**M04-M latest blocker:** VPS failed PRE-INSTALL due to system-python missing websocket; V2 local venv + pinned dependency patch coded, not yet tested. No user systemd activation occurred.
+
+**New-chat handover:** Only PROJECT_GUIDELINE.md + docs/ROADMAP.md. M04-L accepted 11/11 and real read-only STAGED_NOT_INSTALLED; M04-M pending explicit PUBLIC-only systemd activation. Do not rerun accepted tests or create another master handover.
 
 ## 2. LEGENDA CHECKLIST & BUKTI
 
