@@ -107,6 +107,20 @@ class PublicObservation:
         }
 
 
+@dataclass(frozen=True)
+class PublicCandleHistory:
+    """Contiguous official PUBLIC OHLC rows, not attested trade history."""
+    pair: str
+    observed_epoch: int
+    exchange_epoch: int
+    from_epoch: int
+    to_epoch: int
+    candles: tuple[Candle, ...]
+    provenance: str = "INDODAX_PUBLIC_OHLC_V2_UNATTESTED"
+    source_trust_verified: bool = False
+    trade_history_complete: bool = False
+
+
 class IndodaxPublicMarket:
     """Bounded public-only HTTP adapter: NEVER sends credentials/private requests."""
 
@@ -313,4 +327,46 @@ class IndodaxPublicMarket:
             tuple(one), tuple(fifteen),
             buy_flow, sell_flow, visible_trade_count_closed,
             bid_depth5, ask_depth5,
+        )
+
+    def closed_1m_research_history(self, pair: str = "btc_idr", *,
+                                   minutes: int = 180) -> PublicCandleHistory:
+        """M03-K: bounded PUBLIC OHLC research, not a source-trust upgrade.
+
+        Three official GETs: pairs, server_time, tradingview 1m. Missing
+        1m bars reject the entire window; never fabricate empty bars.
+        """
+        if not isinstance(pair, str) or not _PAIR_RE.fullmatch(pair):
+            raise PublicDataError("INVALID_IDR_PAIR")
+        if type(minutes) is not int or not 90 <= minutes <= 360:
+            raise PublicDataError("INVALID_RESEARCH_HISTORY_MINUTES")
+        pairs = self.idr_pairs()
+        if pair not in pairs:
+            raise PublicDataError("PAIR_NOT_ACTIVE")
+        observed_epoch = int(self._clock())
+        response = self._get("/api/server_time")
+        if not isinstance(response, dict):
+            raise PublicDataError("INVALID_SERVER_TIME")
+        exchange_epoch = _seconds(response.get("server_time"), "SERVER_TIME")
+        if abs(exchange_epoch - observed_epoch) > 30:
+            raise PublicDataError("EXCHANGE_CLOCK_SKEW")
+        to_epoch = (min(observed_epoch, exchange_epoch) // 60) * 60
+        from_epoch = to_epoch - minutes * 60
+        symbol = pairs[pair][1]
+        path = "/tradingview/history_v2?" + urlencode({
+            "from": from_epoch, "to": to_epoch,
+            "symbol": symbol, "tf": "1",
+        })
+        rows = self._candles(self._get(path), 60, to_epoch)
+        rows = [x for x in rows
+                if from_epoch <= x.start and x.start + 60 <= to_epoch]
+        if (len(rows) != minutes or rows[0].start != from_epoch
+                or rows[-1].start + 60 != to_epoch
+                or any(b.start - a.start != 60
+                       for a, b in zip(rows, rows[1:]))):
+            raise PublicDataError("RESEARCH_HISTORY_1M_INCOMPLETE")
+        return PublicCandleHistory(
+            pair=pair, observed_epoch=observed_epoch,
+            exchange_epoch=exchange_epoch, from_epoch=from_epoch,
+            to_epoch=to_epoch, candles=tuple(rows),
         )
