@@ -65,7 +65,7 @@ def inspect_public_ws_systemd_unit(
     entries: list[tuple[str, str]] = []
     for line in body.splitlines():
         clean = line.strip()
-        if not clean or clean.startswith(("#", ";")):
+        if not clean or clean.startswith(("#", ";")) or (clean.startswith("[") and clean.endswith("]")):
             continue
         if "=" not in clean:
             return {**base, "staged_template_present": True,
@@ -78,9 +78,9 @@ def inspect_public_ws_systemd_unit(
         or sum(1 for name, _ in entries if name == "Restart") != 1
         or sum(1 for name, _ in entries if name == "WorkingDirectory") != 1
         or any(name == "ExecStart" and
-               ("--public-ws-supervised-once" not in value
-                or "indodax_ai_bot" not in value
-                or "python3" not in value)
+               (not value.startswith("/usr/bin/python3 -B -m indodax_ai_bot ")
+                or "--public-ws-supervised-once" not in value
+                or "--pair btc_idr" not in value)
                for name, value in entries)
         or sum(1 for name, _ in entries if name == "ExecStart") != 1
         or any(name == "Environment" and
