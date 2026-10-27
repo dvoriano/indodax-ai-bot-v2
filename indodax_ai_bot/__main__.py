@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
     group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
+    group.add_argument("--public-history-research-once", action="store_true",
+                       help="One PUBLIC 1m OHLC 90-360m time-split price-only research; never trades")
     group.add_argument("--rolling-deep-once", action="store_true", help="PUBLIC 2-pair rotating deep scan, SQLite persisted and paced, never trades")
     group.add_argument("--bulk-deep-once", action="store_true", help="PUBLIC up-to-20 same-cycle deep scan; bounded requests and never trades")
     group.add_argument("--public-ws-once", action="store_true", help="One public BTC trade-activity WS probe; persisted offset, no trades")
@@ -45,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--health-max-age-seconds", type=int, default=3600,
                         help="Max age 60..86400s for operator last-batch check; does NOT prove service running")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
+    parser.add_argument("--history-minutes", type=int, default=180,
+                        help="PUBLIC historical closed 1m bars for research only: 90..360")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
     parser.add_argument("--sumopod-shadow", action="store_true",
@@ -121,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = app.run_rolling_deep_cycle(uuid4().hex)
             elif args.deep_once:
                 outcome = app.run_deep_cycle(uuid4().hex)
+            elif args.public_history_research_once:
+                outcome = app.run_public_history_research_cycle(
+                    uuid4().hex, pair=args.pair, minutes=args.history_minutes,
+                )
             elif args.scan_once:
                 outcome = app.run_scan_cycle(uuid4().hex)
             elif args.public_once or args.verify_public:
@@ -160,6 +168,10 @@ def main(argv: list[str] | None = None) -> int:
                 result["rolling_probe_status"] = ("PUBLIC_ROLLING_UNATTESTED" if outcome.rolling is not None
                                                   else "PUBLIC_ROLLING_BLOCKED")
                 result["live_trading_authorized"] = False
+            if args.public_history_research_once:
+                result["public_history_research"] = outcome.public_research
+                result["research_is_trade_signal"] = False
+                result["live_trading_authorized"] = False
             if args.deep_once:
                 result["public_deep"] = outcome.deep
                 result["deep_probe_status"] = "PUBLIC_DEEP_UNATTESTED" if outcome.deep is not None else "PUBLIC_DEEP_ERROR"
@@ -181,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.scan_once and result["public_scanner"] is None:
             return 3
         if args.deep_once and result["public_deep"] is None:
+            return 3
+        if args.public_history_research_once and result["public_history_research"] is None:
             return 3
         if args.rolling_deep_once and result["public_rolling"] is None:
             return 3
