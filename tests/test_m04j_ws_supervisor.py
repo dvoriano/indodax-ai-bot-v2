@@ -86,6 +86,69 @@ class M04JPublicWSSupervisorTests(unittest.TestCase):
             self.assertFalse(result["restart_only_after_clean_batch"])
             self.assertNotIn("do-not-copy-secret",str(result))
 
+    def test_interrupted_fourth_session_code_visible_without_unsafe_restart(self):
+        with TemporaryDirectory() as td:
+            db=Path(td)/"state.sqlite3"
+            sidecar=Path(td)/"last-batch.json"
+            def failed(journal, **kw):
+                journal.acknowledge("btc_idr",ack(100))
+                journal.mark_disconnected("btc_idr")
+                return {
+                    "status":"REJECT",
+                    "reason":"WS_SESSION_REJECTED:PUBLIC_WS_CONNECTION_OR_FRAME_FAILED",
+                    "completed_safe_sessions":3,
+                    "attempted_sessions":4,
+                    "g1_receipt_issuance_allowed":False,
+                    "g2_provider_call_allowed":False,
+                    "execution_allowed":False,
+                }
+            result=supervised_public_ws_batch(
+                db,sessions=10,seconds=3,collector=failed,status_file=sidecar,
+            )
+            self.assertEqual(result["status"],"REJECT")
+            self.assertEqual(result["completed_safe_sessions"],3)
+            self.assertEqual(result["attempted_sessions"],4)
+            self.assertEqual(result["failed_session_number"],4)
+            self.assertEqual(result["collector_failure_code"],
+                             "WS_SESSION_REJECTED:PUBLIC_WS_CONNECTION_OR_FRAME_FAILED")
+            self.assertFalse(result["restart_only_after_clean_batch"])
+            self.assertEqual(json.loads(sidecar.read_text()),result)
+            self.assertFalse(result["g1_receipt_issuance_allowed"])
+            self.assertFalse(result["execution_allowed"])
+
+    def test_failure_message_with_secret_or_newline_not_persisted(self):
+        with TemporaryDirectory() as td:
+            def failed(journal, **kw):
+                journal.acknowledge("btc_idr",ack(100))
+                journal.mark_disconnected("btc_idr")
+                return {
+                    "status":"REJECT",
+                    "reason":"WS_FAIL secret=my-secret\\ncredential",
+                    "completed_safe_sessions":0,
+                    "attempted_sessions":1,
+                }
+            result=supervised_public_ws_batch(
+                Path(td)/"state.sqlite3",sessions=2,seconds=3,
+                collector=failed,status_file=Path(td)/"status.json",
+            )
+            self.assertEqual(result["collector_failure_code"],
+                             "PUBLIC_WS_FAILURE_REASON_UNAVAILABLE")
+            self.assertNotIn("my-secret",str(result))
+            self.assertNotIn("credential",
+                             (Path(td)/"status.json").read_text())
+            self.assertFalse(result["restart_only_after_clean_batch"])
+
+    def test_sanitized_stream_exception_stays_failed(self):
+        with TemporaryDirectory() as td:
+            def failed(*args,**kw):
+                raise StreamEvidenceError("PUBLIC_WS_AUTH_TIMEOUT")
+            result=supervised_public_ws_batch(
+                Path(td)/"state.sqlite3",sessions=2,seconds=3,collector=failed,
+            )
+            self.assertEqual(result["status"],"REJECT")
+            self.assertEqual(result["collector_failure_code"],"PUBLIC_WS_AUTH_TIMEOUT")
+            self.assertFalse(result["restart_only_after_clean_batch"])
+
     def test_fake_g1_authorization_claim_fails_closed(self):
         with TemporaryDirectory() as td:
             result=supervised_public_ws_batch(
