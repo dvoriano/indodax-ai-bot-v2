@@ -177,6 +177,43 @@ class M04PDiscontinuousPublicWSRecovery(unittest.TestCase):
             self.assertFalse(r["execution_allowed"])
             self.assertEqual(j.status("btc_idr")["last_publication_offset"],112)
 
+    def test_second_unrecoverable_gap_in_same_batch_stops_without_repeated_retry(self):
+        with TemporaryDirectory() as td:
+            j=PublicTradeStreamJournal(Path(td)/"journal.sqlite3")
+            j.acknowledge("btc_idr",ack(100))
+            j.mark_disconnected("btc_idr")
+            probes=[]
+            def probe(journal, *, pair, seconds):
+                probes.append(len(probes)+1)
+                if len(probes)==1:
+                    journal.acknowledge(pair,ack(105,publications=[
+                        replay_pub(102), replay_pub(105),
+                    ]))
+                    raise StreamEvidenceError("WS_RECOVERY_GAP_UNRESOLVED")
+                if len(probes)==2:
+                    journal.acknowledge(pair,ack(110),fresh_segment=True)
+                    journal.ingest(pair,pub(111))
+                    journal.mark_disconnected(pair)
+                    return fake_public_session(journal,pair=pair,sessions_seen=2)
+                if len(probes)==3:
+                    journal.acknowledge(pair,ack(116,publications=[
+                        replay_pub(113),replay_pub(116),
+                    ]))
+                    raise StreamEvidenceError("WS_RECOVERY_GAP_UNRESOLVED")
+                self.fail("unsafe repeated retry after second unresolved gap")
+            result=collect_official_public_ws(
+                j,sessions=2,session_seconds=3,pause_seconds=0,
+                probe=probe,sleep=lambda _:None,
+            )
+            self.assertEqual(len(probes),3)
+            self.assertEqual(result["status"],"REJECT")
+            self.assertEqual(result["completed_safe_sessions"],1)
+            self.assertEqual(result["fresh_retry_after_unrecoverable_gap_count"],1)
+            self.assertEqual(result["unrecoverable_gap_rebaseline_count"],1)
+            self.assertEqual(j.status("btc_idr")["stream_status"],"GAP")
+            self.assertFalse(result["execution_allowed"])
+            self.assertFalse(result["g2_provider_call_allowed"])
+
     def test_non_gap_transport_failure_is_not_restarted_or_rebaselined(self):
         with TemporaryDirectory() as td:
             j=PublicTradeStreamJournal(Path(td)/"journal.sqlite3")
