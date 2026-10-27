@@ -305,6 +305,40 @@ class PublicTradeStreamJournal:
                 "SELECT COUNT(*) FROM ws_trade_publications WHERE pair=? AND epoch=?",
                 (pair, stream_epoch),
             ).fetchone()[0]
+            # An in-minute JSON predicate alone can HIDE tampering: changing
+            # rows_json from a valid target-minute publication to [] or to
+            # another minute removes it from the selected rows *before* the
+            # per-minute hash check. Verify ALL persisted payload digests in
+            # this stream epoch first, using a bounded, streaming read that
+            # does not materialize old trade payloads in memory. This is a
+            # local corruption check, never source authentication.
+            max_epoch_integrity_publications = 500_000
+            if total_publications > max_epoch_integrity_publications:
+                return {
+                    **base,
+                    "reason": "REJECT_WS_EPOCH_INTEGRITY_SCAN_LIMIT_EXCEEDED",
+                    "epoch_publications_visible": total_publications,
+                    "epoch_integrity_scan_limit": max_epoch_integrity_publications,
+                }
+            digest_cursor = con.execute(
+                "SELECT payload_sha256,rows_json "
+                "FROM ws_trade_publications WHERE pair=? AND epoch=? "
+                "ORDER BY offset",
+                (pair, stream_epoch),
+            )
+            integrity_checked_count = 0
+            while True:
+                chunk = digest_cursor.fetchmany(512)
+                if not chunk:
+                    break
+                for prior_digest, prior_raw in chunk:
+                    if (not isinstance(prior_raw, str)
+                            or not isinstance(prior_digest, str)
+                            or sha256(prior_raw.encode("utf-8")).hexdigest() != prior_digest):
+                        return {**base, "reason": "REJECT_WS_JOURNAL_DIGEST_MISMATCH"}
+                    integrity_checked_count += 1
+            if integrity_checked_count != total_publications:
+                return {**base, "reason": "REJECT_WS_JOURNAL_COUNT_CHANGED"}
             # JSON1 filters ONLY publications containing trades from the
             # specified CLOSED minute, not the earliest N rows of a growing
             # multi-day journal. This remains a bounded/unattested sample.
@@ -365,6 +399,7 @@ class PublicTradeStreamJournal:
             "stream_status": stream_status,
             "last_publication_offset": last_offset,
             "sampled_publication_count_total_epoch": total_publications,
+            "epoch_publication_digests_checked": integrity_checked_count,
             "sampled_publications_in_minute": (
                 0 if min_offset is None else sum(
                     1 for offset, _, raw in rows
