@@ -191,11 +191,40 @@
 - [x] **M04-Q G1 GAP-AWARE CLOSED-MINUTE CHECK CODED:** same WS journal samples 1m in one snapshot and checks gap ledger, rejects cross-boundary and observed rebaseline-minute data before volume aggregation; same REST/WS quality output includes known gap reason. Historical gap remains visible and no source attestation/AI/execution upgrade.
 - [x] **M04-Q SIX TARGETED TESTS AUTHORED:** same-epoch crossgap, rebaseline minute with partial/zero data, cross-epoch marker, valid postgap sample, invalid ledger, real mainpath Final REJECT. NOT YET VPS accepted.
 - [ ] **M04-Q VPS PROOF:** execute 6 new and 8 directly affected M04-H tests; one real public G1 bulk observation against current collector-owned SQLite. No M04-P test reruns, no extra scanner or user systemd restart.
-- [ ] **M04-C QUALIFIED G1 ISSUER STILL PENDING:** separate real source issuer, verified upstream origin, complete/appropriate trade evidence, safe replay/dedupe/expiry and historical ablation. Internal MAC alone cannot certify source provenance.
-- [ ] MARKET evidence-based BTC/trend/volume/flow assessment from a source-bound snapshot.
-- [ ] RISK veto over downside/liquidity/slippage/listing/balance, no override.
-- [ ] STRATEGY safe sizing and fee/slippage-adjusted net entry/exit; final policy remains separate and two outputs PASS/REJECT only.
-**Acceptance:** actual provider+market evidence and valid Market/Risk/Strategy chain proven independently; synthetic injected responses or a SHA digest never certify real AI/provider/BUY.
+#### CHECKLIST PENUTUP M04: BERESKAN 3 AI SEBELUM M05
+
+**Aturan:** M04 adalah AI, bukan proyek WebSocket tanpa akhir. Semua yang sudah PASS tetap diterima; lanjut hanya pada kode/sumber yang belum memenuhi kontrak. M04-Q sampai M04-W adalah checkpoint kerja **di dalam M04**, bukan milestone utama atau dokumen baru. Jangan melemahkan syarat G1 hanya untuk membuat panggilan AI lolos. Penilaian kesiapan sumber G1 juga menutup dependency M02/M03 yang masih terbuka, bukan mengubah kedua milestone tersebut menjadi DONE.
+
+**M04-Q | Selesaikan kualitas data menit pada G1 yang sudah ada**
+- [ ] **VPS acceptance M04-Q:** jalankan *hanya* 6 tes baru `test_m04q_ws_gap_minute_source.py`, 8 tes `test_m04h_closed_minute_join.py` yang terdampak, dan satu observasi `--bulk-deep-once --ws-db` nyata; tunjukkan gap/cross-segment/rebaseline tidak menghasilkan statistik seolah lengkap. Tidak restart collector. Status M04-Q saat ini **CODED**, bukan PASS.
+- [ ] **Kontrol freshness sumber & rentang waktu:** audit satu sumber candle BTC/altcoin **closed 1m**, konteks 5m/15m, epoch mulai/akhir, clock skew, umur snapshot, ketersediaan order book/trade volume; laporkan missing/partial per pair. Bukti nyata pada pasangan/waktu yang sama, bukan menyimpulkan lengkap dari 1–2 sesi publik.
+  
+**M04-R | Pastikan G1 layak atau secara eksplisit menolak**
+- [ ] **Kualifikasi source coverage/provenance:** tetapkan dan buktikan asal data yang bisa diverifikasi, kelengkapan trade window yang benar-benar diperlukan, kontinuitas, expiry, gap lintas sesi, batas pagination dan replay. `REST recent trades` + publikasi WS yang *observed* tidak otomatis membuktikan complete trade tape. Jika bukti tidak tersedia dari API publik, dokumentasikan blocker dan alternatif sumber/standar verifikasi untuk keputusan owner; **jangan set `trade_history_complete=true` atau `g1_verified=true` dengan asumsi**.
+- [ ] **Teruskan status kelayakan untuk max-2 kandidat:** scanner/ranking G1 yang sudah ada memilih paling banyak dua pair berdasarkan closed-candle BTC/altcoin yang sinkron, skor, spread, volume, likuiditas dan quality flags. Ketiadaan kandidat/indikator atau data sumber harus memblokir panggilan AI, bukan mengubah ambang sekadar agar BUY.
+
+**M04-S | Issuer G1 nyata terpisah dari data publik**
+- [ ] **Sambungkan issuer/verifier yang benar** ke orchestrator tunggal: receipt versi-terikat dengan trace/pair/closed epoch/digest/TTL dan *source provenance* yang telah benar-benar dikualifikasi. `g1_receipt.py` HMAC/verifier sudah CODED & tes sintetis PASS, **tetapi issuer nyata yang memvalidasi sumber belum ada**. Uji spoofing, expiry, replay, mismatch sumber/candle, rotasi kunci, dan no-call pada gagal; tanda tangan internal saja bukan autentikasi exchange.
+
+**M04-T | Kontrak input bersama 3 AI**
+- [ ] **Satu immutable snapshot per kandidat:** MARKET → RISK → STRATEGY memakai pair, BTC regime, 1m/5m/15m, harga/spread/depth/trade flow, source receipt, timestamps, quality flags dan `evidence_digest_sha256` yang sama. Tidak boleh memakai candle fiktif atau snapshot asinkron yang dianggap sama.
+- [ ] **Kandidat 1–2 terproses nyata:** perbaiki/terapkan batas analisis pada preview max-2 secara terukur (saat ini `ThreeRoleShadow` memproses `preview[0]`); ikat result/usage/trace per kandidat, cegah reuse lintas pair, jaga batas waktu siklus scalping dan kembali REJECT bila kedaluwarsa.
+
+**M04-U | Keahlian tiap AI dan veto keras**
+- [ ] **MARKET:** hasil JSON/schema dan bukti terikat BTC+pair meliputi trend, candle, volume, spread, likuiditas, breakout/pullback/false breakout, buyer/seller dan anomali; tandai evidence yang tidak tersedia, jangan mengarang data.
+- [ ] **RISK:** gunakan output MARKET + snapshot sumber sama; veto `NO_TRADE`/EXIT_REVIEW atas stale/gap/spread/slippage/volatilitas/manipulasi/listing, kekurangan saldo atau ownership. STRATEGY tidak boleh berjalan sebagai proposal BUY ketika RISK memveto; final tetap REJECT.
+- [ ] **STRATEGY:** hanya setelah RISK ALLOW, hasilkan BUY/WAIT atau EXIT_REVIEW dengan entry/size/exit/invalidasi, fee dan slippage, perkiraan laba minimal **Rp10.000 NETTO DAN ROI 2% NETTO** sesuai guideline; bila data modal/fee belum terbukti (dependency M06/M07), WAIT/REJECT. Target SELL **2/8/11% netto** tidak diubah dan tidak dieksekusi pada M04.
+
+**M04-V | Provider 3 model produksi, biaya dan keamanan**
+- [ ] **Konfigurasi provider sungguhan, bukan mock:** cocokkan ketersediaan/ID dan tarif terbaru tiga model Sumopod untuk MARKET, RISK, STRATEGY; mapping per-role yang bisa diubah tanpa mengubah kontrak, timeout, quota, max token, rate limit, retry terbatas, telemetry latency dan token/cost per role. Adapter `sumopod_provider.py` sudah CODED/mock PASS tetapi production orchestrator masih `caller=None`.
+- [ ] **GO terpisah untuk permintaan AI berbayar:** provider key aman di VPS (bukan GitHub/log), budget/limit harian dan izin owner eksplisit setelah G1 issuer dan bukti sumber benar-benar memenuhi kontrak. Jangan mengaktifkan paid requests dari env, test, atau proposal BUY sebelum gate PASS.
+- [ ] **Bukti tiga respons model nyata yang valid:** pada satu snapshot bersumber sah, catat MODEL/role/trace/schema/version, waktu, token dan biaya aktual; uji timeout, HTTP error, JSON rusak, mismatch digest, model unavailable dan cost cap → fail-closed tanpa order. Tidak mengklaim PASS menggunakan respons sintetis.
+
+**M04-W | Acceptance end-to-end M04 → handoff M05**
+- [ ] **Bukti jalur utama sekali, bukan runner paralel:** `--bulk-deep-once` → G1 source eligible/receipt → max-2 kandidat → MARKET → RISK → STRATEGY → hasil terstruktur, dengan RISK veto dan semua error source/AI berakhir REJECT. Persist evidence+decision di jurnal yang sudah ada; tidak mengirim order, Telegram belum menerima proposal executable.
+- [ ] **DONE M04 hanya setelah:** kode tersambung ke `DailyScalpingOrchestrator`, tes hanya cakupan perubahan PASS, bukti runtime sumber G1 tepercaya + provider tiga AI nyata tersedia, bukti konsistensi pair/candle dan veto teruji, ledger/checkpoint diperbarui. **Jika source issuer/panggilan provider masih terkunci, M04 tetap PARTIAL**, kemudian M05 tidak boleh disebut selesai. M01 GitHub Actions CI 0-step failure masih checklist terpisah, jangan diklaim PASS oleh tes VPS.
+
+**Acceptance normatif:** tepat tiga AI MARKET → RISK → STRATEGY, no fourth AI Final Decision, source-bound dan strict schemas, salah satu RISK veto/error/stale = REJECT, owner MANUAL/AUTO belum mengizinkan trade dalam M04. Tes mock dan local SHA/hash **bukan** bukti inferensi Sumopod nyata, sumber lengkap atau izin BUY.
 
 ### M05 — Final Binary + Telegram MANUAL/AUTO
 **Status: NOT_STARTED.**
