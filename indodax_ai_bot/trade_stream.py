@@ -621,19 +621,25 @@ def probe_official_public_ws(
     heartbeat_confirmed = False
     other_frames = 0
     timeout_reads = 0
+    # Stable, bounded failure-phase identifiers. Never disclose socket
+    # exception bodies, frames, or the public authorization token.
+    failure_phase = "CONNECT"
     try:
         ws = websocket.create_connection(WS_URL, timeout=5, enable_multithread=True)
         ws.settimeout(1.0)
+        failure_phase = "AUTH_SEND"
         ws.send(json.dumps({"params": {"token": PUBLIC_TOKEN}, "id": 1}))
         deadline = time.monotonic() + 8
         authenticated = False
         while time.monotonic() < deadline:
+            failure_phase = "AUTH_RECEIVE"
             try:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException:
                 continue
             if not isinstance(raw, str) or len(raw) > 512_000:
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+            failure_phase = "AUTH_DECODE"
             message = json.loads(raw)
             if isinstance(message, dict) and message.get("id") == 1:
                 if (not isinstance(message.get("result"), dict)
@@ -643,6 +649,7 @@ def probe_official_public_ws(
                 break
         if not authenticated:
             raise StreamEvidenceError("PUBLIC_WS_AUTH_TIMEOUT")
+        failure_phase = "SUBSCRIBE_PREPARE"
         subscribe_request = journal.subscription(pair)
         params = subscribe_request["params"]
         resume_requested = params.get("recover") is True
@@ -651,15 +658,18 @@ def probe_official_public_ws(
             not resume_requested
             and journal.status(pair)["stream_status"] == "GAP"
         )
+        failure_phase = "SUBSCRIBE_SEND"
         ws.send(json.dumps(subscribe_request))
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
+            failure_phase = "SUBSCRIBE_RECEIVE"
             try:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException:
                 continue
             if not isinstance(raw, str) or len(raw) > 512_000:
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+            failure_phase = "SUBSCRIBE_DECODE"
             msg = json.loads(raw)
             if isinstance(msg, dict) and msg.get("id") == 2:
                 result = msg.get("result")
@@ -671,6 +681,7 @@ def probe_official_public_ws(
                 server_replay_rows = len(replay)
                 server_ack_offset = result.get("offset")
                 server_ack_epoch = result.get("epoch")
+                failure_phase = "SUBSCRIBE_ACK"
                 subscription_state = journal.acknowledge(
                     pair, msg, fresh_segment=fresh_segment,
                 )
@@ -696,9 +707,11 @@ def probe_official_public_ws(
             raise StreamEvidenceError("PUBLIC_WS_SUBSCRIBE_TIMEOUT")
         # Documented WS method 7 heartbeat distinguishes a quiet channel
         # from a connection that cannot reply to control frames.
+        failure_phase = "HEARTBEAT_SEND"
         ws.send(json.dumps({"method": 7, "id": 3}))
         until = time.monotonic() + seconds
         while time.monotonic() < until:
+            failure_phase = "STREAM_RECEIVE"
             try:
                 raw = ws.recv()
             except websocket.WebSocketTimeoutException:
@@ -706,6 +719,7 @@ def probe_official_public_ws(
                 continue
             if not isinstance(raw, str) or len(raw) > 512_000:
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+            failure_phase = "STREAM_DECODE"
             msg = json.loads(raw)
             if not isinstance(msg, dict):
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SHAPE")
@@ -713,10 +727,12 @@ def probe_official_public_ws(
                 heartbeat_confirmed = True
             elif (isinstance(msg.get("result"), dict)
                     and msg["result"].get("channel") == channel_for_pair(pair)):
+                failure_phase = "STREAM_INGEST"
                 journal.ingest(pair, msg)
                 received += 1
             else:
                 other_frames += 1
+        failure_phase = "STREAM_STATUS"
         during_probe = journal.status(pair)
         if during_probe["stream_status"] == "GAP":
             # A final frame can reveal a gap without another frame arriving
@@ -730,6 +746,7 @@ def probe_official_public_ws(
             raise StreamEvidenceError("PUBLIC_WS_LIVE_COUNTER_INVALID")
         # This is a bounded probe, not a daemon. Report the persisted
         # post-close state truthfully rather than a stale ACTIVE snapshot.
+        failure_phase = "STREAM_FINALIZE"
         persisted = journal.mark_disconnected(pair)
         disconnect_recorded = True  # Cleanup state, NOT subscription ACK.
         return {
@@ -763,8 +780,9 @@ def probe_official_public_ws(
     except StreamEvidenceError:
         raise
     except Exception:
-        # No socket exception text or token in operator output/logs.
-        raise StreamEvidenceError("PUBLIC_WS_CONNECTION_OR_FRAME_FAILED") from None
+        # No exception text, URLs, raw frames, or tokens in logs/sidecar.
+        # Keep the failure fatal; only classify *where* it happened.
+        raise StreamEvidenceError("PUBLIC_WS_" + failure_phase + "_FAILED") from None
     finally:
         if ws is not None:
             try:
