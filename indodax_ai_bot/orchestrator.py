@@ -122,6 +122,7 @@ class CycleResult:
     ai_shadow: dict | None = None
     public_ws: dict | None = None
     public_research: dict | None = None
+    research_archive: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -184,6 +185,85 @@ class DailyScalpingOrchestrator:
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
             public_research=report,
+        )
+
+    def run_public_history_archive_cycle(
+        self, trace_id: str, *, pair: str = "btc_idr",
+        minutes: int = 360, windows: int = 4,
+        market: IndodaxPublicMarket | None = None,
+    ) -> CycleResult:
+        """M03-L: bounded sequential PUBLIC backfill, same journal, NO orders.
+
+        First invocation archives the latest windows. The next invocation
+        automatically continues from the OLDEST committed minute, not a
+        misleading new disconnected daily snapshot. Each exact 1m window
+        is checked and committed atomically; incomplete source stops safely.
+        """
+        if (not isinstance(pair,str) or not pair.endswith("_idr")
+                or type(minutes) is not int or not 90 <= minutes <= 360
+                or type(windows) is not int or not 1 <= windows <= 4):
+            raise ValueError("INVALID_PUBLIC_ARCHIVE_OPTIONS")
+        client = market if market is not None else IndodaxPublicMarket()
+        committed = []
+        failure = None
+        for _ in range(windows):
+            # Recompute from durable state after each successful commit.
+            # Replay after restart naturally resumes the first missing window.
+            anchor = self.journal.earliest_public_ohlc_epoch(pair)
+            try:
+                history = client.closed_1m_research_history(
+                    pair, minutes=minutes, end_epoch=anchor,
+                )
+                committed.append(self.journal.archive_public_ohlc_history(history))
+            except (PublicDataError, ValueError) as exc:
+                failure = str(exc)
+                break
+        summary = self.journal.public_ohlc_archive_summary(pair)
+        archive_history = None
+        try:
+            archive_history = self.journal.recent_contiguous_public_ohlc_history(
+                pair,max_minutes=4320,
+            )
+            research = (
+                evaluate_source_backed_candle_research(archive_history)
+                if archive_history is not None else None
+            )
+        except (PublicDataError, ValueError) as exc:
+            research = None
+            failure = failure or ("ARCHIVE_EVALUATION_INVALID:" + str(exc))
+        report = {
+            "stage": "M03L_DURABLE_PUBLIC_OHLC_HISTORY",
+            "status": ("PUBLIC_ARCHIVE_BACKFILL_INCOMPLETE"
+                       if failure else "PUBLIC_ARCHIVE_BATCH_ACCEPTED_UNATTESTED"),
+            "pair": pair,
+            "windows_requested": windows,
+            "windows_committed_this_call": len(committed),
+            "per_window_minutes": minutes,
+            "individual_batches": committed,
+            "archive_summary": summary,
+            "latest_contiguous_research": research,
+            "latest_contiguous_1m_rows": (
+                len(archive_history.candles) if archive_history is not None else 0
+            ),
+            "source_failure": failure,
+            "max_public_get_estimate": windows*3,
+            "other_ip_clients_rate_accounted_for": False,
+            "historical_ohlc_immutable_against_accidental_conflicts": True,
+            "exchange_signed_tape_or_origin_proven": False,
+            "g1_verified": False,
+            "out_of_sample_edge_validated": False,
+            "net_roi_verified": False,
+            "g2_candidate_authorized": False,
+            "execution_allowed": False,
+        }
+        reason = (
+            "PUBLIC_OHLC_ARCHIVE_BACKFILL_BLOCKED:" + failure
+            if failure else "PUBLIC_OHLC_ARCHIVE_UNATTESTED_NO_TRADE"
+        )
+        self.journal.record_reject(trace_id, reason)
+        return CycleResult(
+            trace_id, FinalDecision.REJECT, reason, False,
+            research_archive=report,
         )
 
     def run_scan_cycle(self, trace_id: str, *,
