@@ -136,6 +136,12 @@ def supervised_public_ws_batch(
             "last_publication_offset": public_state["last_publication_offset"],
             "persisted_publications": public_state["persisted_publications"],
             "stream_status": public_state["stream_status"],
+            "unrecoverable_gap_rebaseline_count": public_state["unrecoverable_gap_rebaseline_count"],
+            "fresh_retry_after_unrecoverable_gap_count": (
+                data.get("fresh_retry_after_unrecoverable_gap_count", 0)
+                if isinstance(data, dict) else 0
+            ),
+            "full_stream_continuity_proven": False,
             "g1_receipt_issuance_allowed": False,
             "g2_provider_call_allowed": False,
             "execution_allowed": False,

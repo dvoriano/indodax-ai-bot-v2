@@ -194,6 +194,8 @@ class PublicTradeStreamJournal:
                 (pair,),
             ).fetchone()
             if stored is None:
+                if fresh_segment:
+                    raise StreamEvidenceError("WS_FRESH_BASELINE_WITHOUT_RECORDED_GAP")
                 # The initial subscription only observes events AFTER its
                 # baseline offset. No earlier tape is ever considered covered.
                 if publications:
