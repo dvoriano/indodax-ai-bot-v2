@@ -741,7 +741,8 @@ def collect_official_public_ws(
             # ONE controlled fresh PUBLIC baseline retry after a *persisted*
             # GAP, preserving historical publications and recording the
             # discontinuity. No retries for transport/auth/other faults.
-            if (str(exc) == "WS_RECOVERY_GAP_UNRESOLVED"
+            if (str(exc) in ("WS_RECOVERY_GAP_UNRESOLVED",
+                                  "WS_STREAM_GAP_OR_EPOCH_CHANGED")
                     and journal.status(pair)["stream_status"] == "GAP"):
                 attempts_after_unrecoverable_gap += 1
                 try:
