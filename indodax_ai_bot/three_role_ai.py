@@ -300,6 +300,24 @@ class ThreeRoleShadow:
                                roles=roles, candidate_pair=source["pair"])
             validated.append(parsed)
             roles.append(role)
+            if role == "STRATEGY" and parsed["action"] == "BUY":
+                # M04-U: BOTH thresholds are mandatory for any prospective
+                # profitable entry, but estimates are NOT executable facts.
+                # M06 authenticated spendable balance and M07 fee/slippage
+                # preflight have not been connected. A synthetic signed G1
+                # receipt + positive model PnL must never become BUY-ready.
+                if (Decimal(parsed["projected_net_profit_idr"]) < Decimal("10000")
+                        or Decimal(parsed["projected_net_roi_percent"]) < Decimal("2")):
+                    return {
+                        **_reject("STRATEGY_BUY_NET_TARGET_UNMET", digest=digest,
+                                  roles=roles, candidate_pair=source["pair"]),
+                        "role_results": validated,
+                    }
+                return {
+                    **_reject("STRATEGY_BUY_PREFLIGHT_UNVERIFIED", digest=digest,
+                              roles=roles, candidate_pair=source["pair"]),
+                    "role_results": validated,
+                }
             if role == "RISK" and parsed["decision"] != "ALLOW":
                 return {
                     **_reject("RISK_VETO_" + parsed["decision"], digest=digest,
