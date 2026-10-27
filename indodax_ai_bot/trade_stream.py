@@ -14,6 +14,7 @@ from pathlib import Path
 import json
 import re
 import sqlite3
+import time
 from typing import Any
 
 WS_URL = "wss://ws3.indodax.com/ws/"
@@ -96,6 +97,18 @@ class PublicTradeStreamJournal:
                 payload_sha256 TEXT NOT NULL, rows_json TEXT NOT NULL,
                 PRIMARY KEY(pair, epoch, offset)
             )""")
+            # Append-only provenance of *unrecoverable* WS discontinuities.
+            # This is not an authentication receipt and never fills history.
+            con.execute("""CREATE TABLE IF NOT EXISTS ws_stream_discontinuities(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pair TEXT NOT NULL,
+                prior_epoch TEXT NOT NULL,
+                prior_offset INTEGER NOT NULL,
+                new_epoch TEXT NOT NULL,
+                new_offset INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                observed_at_epoch INTEGER NOT NULL
+            )""")
 
     @contextmanager
     def _connect(self):
@@ -110,11 +123,14 @@ class PublicTradeStreamJournal:
         channel = channel_for_pair(pair)
         with self._connect() as con:
             row = con.execute(
-                "SELECT epoch,last_offset FROM ws_stream_state WHERE pair=?", (pair,),
+                "SELECT epoch,last_offset,status FROM ws_stream_state WHERE pair=?" (pair,),
             ).fetchone()
         params: dict[str, Any] = {"channel": channel}
-        if row is not None:
+        if row is not None and row[2] != "GAP":
             params.update({"recover": True, "offset": row[1]})
+        # GAP cannot be silently replayed as continuous. The only allowed
+        # next subscription is a fresh public baseline recorded as a NEW
+        # discontinuous segment after verifying the server ACK.
         return {"method": 1, "params": params, "id": 2}
 
     def _advance(self, con, pair: str, epoch: str, offset: int, rows: list[list[Any]]) -> None:
@@ -152,7 +168,8 @@ class PublicTradeStreamJournal:
             (offset, pair),
         )
 
-    def acknowledge(self, pair: str, response: dict[str, Any]) -> dict[str, Any]:
+    def acknowledge(self, pair: str, response: dict[str, Any], *,
+                    fresh_segment: bool = False) -> dict[str, Any]:
         channel_for_pair(pair)
         # Response must correspond to subscription request id=2.
         if (not isinstance(response, dict) or response.get("id") != 2
@@ -168,6 +185,8 @@ class PublicTradeStreamJournal:
         publications = ack.get("publications", [])
         if not isinstance(publications, list):
             raise StreamEvidenceError("INVALID_WS_RECOVERED_PUBLICATIONS")
+        if fresh_segment and publications:
+            raise StreamEvidenceError("WS_FRESH_BASELINE_CANNOT_REPLAY")
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             stored = con.execute(
@@ -184,8 +203,28 @@ class PublicTradeStreamJournal:
                     (pair, epoch, offset),
                 )
             else:
-                old_epoch, old_offset, _ = stored
-                if old_epoch != epoch:
+                old_epoch, old_offset, old_status = stored
+                if fresh_segment:
+                    if old_status != "GAP":
+                        raise StreamEvidenceError("WS_FRESH_BASELINE_WITHOUT_RECORDED_GAP")
+                    if epoch == old_epoch and offset <= old_offset:
+                        raise StreamEvidenceError("WS_FRESH_BASELINE_NONMONOTONIC")
+                    con.execute(
+                        "INSERT INTO ws_stream_discontinuities "
+                        "(pair,prior_epoch,prior_offset,new_epoch,new_offset,"
+                        "reason,observed_at_epoch) VALUES (?,?,?,?,?,?,?)",
+                        (pair,old_epoch,old_offset,epoch,offset,
+                         "UNRECOVERABLE_WS_GAP_REBASELINED",int(time.time())),
+                    )
+                    # Keep all historical publications. The missing interval
+                    # stays explicit in ws_stream_discontinuities; any new
+                    # samples remain UNATTESTED and non-exhaustive.
+                    con.execute(
+                        "UPDATE ws_stream_state SET epoch=?,last_offset=?,"
+                        "status='BASELINE_ONLY' WHERE pair=?",
+                        (epoch,offset,pair),
+                    )
+                elif old_epoch != epoch:
                     con.execute(
                         "UPDATE ws_stream_state SET status='GAP' WHERE pair=?", (pair,),
                     )
@@ -215,6 +254,14 @@ class PublicTradeStreamJournal:
                                     raise StreamEvidenceError("WS_RESUME_BOUNDARY_COLLISION")
                                 continue
                             self._advance(con, pair, epoch, off, rows)
+                            # A replay with missing offsets must COMMIT GAP;
+                            # continuing would raise and roll back the marker,
+                            # disguising the gap as DISCONNECTED.
+                            if con.execute(
+                                "SELECT status FROM ws_stream_state WHERE pair=?",
+                                (pair,),
+                            ).fetchone()[0] == "GAP":
+                                break
                         latest = con.execute(
                             "SELECT last_offset,status FROM ws_stream_state WHERE pair=?",
                             (pair,),
@@ -445,10 +492,17 @@ class PublicTradeStreamJournal:
             count = con.execute(
                 "SELECT COUNT(*) FROM ws_trade_publications WHERE pair=?", (pair,),
             ).fetchone()[0]
+        with self._connect() as con:
+            gap_count = con.execute(
+                "SELECT COUNT(*) FROM ws_stream_discontinuities WHERE pair=?",
+                (pair,),
+            ).fetchone()[0]
         return {
             "pair": pair,
             "channel": channel_for_pair(pair),
             "stream_status": state[2] if state else "UNSUBSCRIBED",
+            "unrecoverable_gap_rebaseline_count": gap_count,
+            "continuous_trade_tape_not_proven": True,
             "stream_epoch": state[0] if state else None,
             "last_publication_offset": state[1] if state else None,
             "persisted_publications": count,
@@ -524,6 +578,10 @@ def probe_official_public_ws(
         params = subscribe_request["params"]
         resume_requested = params.get("recover") is True
         resume_requested_offset = params.get("offset")
+        fresh_segment = (
+            not resume_requested
+            and journal.status(pair)["stream_status"] == "GAP"
+        )
         ws.send(json.dumps(subscribe_request))
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -544,7 +602,11 @@ def probe_official_public_ws(
                 server_replay_rows = len(replay)
                 server_ack_offset = result.get("offset")
                 server_ack_epoch = result.get("epoch")
-                subscription_state = journal.acknowledge(pair, msg)
+                subscription_state = journal.acknowledge(
+                    pair, msg, fresh_segment=fresh_segment,
+                )
+                if subscription_state["stream_status"] == "GAP":
+                    raise StreamEvidenceError("WS_RECOVERY_GAP_UNRESOLVED")
                 publications_after_ack = journal.read_count(pair)
                 recovered_new_publications = publications_after_ack - publications_at_start
                 if recovered_new_publications < 0:
@@ -606,6 +668,8 @@ def probe_official_public_ws(
             "publications_persisted_after_subscription": publications_after_ack,
             "resume_requested": resume_requested,
             "resume_requested_offset": resume_requested_offset,
+            "fresh_discontinuous_segment": fresh_segment,
+            "unrecoverable_gap_rebaseline_count": persisted["unrecoverable_gap_rebaseline_count"],
             "server_ack_epoch": server_ack_epoch,
             "server_ack_offset": server_ack_offset,
             "server_replayed_publication_frames": server_replay_rows,
@@ -664,6 +728,7 @@ def collect_official_public_ws(
     total_recovered = 0
     total_live = 0
     safe_count = 0
+    attempts_after_unrecoverable_gap = 0
     attempted = 0
     halted_reason: str | None = None
     for index in range(sessions):
@@ -673,10 +738,26 @@ def collect_official_public_ws(
         try:
             result = session_probe(journal, pair=pair, seconds=session_seconds)
         except StreamEvidenceError as exc:
-            # Only stable internal error codes. Never log socket exception
-            # text, account credentials or upstream response bodies.
-            halted_reason = "WS_SESSION_REJECTED:" + str(exc)
-            break
+            # ONE controlled fresh PUBLIC baseline retry after a *persisted*
+            # GAP, preserving historical publications and recording the
+            # discontinuity. No retries for transport/auth/other faults.
+            if (str(exc) == "WS_RECOVERY_GAP_UNRESOLVED"
+                    and journal.status(pair)["stream_status"] == "GAP"):
+                attempts_after_unrecoverable_gap += 1
+                try:
+                    result = session_probe(
+                        journal, pair=pair, seconds=session_seconds,
+                    )
+                except StreamEvidenceError as retry_exc:
+                    halted_reason = "WS_SESSION_REJECTED:" + str(retry_exc)
+                    break
+                except Exception:
+                    halted_reason = "WS_SESSION_UNAVAILABLE"
+                    break
+            else:
+                # Never log raw transport exception text/secret bodies.
+                halted_reason = "WS_SESSION_REJECTED:" + str(exc)
+                break
         except Exception:
             halted_reason = "WS_SESSION_UNAVAILABLE"
             break
@@ -696,6 +777,7 @@ def collect_official_public_ws(
             "persisted_stream_status": result.get("stream_status"),
             "resume_requested": result.get("resume_requested"),
             "resume_requested_offset": result.get("resume_requested_offset"),
+            "fresh_discontinuous_segment": result.get("fresh_discontinuous_segment") is True,
             "recovery_diagnostic": result.get("recovery_diagnostic"),
             "server_replayed_publication_frames": result.get("server_replayed_publication_frames"),
             "recovered_publications_newly_persisted": result.get("recovered_publications_newly_persisted"),
@@ -735,6 +817,9 @@ def collect_official_public_ws(
         "completed_safe_sessions": safe_count,
         "attempted_sessions": attempted,
         "total_recovered_publications_newly_persisted": total_recovered,
+        "fresh_retry_after_unrecoverable_gap_count": attempts_after_unrecoverable_gap,
+        "unrecoverable_gap_rebaseline_count": persisted["unrecoverable_gap_rebaseline_count"],
+        "full_stream_continuity_proven": False,
         "total_live_publications_newly_persisted": total_live,
         "last_publication_offset": persisted["last_publication_offset"],
         "persisted_publications": persisted["persisted_publications"],
