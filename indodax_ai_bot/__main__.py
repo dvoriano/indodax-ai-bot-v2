@@ -11,6 +11,7 @@ from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
 from .public_ws_health import public_ws_health
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
+from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,10 +47,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
+    parser.add_argument("--sumopod-shadow", action="store_true",
+                        help="Connect configured Sumopod adapter to PUBLIC bulk shadow; paid network OFF, G1 still untrusted")
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_env()
+        # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
+        # Sumopod adapter from protected process environment. It is always
+        # payment-disabled at this milestone and public G1 cannot qualify it.
+        if args.sumopod_shadow and not args.bulk_deep_once:
+            raise ConfigurationError("SUMOPOD_SHADOW_REQUIRES_BULK_DEEP_ONCE")
+        provider = (
+            SumopodChatAdapter.configured_from_env()
+            if args.sumopod_shadow else None
+        )
         if args.public_ws_unit_status:
             # No DecisionJournal, no systemctl state change, and no network.
             settings.require_m01_safety()
@@ -79,7 +91,9 @@ def main(argv: list[str] | None = None) -> int:
                 "live_trading_authorized": False,
             }, sort_keys=True))
             return 0 if report["last_batch_recent_and_consistent"] is True else 3
-        app = DailyScalpingOrchestrator(settings, DecisionJournal(args.db))
+        app = DailyScalpingOrchestrator(
+            settings, DecisionJournal(args.db), ai_role_caller=provider,
+        )
         if args.health:
             result = app.health()
         else:
@@ -126,6 +140,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.bulk_deep_once:
                 result["public_bulk"] = outcome.bulk
                 result["ai_shadow"] = outcome.ai_shadow
+                # Never show API credentials, request/response bodies or
+                # transport internals; readiness is not provider inference.
+                result["sumopod_shadow"] = {
+                    "configured": provider is not None,
+                    "paid_network_allowed": False,
+                    "g1_issuer_connected": False,
+                    "role_usage_events": len(provider.usage_events) if provider else 0,
+                }
                 result["bulk_probe_status"] = (
                     "PUBLIC_BULK_BLOCKED" if outcome.bulk is None
                     else "PUBLIC_BULK_UNATTESTED"
@@ -171,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.public_ws_supervised_once and outcome.reason == "PUBLIC_WS_SUPERVISION_INTERRUPTED":
             return 3
         return 0
-    except (ConfigurationError, OSError, ValueError) as exc:
+    except (ConfigurationError, OSError, ValueError, SumopodProviderError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2
 
