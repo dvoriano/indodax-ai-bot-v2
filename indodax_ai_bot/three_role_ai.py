@@ -7,6 +7,7 @@ Public M03-I evidence remains untrusted: an injected caller MUST NOT run.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
@@ -67,9 +68,83 @@ class ThreeRoleShadow:
         # No verifier is wired from production public market or env flags.
         self._source_verifier = source_verifier
 
+    def _run_two_candidates(self, trace_id: str, bulk: dict[str, Any],
+                            preview: list[str]) -> dict[str, Any]:
+        """M04-T: two *independently* source-bound candidates, shadow only.
+
+        Preflight BOTH receipt+digest pairs before ANY injected model call, so
+        a valid first candidate cannot trigger billable work if the second
+        lacks a trustworthy issuer. Public G1 never passes this gate.
+        """
+        if (len(preview) != 2 or any(not isinstance(p, str) for p in preview)
+                or len(set(preview)) != 2):
+            return _reject("INVALID_SOURCE_COHORT_SHAPE")
+        if any(bulk.get(k) is not True for k in (
+                "g1_verified", "source_trust_verified", "trade_history_complete")):
+            return _reject("G1_PUBLIC_EVIDENCE_UNTRUSTED")
+        receipts = bulk.get("g1_attestations")
+        if not isinstance(receipts, dict) or set(receipts) != set(preview):
+            return _reject("G1_ISSUER_RECEIPT_UNVERIFIED")
+        now = int(self._clock())
+        isolated = []
+        for pair in preview:
+            item = deepcopy(bulk)
+            item["eligible_cohort"]["provisional_watchlist_preview"] = [pair]
+            item["g1_attestation"] = receipts[pair]
+            # Never forward another candidate's private issuer claim.
+            item.pop("g1_attestations", None)
+            isolated.append(item)
+        preflight = ThreeRoleShadow(
+            caller=None, clock=lambda: now, source_verifier=self._source_verifier,
+        )
+        verified = []
+        for pair, item in zip(preview, isolated):
+            result = preflight.run(trace_id, item)
+            if result["reason"] != "M04_PROVIDER_NOT_CONFIGURED":
+                return _reject(
+                    result["reason"], digest=result.get("source_digest_sha256"),
+                    candidate_pair=pair,
+                )
+            verified.append(result["source_digest_sha256"])
+        if self._caller is None:
+            return _reject("M04_PROVIDER_NOT_CONFIGURED")
+        reports = []
+        for pair, item, digest in zip(preview, isolated, verified):
+            result = ThreeRoleShadow(
+                caller=self._caller, clock=lambda: now,
+                source_verifier=self._source_verifier,
+            ).run(trace_id, item)
+            # No receipt, digest, pair, or prior-role results may migrate
+            # between independently processed candidates.
+            reports.append({
+                "pair": pair,
+                "evidence_digest_sha256": digest,
+                "reason": result["reason"],
+                "completed_roles": result["completed_roles"],
+                "role_results": result["role_results"],
+            })
+        result = _reject("M04_TWO_CANDIDATE_SHADOW_ONLY")
+        result["candidate_reports"] = reports
+        result["candidate_count"] = 2
+        result["source_digests_by_pair"] = dict(zip(preview, verified))
+        result["completed_role_calls"] = sum(
+            len(x["completed_roles"]) for x in reports
+        )
+        # Even synthetic signed receipts and six model-shaped responses
+        # cannot authorize Final PASS or execution in this milestone.
+        return result
+
     def run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(trace_id, str) or not trace_id.strip():
             return _reject("INVALID_TRACE_ID")
+        if (isinstance(bulk, dict)
+                and isinstance(bulk.get("eligible_cohort"), dict)
+                and isinstance(bulk["eligible_cohort"].get("provisional_watchlist_preview"), list)
+                and len(bulk["eligible_cohort"]["provisional_watchlist_preview"]) == 2):
+            return self._run_two_candidates(
+                trace_id, bulk,
+                bulk["eligible_cohort"]["provisional_watchlist_preview"],
+            )
         if not isinstance(bulk, dict) or not isinstance(bulk.get("eligible_cohort"), dict):
             return _reject("MISSING_SOURCE_COHORT")
         cohort = bulk["eligible_cohort"]
