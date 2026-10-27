@@ -14,6 +14,7 @@ from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner
 from .deep_analysis import deep_scan, bulk_public_deep_scan
 from .three_role_ai import ThreeRoleShadow
+from .source_coverage import assess_public_ws_btc_for_g1
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
 
@@ -293,6 +294,15 @@ class DailyScalpingOrchestrator:
             result["btc_rest_ws_observability"] = _btc_rest_ws_observability(
                 result.get("btc_public_rest_visible_minute_sample"),
                 result.get("btc_ws_closed_minute_sample"),
+            )
+            # M04-R: attach the observed WS gap/coverage rejection to the
+            # EXISTING G1 source admission rather than a separate scanner.
+            # All source/provenance, G2 and execution authority stays false.
+            result["g1_source_admission"]["btc_ws_source_quality"] = (
+                assess_public_ws_btc_for_g1(
+                    result.get("btc_ws_closed_minute_sample"),
+                    result.get("btc_rest_ws_observability"),
+                )
             )
         # One G2 boundary, in the already accepted bulk mainpath. No provider
         # object is configured, no billable requests, no trading permission.
