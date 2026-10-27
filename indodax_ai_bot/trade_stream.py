@@ -123,7 +123,8 @@ class PublicTradeStreamJournal:
         channel = channel_for_pair(pair)
         with self._connect() as con:
             row = con.execute(
-                "SELECT epoch,last_offset,status FROM ws_stream_state WHERE pair=?" (pair,),
+                "SELECT epoch,last_offset,status FROM ws_stream_state WHERE pair=?",
+                (pair,),
             ).fetchone()
         params: dict[str, Any] = {"channel": channel}
         if row is not None and row[2] != "GAP":
@@ -756,8 +757,9 @@ def collect_official_public_ws(
             # ONE controlled fresh PUBLIC baseline retry after a *persisted*
             # GAP, preserving historical publications and recording the
             # discontinuity. No retries for transport/auth/other faults.
-            if (str(exc) in ("WS_RECOVERY_GAP_UNRESOLVED",
-                                  "WS_STREAM_GAP_OR_EPOCH_CHANGED")
+            if (attempts_after_unrecoverable_gap == 0
+                    and str(exc) in ("WS_RECOVERY_GAP_UNRESOLVED",
+                                     "WS_STREAM_GAP_OR_EPOCH_CHANGED")
                     and journal.status(pair)["stream_status"] == "GAP"):
                 attempts_after_unrecoverable_gap += 1
                 try:
