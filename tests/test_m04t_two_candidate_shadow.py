@@ -132,7 +132,10 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         result = ThreeRoleShadow(
             caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
         ).run("trace", bulk)
-        self.assertEqual(result["reason"], "PREVIEW_HAS_UNRESOLVED_QUALITY_CAUTION")
+        # The shared quality-review evidence is part of BOTH pair digests.
+        # Mutating one review after signing invalidates the first issuer
+        # receipt as well, so the entire batch fails before any caller.
+        self.assertEqual(result["reason"], "G1_ISSUER_RECEIPT_UNVERIFIED")
         caller.assert_not_called()
 
     def test_risk_veto_prevents_strategy_on_each_pair(self):
