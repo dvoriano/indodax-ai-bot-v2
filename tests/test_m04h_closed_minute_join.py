@@ -41,6 +41,18 @@ def prepared_journal(path: Path):
     return journal
 
 
+def prepared_rest_matched_journal(path: Path):
+    """Fixture REST closes at MINUTE; its WS minute begins MINUTE-60."""
+    j = PublicTradeStreamJournal(path)
+    j.acknowledge("btc_idr", ack(100))
+    start = MINUTE - 60
+    j.ingest("btc_idr", sample_frame(101, start+4, "buy", "1000"))
+    j.ingest("btc_idr", sample_frame(102, start+30, "sell", "2500"))
+    j.ingest("btc_idr", sample_frame(103, MINUTE+4, "buy", "9000"))
+    j.mark_disconnected("btc_idr")
+    return j
+
+
 class M04HClosedMinuteTests(unittest.TestCase):
     def test_closed_minute_aggregates_only_matching_trade_rows(self):
         with TemporaryDirectory() as td:
@@ -128,7 +140,7 @@ class M04HClosedMinuteTests(unittest.TestCase):
     def test_bulk_mainpath_opt_in_ws_join_preserves_final_reject_and_g1_untrusted(self):
         with TemporaryDirectory() as td:
             ws_db = Path(td) / "ws.sqlite3"
-            prepared_journal(ws_db)
+            prepared_rest_matched_journal(ws_db)
             output = StringIO()
             with patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scanner:
                 scanner.return_value.scan.return_value = fake_screen()
@@ -145,7 +157,7 @@ class M04HClosedMinuteTests(unittest.TestCase):
             result = json.loads(output.getvalue())
             self.assertEqual(rc, 0)
             joined = result["public_bulk"]["btc_ws_closed_minute_sample"]
-            self.assertEqual(joined["closed_1m_epoch"], MINUTE)
+            self.assertEqual(joined["closed_1m_epoch"], MINUTE-60)
             self.assertEqual(joined["trade_rows_visible_in_minute"], 2)
             self.assertFalse(joined["minute_trade_coverage_complete"])
             self.assertFalse(result["public_bulk"]["g1_verified"])
