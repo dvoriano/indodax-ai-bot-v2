@@ -18,7 +18,7 @@
 | **M04-Q VERIFIED, LIMITS RETAINED** | Gap ledger and WS minute source check are wired into existing `PublicTradeStreamJournal.closed_minute_sample` and `orchestrator._btc_rest_ws_observability`. Six cross-gap/rebaseline/corrupt ledger/mainpath tests PASS plus eight affected M04-H PASS in VPS, source rejection remains visible. The one real public sample was EMPTY, so a real cross-gap minute was NOT observed; synthetic tests establish the rejection branch only. No certified trade tape, G1 issuer, Sumopod paid AI permission, or trades. |
 | **SAFETY** | Only public BTC/IDR collection has operator GO. At every layer, `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT. G1 not authenticated, AI MARKET/RISK/STRATEGY paid provider not called, private Indodax API and orders OFF. V1 untouched. |
 
-**New chat:** Source of truth docs/PROJECT_GUIDELINE.md (normative policy) and docs/ROADMAP.md (single canonical execution ledger), repo dvoriano/indodax-ai-bot-v2 main; V1 untouched. User VPS at detached SHA `f2aabf7` ACCEPTED M04-V persistent budget guard: 7/7 new + 5/5 affected = 12/12 PASS, 0.097s+0.003s, SQLite worst-case micro-USD reserve atomic across restarts/processes, no refund on transport failure, Jakarta-day; NO real provider charges or default daily USD limit. Prior M04-V call cap 16/16, opt-in CLI4/4, M04-S verifier seam4/4, M04-U33/33, M04-T26/26, M04-R real public safe G1 rejection accepted, no re-tests. Official Indodax REST documents OHLC/ticker/depth + recent trade list, WS `recover` epoch/offset but does NOT document full trade tape window attestation/guaranteed complete backfill. Thus qualified complete trade tape/exchange-signed issuer remains a hard blocker per guideline. One next action: owner source-policy decision, A source with independently provable full coverage, B explicitly amend guideline to use bounded closed-candle + limited WS flow under downgraded trust (not full tape), risk veto/NO TRADE and owner GO. DO NOT amend policy silently or set `trade_history_complete/g1_verified` true from public partial data. Paid Sumopod actual MARKET/RISK/STRATEGY NOT executed, no owner budget/verified vendor price. Runtime Final REJECT, no orders, trading OFF. Avoid more tests/WS loops or creating another status doc.
+**New chat:** Source of truth docs/PROJECT_GUIDELINE.md (normative policy) and docs/ROADMAP.md (single canonical execution ledger), repo dvoriano/indodax-ai-bot-v2 main; V1 untouched. User VPS at detached SHA `f2aabf7` ACCEPTED M04-V persistent budget guard: 7/7 new + 5/5 affected = 12/12 PASS, 0.097s+0.003s, SQLite worst-case micro-USD reserve atomic across restarts/processes, no refund on transport failure, Jakarta-day; NO real provider charges or default daily USD limit. Prior M04-V call cap 16/16, opt-in CLI4/4, M04-S verifier seam4/4, M04-U33/33, M04-T26/26, M04-R real public safe G1 rejection accepted, no re-tests. Official Indodax REST documents OHLC/ticker/depth + recent trade list, WS `recover` epoch/offset but does NOT document full trade tape window attestation/guaranteed complete backfill. Thus qualified complete trade tape/exchange-signed issuer remains a hard blocker per guideline. One next action: owner source-policy decision, A source with independently provable full coverage, B explicitly amend guideline to use bounded closed-candle + limited WS flow under downgraded trust (not full tape), risk veto/NO TRADE and owner GO. DO NOT amend policy silently or set `trade_history_complete/g1_verified` true from public partial data. Paid Sumopod actual MARKET/RISK/STRATEGY NOT executed, no owner budget/verified vendor price. Runtime Final REJECT, no orders, trading OFF. **M01 functional foundation DONE/TESTED_OFFLINE** based on historical 7/7 local PASS, separate from M10 CI/Release BLOCKED_EXTERNAL: 236/236 failed workflow runs, #236 attempt2 also zero-step, 0ms. M10 requires CI success or verified equivalent automatic validation before LIVE M11; no current CI PASS and no active M01 CI blocker. No retests or runtime changes from this tracker cleanup. Avoid more tests/WS loops or creating another status doc.
 
 ## 2. LEGENDA CHECKLIST & BUKTI
 
@@ -41,20 +41,18 @@
 - [x] Tracker roadmap tunggal ini dipisahkan dari policy guideline atas permintaan owner.
 **Bukti:** [guideline](PROJECT_GUIDELINE.md), [agent rules](../AGENTS.md), [README](../README.md). Tidak ada eksekusi Indodax.
 
-### M01 — Python runtime foundation (kode sudah ada, verifikasi belum lengkap)
-**Status: PARTIAL, TESTED_OFFLINE menurut bukti lokal pada guideline.**
-- [x] Paket Python dan entrypoint python -m indodax_ai_bot dibuat; file pyproject.toml.
-- [x] Konfigurasi Settings default MANUAL / NO / NO / DRY_RUN dengan pengaktifan LIVE ditolak pada M01.
+### M01 — Python runtime foundation (cakupan fondasi selesai)
+**Status: DONE untuk cakupan fungsional M01; tingkat bukti TESTED_OFFLINE, bukan CI PASS, bukan VERIFIED_LIVE.**
+- [x] Paket Python, entrypoint `python -m indodax_ai_bot` dan `pyproject.toml` tersedia.
+- [x] Konfigurasi Settings default MANUAL / NO / NO / DRY_RUN dengan LIVE tetap ditolak.
 - [x] Kontrak SourceReceipt, MarketSnapshot, RiskVeto, TradeProposal, OwnerDecision, ExecutionIntent, OrderState, Fill, PositionLot.
-- [x] ScalpingPolicy dibuat dengan batas BUY minimum dan SELL tier 2/8/11% netto.
-- [x] SQLite DecisionJournal mencatat REJECT idempotent, unik per trace, restart persistence.
-- [x] Satu DailyScalpingOrchestrator tersambung ke CLI → Journal, fail-closed tanpa sumber G1.
-- [x] Tes lokal 7/7, compile, --once dan --health dicatat PASS pada guideline; **bukan bukti CI/VPS**.
-- [x] File CI GitHub Actions dibuat dan tersimpan di repository.
-- [ ] **GitHub Actions CI sukses (BELUM):** API GitHub diperiksa 27 Okt 2026: **236/236 workflow runs #1–#236 `failure`** sejak 26 Okt; run pertama `40296427169`, terbaru `40537502225` SHA `72bf601f`, workflow `.github/workflows/ci.yml` ada (`ubuntu-latest`, push/PR, compile/unittest/safe CLI). Satu rerun nyata oleh asisten untuk job #122306608384 diterima API (`success=true`), menghasilkan **attempt #2** pada run #236 dengan job baru **#122310208442** tetapi kembali `failure`, `steps=[]` dan log 404 BlobNotFound. Usage timing resmi run #236: **0 ms billable Ubuntu** pada KEDUA job/attempt (`/actions/runs/40537502225/timing`). Ini bukti **bukan tes Python yang gagal**, runner bahkan tidak mulai; spesifik penyebab billing/entitlement/repo policy belum terbukti dan pengaturan akun tidak tersedia via GitHub connector. **No CI YAML code change indicated**; periksa milik owner Settings→Billing and licensing→Budgets and alerts (Actions budget/stop usage/payment) serta repository Settings→Actions→General (allowed actions/runner). Jangan naikkan spending tanpa owner approval. Jika tidak ada pembatasan terlihat, GitHub Support dengan run ID + attempt2/0ms; **M01 CI PASS tetap terbuka** sampai satu real job dengan langkah compile/test sukses.
-- [x] **M01 CI failure scope TRIAGED and bounded retrigger attempted:** 236 run ditelusuri dari Actions REST, 236 gagal. Re-run job #122306608384 once via GitHub connected app, run #236 attempt2 job #122310208442 again failure before any steps. `/timing`: 0ms runner across 2 attempts. No M01 Python tests rerun locally, no CI YAML edited. Root cause remains account/repository-level eligibility or platform admission, requires GitHub owner billing/settings UI or Support evidence.
-- [ ] M01 memiliki bukti eksekusi lewat runner CI (belum); tidak perlu mengulang tes lokal yang sudah diterima tanpa perubahan fungsional.
-**Bukti kode:** [commit b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d), [test file](../tests/test_m01_foundation.py). **Batas:** belum ada scanner, AI, akun, Telegram, orders. M01 bukan VERIFIED_LIVE.
+- [x] ScalpingPolicy: syarat BUY minimum dan tier SELL 2% / 8% / 11% netto.
+- [x] SQLite DecisionJournal REJECT idempotent, unik per trace, persisten setelah restart.
+- [x] Satu DailyScalpingOrchestrator terhubung CLI → Journal, aman REJECT tanpa G1.
+- [x] Menurut bukti historis guideline: 7/7 tes lokal, compile, `--once` dan `--health` PASS. **Ini hanya TESTED_OFFLINE; tidak diklaim sebagai runner CI PASS.**
+- [x] File workflow `.github/workflows/ci.yml` dibuat; **operasional runner/CI dipindahkan ke M10 dan release gate M11**, bukan pekerjaan fondasi M01 yang terus diulang.
+
+**Bukti awal M01:** [commit b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d), [tes fondasi](../tests/test_m01_foundation.py). Saat fondasi awal diterima, scanner, AI, akun, Telegram dan order BELUM tercakup M01; masing-masing memiliki milestone lanjutan sendiri. **M01 DONE tidak berarti keseluruhan bot siap LIVE.**
 
 ### M02 — Public Indodax Market Data & Source Trust (PUBLIC OBSERVATION ACCEPTED)
 - [x] SSH ED25519 khusus V2 dibuat di VPS dan public key dikeluarkan (fingerprint tertera di checkpoint); **tidak termasuk bukti akses GitHub**.
@@ -247,7 +245,7 @@
 
 **M04-W | Acceptance end-to-end M04 → handoff M05**
 - [ ] **Bukti jalur utama sekali, bukan runner paralel:** `--bulk-deep-once` → G1 source eligible/receipt → max-2 kandidat → MARKET → RISK → STRATEGY → hasil terstruktur, dengan RISK veto dan semua error source/AI berakhir REJECT. Persist evidence+decision di jurnal yang sudah ada; tidak mengirim order, Telegram belum menerima proposal executable.
-- [ ] **DONE M04 hanya setelah:** kode tersambung ke `DailyScalpingOrchestrator`, tes hanya cakupan perubahan PASS, bukti runtime sumber G1 tepercaya + provider tiga AI nyata tersedia, bukti konsistensi pair/candle dan veto teruji, ledger/checkpoint diperbarui. **Jika source issuer/panggilan provider masih terkunci, M04 tetap PARTIAL**, kemudian M05 tidak boleh disebut selesai. M01 GitHub Actions CI 0-step failure masih checklist terpisah, jangan diklaim PASS oleh tes VPS.
+- [ ] **DONE M04 hanya setelah:** kode tersambung ke `DailyScalpingOrchestrator`, tes hanya cakupan perubahan PASS, bukti runtime sumber G1 tepercaya + provider tiga AI nyata tersedia, bukti konsistensi pair/candle dan veto teruji, ledger/checkpoint diperbarui. **Jika source issuer/panggilan provider masih terkunci, M04 tetap PARTIAL**, kemudian M05 tidak boleh disebut selesai. GitHub Actions 0-step failure dilacak sebagai M10 release validation blocker, bukan blocker fondasi M01; tes VPS bukan CI PASS.
 
 **Acceptance normatif:** tepat tiga AI MARKET → RISK → STRATEGY, no fourth AI Final Decision, source-bound dan strict schemas, salah satu RISK veto/error/stale = REJECT, owner MANUAL/AUTO belum mengizinkan trade dalam M04. Tes mock dan local SHA/hash **bukan** bukti inferensi Sumopod nyata, sumber lengkap atau izin BUY.
 
@@ -309,8 +307,9 @@
 **Acceptance:** satu vertical slice realistis teruji; semua order actual OFF.
 
 ### M10 — VPS Online Monitoring, CI & Operational Release
-**Status: NOT_STARTED; CI awal punya hambatan tercatat.**
-- [ ] Selesaikan kegagalan GitHub Actions 0-step secara terarah; dapatkan pemeriksaan CI hijau dan catat bukti.
+**Status: PARTIAL (diagnosis CI terdokumentasi; penerapan CI/operasional release belum diterima).**
+- [x] **GitHub Actions 0-step ditriase, bukan diperbaiki:** sejak run #1 s.d. #236, 236/236 berstatus `failure`. Pada [run #236](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40537502225) attempt #1 dan rerun terarah attempt #2 (job #122310208442), job `m01` gagal sebelum satu pun step dijalankan; runner tercatat 0 ms dan log 404. Penyebab spesifik (billing/quota, izin Actions/runner atau masalah platform) **belum terverifikasi**. Bukan bukti tes Python gagal.
+- [ ] **BLOCKED_EXTERNAL | CI/validasi release:** periksa Actions permissions dan Billing/Budgets akun pemilik; jangan ubah batas pembayaran tanpa izin. Dapatkan minimal satu GitHub Actions run `success` dengan langkah compile/test sungguhan, **atau** mekanisme CI/validasi otomatis setara yang independen, terdokumentasi, dapat diaudit dan benar-benar PASS sebelum release uang nyata. Bukti VPS scoped manual tetap dapat dipakai untuk pengembangan/staging, tetapi tidak diberi label `CI PASS`. Jangan mengulang 236 run, dan jangan mengulang tes lokal accepted yang tak berubah.
 - [ ] VPS isolated dari bot lama, clone pinned SHA, runtime env secrets terpisah, service systemd tunggal.
 - [ ] Connect public market, tiga AI jika diizinkan dan Telegram secara online; send owner-safe research dan health.
 - [ ] Verify service startup, restart, heartbeat, Telegram authorization, error logs redacted, uptime/latency.
@@ -320,6 +319,7 @@
 
 ### M11 — LIVE Readiness / Risk Release Gate
 **Status: NOT_STARTED.**
+- [ ] **Release validation gate:** sebelum LIVE, penuhi checklist CI hijau atau pengganti validasi otomatis setara dari M10, dengan bukti job/tes yang benar-benar selesai PASS. Kegagalan runner eksternal tidak menghalangi pengembangan, tetapi tidak boleh dihapus sebagai prasyarat release tanpa bukti pengganti.
 - [ ] Verifikasi G1 provenance issuer + full market evidence dan risk permissions (tidak bisa diubah flag saja).
 - [ ] Verifikasi fresh authenticated account cutoff/reserves/liabilities, position ownership dan spendable MAIN.
 - [ ] Rotasi kredensial lama yang pernah terekspos, validasi scopes, no secrets in Git.
@@ -345,8 +345,8 @@
 | Milestone | SHA / sumber | Bukti diterima | Belum dibuktikan |
 | --- | --- | --- | --- |
 | M00 | Dokumen guideline, AGENTS, README yang committed pada main | Kebijakan, Iron Rules dan roadmap spesifikasi tersedia | Bot trading LIVE |
-| M01 | [b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d); [tests/test_m01_foundation.py](../tests/test_m01_foundation.py) | Menurut guideline: 7/7 tes lokal, compile, CLI --once/--health PASS; orchestrator+SQLite memproduksi REJECT fail-closed | GitHub runner CI, sumber pasar asli, 3 AI, real execution |
-| M01 CI | [run 40297122063](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40297122063) | Dikonfirmasi job gagal sebelum menjalankan langkah apa pun (0 steps) | Alasan runner/workflow failure, CI PASS |
+| M01 FUNCTIONAL DONE / TESTED_OFFLINE | [b73511e3](https://github.com/dvoriano/indodax-ai-bot-v2/commit/b73511e38ec863bdc92618426a15e8e54371454d); [tests/test_m01_foundation.py](../tests/test_m01_foundation.py) | Menurut guideline: 7/7 tes lokal, compile, CLI --once/--health PASS; orchestrator+SQLite fail-closed REJECT | CI bukan syarat fungsional M01; bukti lebih tinggi dan kapabilitas bot masih dalam milestone masing-masing |
+| M10 CI / RELEASE BLOCKED_EXTERNAL | [run #236 attempt 2](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/40537502225) | 236 run gagal sejak awal; attempt #1 dan #2 run #236 berhenti 0 step/0 ms runner; penyebab eksternal spesifik belum terbukti. | Perbaiki runner atau buktikan alternatif validasi otomatis setara sebelum LIVE (M11); jangan klaim CI PASS sekarang |
 | M02 CODED | `public_market.py`, `orchestrator.py`, `__main__.py`, `journal.py`, `tests/test_m02_public_market.py` | Earlier 9/9 M02 + 7/7 M01 local PASS on unchanged prior scope; 2 new CLI probe tests have **no verified runner PASS yet**. API docs: https://github.com/btcid/indodax-official-api-docs/blob/master/Public-RestAPI.md | No real public observation from VPS, G1 issuer, or CI PASS; no trading |
 | M02 REAL PUBLIC VPS | `7002387f` output dari user pada 26 Okt 2026 | Repo clone/pull dan market BTC/IDR public REST valid, candle 1/5/15m, 500 trade visible, 300 depth visible, exit0 dan Final REJECT | Trade history lengkap, G1 trusted issuer, BUY/order |
 | M03-A VPS PASS | `bdcd9f5` owner VPS console 26 Okt 2026 | **9/9 tests PASS**, 398 pairs IDR, 312 eligible, 86 rejected, shortlist30, watchlist USDT/IDR + BTC/IDR, epoch 1793010913, exit0, Final REJECT | New MAIN exclusion not yet tested; deep source/AI/BUY absent |
