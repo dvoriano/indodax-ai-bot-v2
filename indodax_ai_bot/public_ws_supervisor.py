@@ -100,6 +100,7 @@ def supervised_public_ws_batch(
             "requested_sessions": sessions,
             "completed_safe_sessions": data.get("completed_safe_sessions", 0)
                                        if isinstance(data, dict) else 0,
+            "stream_epoch": public_state["stream_epoch"],
             "last_publication_offset": public_state["last_publication_offset"],
             "persisted_publications": public_state["persisted_publications"],
             "stream_status": public_state["stream_status"],
