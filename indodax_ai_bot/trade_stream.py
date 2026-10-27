@@ -651,6 +651,11 @@ def probe_official_public_ws(
             else:
                 other_frames += 1
         during_probe = journal.status(pair)
+        if during_probe["stream_status"] == "GAP":
+            # A final frame can reveal a gap without another frame arriving
+            # to raise in _advance. Carry it into the same one-time
+            # discontinuous baseline recovery, never mark this probe safe.
+            raise StreamEvidenceError("WS_RECOVERY_GAP_UNRESOLVED")
         live_publications_persisted = (
             during_probe["persisted_publications"] - publications_after_ack
         )
