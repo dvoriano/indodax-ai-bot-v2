@@ -44,6 +44,8 @@ class DeepCandidate:
     structure_replay: dict | None = None
     # M03-N sampled first-seen-minute ticker momentum, never closed OHLC.
     early_momentum: dict | None = None
+    visible_buy_trade_count_sampled: int = 0
+    visible_sell_trade_count_sampled: int = 0
 
     def summary(self) -> dict:
         return {
@@ -57,6 +59,9 @@ class DeepCandidate:
             "spread_bps": None if self.spread_bps is None else str(self.spread_bps.quantize(Decimal("0.01"))),
             "visible_buy_idr": str(self.visible_buy_idr),
             "visible_sell_idr": str(self.visible_sell_idr),
+            "visible_buy_trade_count_sampled": self.visible_buy_trade_count_sampled,
+            "visible_sell_trade_count_sampled": self.visible_sell_trade_count_sampled,
+            "visible_trade_side_counts_complete": False,
             "book_imbalance": None if self.book_imbalance is None else str(self.book_imbalance.quantize(Decimal("0.001"))),
             "anomaly_flags": list(self.anomaly_flags),
             "market_structure_diagnostic": self.market_structure_diagnostic,
@@ -422,6 +427,8 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
                 obs.snapshot.source.closed_1m_epoch, rsi, ema8, ema21,
                 volume_ratio, spread_bps, buy, sell, imbalance, tuple(flags),
                 market_structure_diagnostic=structure, structure_replay=replay,
+                visible_buy_trade_count_sampled=obs.visible_closed_1m_buy_count,
+                visible_sell_trade_count_sampled=obs.visible_closed_1m_sell_count,
             )
 
         # Deterministic indicators, NOT a trading probability or expected ROI.
@@ -440,7 +447,9 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
                              obs.snapshot.source.closed_1m_epoch, rsi, ema8, ema21,
                              volume_ratio, spread_bps, buy, sell, imbalance,
                              market_structure_diagnostic=structure,
-                             structure_replay=replay)
+                             structure_replay=replay,
+                             visible_buy_trade_count_sampled=obs.visible_closed_1m_buy_count,
+                             visible_sell_trade_count_sampled=obs.visible_closed_1m_sell_count)
     except PublicDataError as exc:
         return DeepCandidate(pair, None, "REJECT_INCOMPLETE_EVIDENCE", str(exc))
 
