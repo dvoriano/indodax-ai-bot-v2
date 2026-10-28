@@ -41,9 +41,21 @@ def advanced(obs, candidate, *, step=60, bid_total=None, ask_total=None,
         bid_book_levels=((bid,(bid_total or D("1000000"))/bid),),
         ask_book_levels=((ask,(ask_total or D("200000"))/ask),),
     )
+    buy_total=bid_total or D("1000000")
+    sell_total=ask_total or D("200000")
+    diagnostic=dict(candidate.book_wall_diagnostic or {})
+    diagnostic.update({
+        "status":("BID_WALL_WATCH_UNCONFIRMED" if buy_total/sell_total>=D("3")
+                  else "NO_STRONG_NEAR_BID_WALL"),
+        "largest_bid_wall_price_idr":str(bid),
+        "largest_bid_wall_notional_idr":str(buy_total),
+        "bid_near_total_idr":str(buy_total),
+        "ask_near_total_idr":str(sell_total),
+    })
     current=replace(
         candidate,
         closed_1m_epoch=source.closed_1m_epoch,
+        book_wall_diagnostic=diagnostic,
     )
     return changed,current
 
