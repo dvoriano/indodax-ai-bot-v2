@@ -252,6 +252,10 @@ class M03NWallSurgeMainpathTest(unittest.TestCase):
                 "cases":1,"matured_60m":0,"matured_24h":0,
                 "up_20pct_24h":0,"up_50pct_24h":0,
                 "up_100pct_24h":0,"down_10pct_24h":0,
+                "up_2pct_60m":0,"up_8pct_60m":0,
+                "up_11pct_60m":0,"down_2pct_60m":0,
+                "mean_return_60m_pct":None,
+                "scalp_60m_descriptive_status":"NO_MATURED_60M_OUTCOMES",
                 "distinct_pairs":1,"distinct_days":1,
                 "matured_distinct_pairs":0,"matured_distinct_days":0,
                 "status":"INSUFFICIENT_MATURED_COMPARABLE_CASES",
@@ -275,6 +279,16 @@ class M03NWallSurgeMainpathTest(unittest.TestCase):
         after60=self.j.public_surge_casebook_summary()
         self.assertEqual(after60["cohorts"]["EARLY_WATCH"]["matured_60m"],1)
         self.assertEqual(after60["cohorts"]["EARLY_WATCH"]["matured_24h"],0)
+        self.assertEqual(after60["cohorts"]["EARLY_WATCH"]["up_2pct_60m"],1)
+        self.assertEqual(after60["cohorts"]["EARLY_WATCH"]["up_8pct_60m"],0)
+        self.assertEqual(after60["cohorts"]["EARLY_WATCH"]["mean_return_60m_pct"],"4.0000")
+        early60=rank_scanner_with_early_momentum(scanner,report,casebook=after60)
+        early60_pattern=next(x for x in early60.universe if x.pair==pair).surge_pattern
+        self.assertEqual(early60_pattern["historical_matured_60m_cases"],1)
+        self.assertEqual(early60_pattern["historical_up_2pct_gross_60m_cases"],1)
+        self.assertEqual(early60_pattern["historical_mean_return_60m_gross_pct"],"4.0000")
+        self.assertEqual(early60_pattern["historical_matured_24h_cases"],0)
+        self.assertFalse(early60_pattern["buy_authorized"])
         future=replace(scanner,observed_epoch=future24+10)
         self.j.record_public_surge_experience(future,{})
         mature=self.j.public_surge_casebook_summary()
