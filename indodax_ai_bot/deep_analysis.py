@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from hashlib import sha256
+from typing import Callable
 
 from .public_market import Candle, IndodaxPublicMarket, PublicCandleHistory, PublicDataError, PublicObservation
 from .scanner import ScannerResult
@@ -48,6 +49,8 @@ class DeepCandidate:
     visible_sell_trade_count_sampled: int = 0
     # M03-N extension: non-executable book-wall/rebound evidence.
     book_wall_diagnostic: dict | None = None
+    wall_temporal_evidence: dict | None = None
+    surge_experience_context: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -70,6 +73,8 @@ class DeepCandidate:
             "structure_replay": self.structure_replay,
             "early_momentum": self.early_momentum,
             "book_wall_diagnostic": self.book_wall_diagnostic,
+            "wall_temporal_evidence": self.wall_temporal_evidence,
+            "surge_experience_context": self.surge_experience_context,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -811,7 +816,8 @@ def _same_window_gate(
 
 
 def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: int = 2,
-              offset: int = 0, require_btc: bool = False) -> DeepScan:
+              offset: int = 0, require_btc: bool = False,
+              on_candidate: Callable[[DeepCandidate, PublicObservation], DeepCandidate] | None = None) -> DeepScan:
     """Bound deep calls; never fetch 30 x 7 requests in a single minute."""
     if not 1 <= limit <= 2:
         raise ValueError("M03B pilot limits deep HTTP work to 1-2 pairs")
@@ -829,10 +835,16 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
             if abs(obs.snapshot.source.observed_epoch - screening.observed_epoch) > 120:
                 raise PublicDataError("OUT_OF_SYNC_SCREENING")
             observations[item.pair] = obs
-            found.append(replace(
+            candidate = replace(
                 analyze_observation(obs, early_momentum=item.early_momentum),
                 early_momentum=item.early_momentum,
-            ))
+                surge_experience_context=screening.surge_experience,
+            )
+            # Only the SAME source-bound observation becomes wall evidence;
+            # journal callback is injected by the original orchestrator.
+            if on_candidate is not None:
+                candidate = on_candidate(candidate, obs)
+            found.append(candidate)
         except PublicDataError as exc:
             found.append(DeepCandidate(item.pair, None, "REJECT_SOURCE_ERROR", str(exc)))
     synchronized: dict | None = None
@@ -856,7 +868,8 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
 
 
 def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
-                          *, limit: int = 20) -> dict:
+                          *, limit: int = 20,
+                          on_candidate: Callable[[DeepCandidate, PublicObservation], DeepCandidate] | None = None) -> dict:
     """M03-G: source-efficient SAME-CYCLE 20–40 pair diagnostic attempt.
 
     This is NOT a multi-minute rank aggregator. Per-pair 4 public GET requests
@@ -909,10 +922,14 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
             (x.early_momentum for x in screening.shortlist[:limit]
              if x.pair == pair), None,
         )
-        candidates.append(replace(
+        candidate = replace(
             analyze_observation(obs, early_momentum=history),
             early_momentum=history,
-        ))
+            surge_experience_context=screening.surge_experience,
+        )
+        if on_candidate is not None:
+            candidate = on_candidate(candidate, obs)
+        candidates.append(candidate)
     completed = attempted == len(selected) and len(candidates) == len(selected)
     valid = completed and not window_expired and all(c.score is not None for c in candidates)
     # Population-wide acceptance remains STRICT: 1 invalid pair blocks it.
