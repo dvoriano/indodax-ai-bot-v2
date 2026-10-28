@@ -65,7 +65,12 @@ class ScannerResult:
             "source": self.provenance,
             "g1_issuer_verified": self.g1_verified,
             "trade_authorized": False,
-            "ranking_basis": "24h IDR turnover desc; bid-ask spread asc; 24h range desc; pair asc",
+            "ranking_basis": (
+                "first-minute ticker 1m/5m acceleration WATCH priority, "
+                "then 5m return and 24h IDR turnover; observational only"
+                if self.momentum_status == "PUBLIC_MINUTE_SAMPLES_UNATTESTED"
+                else "24h IDR turnover desc; bid-ask spread asc; 24h range desc; pair asc"
+            ),
             "ranking_scope": "PRELIMINARY_PUBLIC_SCREEN_NOT_ENTRY_SIGNAL",
             "main_excluded_pairs": sorted(MAIN_EXCLUDED_PAIRS),
             "momentum_status": self.momentum_status,
