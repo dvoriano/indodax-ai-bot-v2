@@ -692,12 +692,25 @@ def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
         flags.append("ASK_DOMINANT_OR_MISSING_BOOK")
     if candidate.visible_sell_idr > candidate.visible_buy_idr:
         flags.append("VISIBLE_SELL_SAMPLE_DOMINANT")
+    book = candidate.book_wall_diagnostic or {}
+    wall_status = book.get("status")
+    if wall_status in ("BOOK_TICKER_MISMATCH_NO_WATCH",
+                       "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH"):
+        flags.append("UNALIGNED_DEPTH_QUOTE_OR_CANDLE")
+    elif wall_status == "SECOND_LEG_DOWN_RISK":
+        flags.append("SECOND_LEG_DOWN_RISK")
+    elif wall_status == "WIDE_SPREAD_WALL_UNACTIONABLE":
+        flags.append("WIDE_SPREAD_ORDERBOOK_WALL")
+    elif wall_status == "PANIC_REBOUND_WATCH_UNCONFIRMED":
+        flags.append("PANIC_REBOUND_NOT_CONFIRMED")
     return {
         "pair": candidate.pair,
         "score": candidate.score,
         "review_flags": flags,
         "clear_of_provisional_cautions": not flags,
         "risk_ai_evaluated": False,
+        "book_wall_status": wall_status,
+        "wall_persistence_proven": False,
         "g2_candidate_authorized": False,
         "trade_authorized": False,
     }
