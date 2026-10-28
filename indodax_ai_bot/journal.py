@@ -410,7 +410,10 @@ class DecisionJournal:
                     # Older fixture/previous M03 scanner inputs provide no
                     # last price: skip rather than manufacture midpoint price.
                     continue
-                if (item.ticker_epoch // 60 != minute
+                # Both operands are epoch seconds aligned to minute start.
+                # Comparing ticker_epoch // 60 (minute index) to minute
+                # (epoch seconds) silently marked EVERY fresh ticker stale.
+                if (item.ticker_epoch // 60 * 60 != minute
                         or item.ticker_epoch > screening.observed_epoch
                         or item.last_idr <= 0
                         or not item.last_idr.is_finite()
