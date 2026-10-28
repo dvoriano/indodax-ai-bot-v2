@@ -1,0 +1,21 @@
+# M03-N staged only. Existing single bot CLI scanner, once per minute.
+# PUBLIC Indodax ticker_all only, no private trading / no paid AI.
+# Install/enable requires a separate deliberate VPS operator action.
+[Unit]
+Description=Indodax AI Bot V2 early momentum PUBLIC scanner (no orders)
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/indodax-ai-bot-v2
+ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --scan-once --db runtime/decisions.sqlite3
+Environment=INDODAX_TRADING_ENABLED=NO
+Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
+Environment=INDODAX_EXECUTION_MODE=DRY_RUN
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=45s
+StandardOutput=journal
+StandardError=journal
