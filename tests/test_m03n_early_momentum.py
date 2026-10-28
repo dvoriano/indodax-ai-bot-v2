@@ -54,6 +54,34 @@ class M03NEarlyMomentumTests(unittest.TestCase):
             latest=rank_scanner_with_early_momentum(initial,reports)
         return latest
 
+    def test_closed_minute_buy_sell_counts_are_visible_sample_only(self):
+        from indodax_ai_bot.public_market import IndodaxPublicMarket
+        from test_m02_public_market import OfficialPublicFixtures
+
+        class PartialTrades(OfficialPublicFixtures):
+            def fetch(self,path):
+                if path=="/api/trades/btcidr":
+                    minute=(self.now//60)*60-60
+                    return [
+                        {"date":str(minute+12),"price":"100","amount":"2","type":"buy"},
+                        {"date":str(minute+30),"price":"100","amount":"1","type":"sell"},
+                        {"date":str(minute+45),"price":"100","amount":"1","type":"buy"},
+                        {"date":str(self.now-3),"price":"100","amount":"5","type":"sell"},
+                    ]
+                return super().fetch(path)
+        fixture=PartialTrades()
+        obs=IndodaxPublicMarket(
+            fetch=fixture.fetch,clock=lambda:fixture.now,
+        ).observe("btc_idr")
+        self.assertEqual(obs.visible_closed_1m_buy_count,2)
+        self.assertEqual(obs.visible_closed_1m_sell_count,1)
+        self.assertEqual(obs.visible_closed_1m_trade_count,3)
+        self.assertEqual(obs.visible_closed_1m_buy_idr,D("300"))
+        self.assertEqual(obs.visible_closed_1m_sell_idr,D("100"))
+        self.assertFalse(obs.summary()["visible_trade_side_counts_complete"])
+        self.assertFalse(obs.trade_history_complete)
+        self.assertFalse(obs.ready)
+
     def test_startup_never_invents_5m_15m_60m_data(self):
         with TemporaryDirectory() as td:
             j=DecisionJournal(Path(td)/"db.sqlite3")
