@@ -11,7 +11,7 @@ from .config import Settings
 from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
-from .scanner import DailyPairScanner
+from .scanner import DailyPairScanner, rank_scanner_with_early_momentum
 from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
@@ -139,6 +139,19 @@ class DailyScalpingOrchestrator:
             raise TypeError("INVALID_G1_SOURCE_VERIFIER")
         self._ai_role_caller = ai_role_caller
         self._source_verifier = source_verifier
+
+    def _scan_with_early_momentum(self, client: IndodaxPublicMarket):
+        """One existing scanner. Persist first minute ticker quotes across cycles.
+
+        This produces a PUBLIC watchlist only; no G1 or AI role promotion.
+        No extra HTTP requests and no fake completed one-minute candles.
+        """
+        screening = DailyPairScanner(client).scan()
+        if not screening.universe:
+            # Legacy mocked M03 scanner fixture, no historical price source.
+            return screening
+        reports = self.journal.record_and_assess_public_ticker_momentum(screening)
+        return rank_scanner_with_early_momentum(screening, reports)
 
     def run_cycle(self, trace_id: str) -> CycleResult:
         # No synthetic candles, mock AI authority, private API or phantom orders.
@@ -271,7 +284,7 @@ class DailyScalpingOrchestrator:
         """Public scan into same mainpath; no G1 evidence or trading approval."""
         client = market if market is not None else IndodaxPublicMarket()
         try:
-            ranking = DailyPairScanner(client).scan()
+            ranking = self._scan_with_early_momentum(client)
         except PublicDataError as exc:
             reason = f"PUBLIC_SCANNER_INVALID:{exc}"
             summary = None
@@ -286,7 +299,7 @@ class DailyScalpingOrchestrator:
         """One bounded M03-B public-only discovery→closed-candle analysis mainpath."""
         client = market if market is not None else IndodaxPublicMarket()
         try:
-            preliminary = DailyPairScanner(client).scan()
+            preliminary = self._scan_with_early_momentum(client)
             evidence = deep_scan(client, preliminary, limit=2)
         except PublicDataError as exc:
             reason = f"PUBLIC_DEEP_SOURCE_INVALID:{exc}"
@@ -306,7 +319,7 @@ class DailyScalpingOrchestrator:
         """
         client = market if market is not None else IndodaxPublicMarket()
         try:
-            preliminary = DailyPairScanner(client).scan()
+            preliminary = self._scan_with_early_momentum(client)
             selected = self.journal.reserve_deep_window(
                 trace_id, tuple(x.pair for x in preliminary.shortlist),
                 observed_epoch=preliminary.observed_epoch,
@@ -336,7 +349,7 @@ class DailyScalpingOrchestrator:
         """One bounded 20-pair public attempt; never use stale/replayed ranks."""
         client = market if market is not None else IndodaxPublicMarket()
         try:
-            preliminary = DailyPairScanner(client).scan()
+            preliminary = self._scan_with_early_momentum(client)
             evidence = bulk_public_deep_scan(client, preliminary, limit=20)
         except PublicDataError as exc:
             reason = f"PUBLIC_BULK_BLOCKED:{exc}"
