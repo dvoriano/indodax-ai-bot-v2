@@ -6,7 +6,7 @@ Deep 1m/5m/15m + order-flow scoring remains M03-B.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from .public_market import IndodaxPublicMarket, PublicDataError, PublicScanContext, _number, _seconds
@@ -25,6 +25,8 @@ class ScreenedPair:
     spread_bps: Decimal
     day_range_percent: Decimal
     ticker_epoch: int
+    last_idr: Decimal | None = None
+    early_momentum: dict | None = None
 
     def summary(self) -> dict[str, str | int]:
         return {
@@ -33,6 +35,7 @@ class ScreenedPair:
             "spread_bps": str(self.spread_bps.quantize(Decimal("0.01"))),
             "day_range_percent": str(self.day_range_percent.quantize(Decimal("0.01"))),
             "ticker_epoch": self.ticker_epoch,
+            "early_momentum": self.early_momentum,
         }
 
 
@@ -47,6 +50,8 @@ class ScannerResult:
     provenance: str = "INDODAX_PUBLIC_TICKER_ALL_UNATTESTED"
     g1_verified: bool = False
     scan_context: PublicScanContext | None = None
+    universe: tuple[ScreenedPair, ...] = ()
+    momentum_status: str = "NOT_RECORDED"
 
     def summary(self) -> dict:
         return {
@@ -63,6 +68,14 @@ class ScannerResult:
             "ranking_basis": "24h IDR turnover desc; bid-ask spread asc; 24h range desc; pair asc",
             "ranking_scope": "PRELIMINARY_PUBLIC_SCREEN_NOT_ENTRY_SIGNAL",
             "main_excluded_pairs": sorted(MAIN_EXCLUDED_PAIRS),
+            "momentum_status": self.momentum_status,
+            "momentum_provenance": "PUBLIC_TICKER_ALL_FIRST_MINUTE_SAMPLE_UNATTESTED",
+            "momentum_buy_sell_flow_is_complete": False,
+            "early_watch_count": sum(
+                x.early_momentum is not None and
+                x.early_momentum.get("status") == "EARLY_WATCH_UNCALIBRATED"
+                for x in self.universe
+            ),
         }
 
 
@@ -117,7 +130,8 @@ class DailyPairScanner:
                 if spread > self.max_spread_bps:
                     continue
                 day_range = (high - low) * Decimal("100") / last
-                eligible.append(ScreenedPair(pair, volume, bid, ask, spread, day_range, ts))
+                eligible.append(ScreenedPair(pair, volume, bid, ask, spread, day_range, ts,
+                                             last_idr=last))
             except PublicDataError:
                 continue
 
@@ -133,8 +147,48 @@ class DailyPairScanner:
             excluded_pairs=len(pairs) - len(eligible),
             shortlist=shortlisted,
             watchlist=shortlisted[:2],
+            universe=tuple(eligible),
             scan_context=PublicScanContext(
                 observed_epoch=now, exchange_epoch=server_epoch,
                 pairs=pairs, tickers=all_tickers["tickers"],
             ),
         )
+
+
+def rank_scanner_with_early_momentum(
+    screening: ScannerResult, observations: dict[str, dict],
+) -> ScannerResult:
+    """Reprioritize same-cycle DISCOVERY with history from existing journal.
+
+    No lookahead, no deep request, no provider, no G1 or BUY authorization.
+    Candidates with insufficient minute samples retain turnover ranking.
+    Status is a *watch*, NEVER a trade signal or certified 1m candle.
+    """
+    if not isinstance(screening, ScannerResult) or not isinstance(observations, dict):
+        raise ValueError("INVALID_EARLY_MOMENTUM_RANK_INPUT")
+    pool = screening.universe
+    if not pool:
+        return replace(screening, momentum_status="NO_REAL_UNIVERSE_TO_RANK")
+    rows = tuple(replace(x, early_momentum=observations.get(x.pair)) for x in pool)
+    def sort_key(x: ScreenedPair) -> tuple:
+        report = x.early_momentum or {}
+        label = report.get("status")
+        priority = {
+            "EARLY_WATCH_UNCALIBRATED": 0,
+            "CONFIRMATION_PENDING": 1,
+            "OBSERVED_NO_ACCELERATION": 2,
+            "EXHAUSTION_CAUTION": 3,
+        }.get(label, 4)
+        # Only compare momentum within non-stale, explicitly sampled cohorts.
+        # No 24h return inference or bonus for raw unverified 1m flow.
+        change = report.get("return_5m_pct")
+        momentum = Decimal(change) if isinstance(change, str) else Decimal("-1000000")
+        return (priority, -momentum, -x.volume_idr_24h, x.spread_bps, x.pair)
+    ranked = tuple(sorted(rows, key=sort_key))
+    size = len(screening.shortlist)
+    return replace(
+        screening,
+        shortlist=ranked[:size], watchlist=ranked[:2],
+        universe=ranked,
+        momentum_status="PUBLIC_MINUTE_SAMPLES_UNATTESTED",
+    )
