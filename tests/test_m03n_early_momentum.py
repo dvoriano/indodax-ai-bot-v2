@@ -66,7 +66,7 @@ class M03NEarlyMomentumTests(unittest.TestCase):
                         {"date":str(minute+12),"price":"100","amount":"2","type":"buy"},
                         {"date":str(minute+30),"price":"100","amount":"1","type":"sell"},
                         {"date":str(minute+45),"price":"100","amount":"1","type":"buy"},
-                        {"date":str(self.now-3),"price":"100","amount":"5","type":"sell"},
+                        {"date":str(self.now-1),"price":"100","amount":"5","type":"sell"},
                     ]
                 return super().fetch(path)
         fixture=PartialTrades()
