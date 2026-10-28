@@ -85,6 +85,26 @@ class DecisionJournal:
                 )"""
             )
 
+            # M03-N: first ticker_all quote sampled each minute, per pair.
+            # These are observed snapshots, NOT closed 1m candles or trades.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS public_ticker_minute_samples (
+                    pair TEXT NOT NULL,
+                    minute_epoch INTEGER NOT NULL,
+                    observed_epoch INTEGER NOT NULL,
+                    ticker_epoch INTEGER NOT NULL,
+                    last_idr TEXT NOT NULL,
+                    volume_24h_idr TEXT NOT NULL,
+                    spread_bps TEXT NOT NULL,
+                    PRIMARY KEY(pair, minute_epoch)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_public_ticker_minute_latest "
+                "ON public_ticker_minute_samples(pair,minute_epoch DESC)"
+            )
+
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self._db_path, timeout=10)
@@ -344,3 +364,133 @@ class DecisionJournal:
             to_epoch=chronological[-1].start+60,
             candles=chronological,
         )
+
+
+    def record_and_assess_public_ticker_momentum(
+        self, screening,
+    ) -> dict[str, dict]:
+        """M03-N: atomically archive ALL eligible IDR first-seen minute quotes.
+
+        No full-minute tape or volume delta from sliding 24h turnover; BUY/SELL
+        pressure must be separately observed in existing closed-candle deep path.
+        Strictly require successive minute observations for each horizon.
+        An intra-minute rescan NEVER overwrites the earliest stored sample.
+        """
+        from .scanner import ScannerResult, MAIN_EXCLUDED_PAIRS
+        if (not isinstance(screening, ScannerResult)
+                or screening.scan_context is None
+                or not screening.universe
+                or not isinstance(screening.observed_epoch, int)
+                or screening.observed_epoch <= 0
+                or screening.scan_context.observed_epoch != screening.observed_epoch):
+            raise PublicDataError("INVALID_MOMENTUM_SCREENING_CONTEXT")
+        minute = screening.observed_epoch // 60 * 60
+        if abs(screening.scan_context.exchange_epoch-screening.observed_epoch) > 30:
+            raise PublicDataError("MOMENTUM_EXCHANGE_CLOCK_SKEW")
+        if (len({x.pair for x in screening.universe}) != len(screening.universe)
+                or any(x.pair in MAIN_EXCLUDED_PAIRS or
+                       not x.pair.endswith("_idr")
+                       for x in screening.universe)):
+            raise PublicDataError("INVALID_MOMENTUM_UNIVERSE")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            for item in screening.universe:
+                if item.last_idr is None:
+                    # Older fixture/previous M03 scanner inputs provide no
+                    # last price: skip rather than manufacture midpoint price.
+                    continue
+                if (item.ticker_epoch // 60 != minute
+                        or item.last_idr <= 0
+                        or not item.last_idr.is_finite()
+                        or item.spread_bps < 0
+                        or not item.spread_bps.is_finite()
+                        or item.volume_idr_24h <= 0
+                        or not item.volume_idr_24h.is_finite()):
+                    continue
+                con.execute(
+                    "INSERT OR IGNORE INTO public_ticker_minute_samples("
+                    "pair,minute_epoch,observed_epoch,ticker_epoch,last_idr,"
+                    "volume_24h_idr,spread_bps) VALUES (?,?,?,?,?,?,?)",
+                    (item.pair,minute,screening.observed_epoch,
+                     item.ticker_epoch,str(item.last_idr),
+                     str(item.volume_idr_24h),str(item.spread_bps)),
+                )
+        reports = {}
+        with self._connect() as con:
+            for item in screening.universe:
+                # Never use stale earlier-minute samples as current momentum.
+                rows = con.execute(
+                    "SELECT minute_epoch,observed_epoch,last_idr,spread_bps "
+                    "FROM public_ticker_minute_samples "
+                    "WHERE pair=? AND minute_epoch BETWEEN ? AND ? "
+                    "ORDER BY minute_epoch DESC LIMIT 61",
+                    (item.pair,minute-3600,minute),
+                ).fetchall()
+                if not rows or rows[0][0] != minute:
+                    reports[item.pair] = {
+                        "status": "WARMUP_OR_STALE_TICKER",
+                        "minute_epoch": minute,
+                        "return_1m_pct": None,
+                        "return_5m_pct": None,
+                        "return_15m_pct": None,
+                        "return_60m_pct": None,
+                        "source_trust_verified": False,
+                        "trade_signal": False,
+                    }
+                    continue
+                consecutive = []
+                for row in rows:
+                    if row[0] != minute - 60 * len(consecutive):
+                        break
+                    price = Decimal(row[2])
+                    if not price.is_finite() or price <= 0:
+                        raise PublicDataError("CORRUPT_MOMENTUM_STORED_PRICE")
+                    consecutive.append(price)
+                def ret(lag):
+                    if len(consecutive) <= lag:
+                        return None
+                    return (consecutive[0]/consecutive[lag]-1)*Decimal(100)
+                r1,r5,r15,r60 = (ret(x) for x in (1,5,15,60))
+                previous5 = (
+                    (consecutive[5]/consecutive[10]-1)*Decimal(100)
+                    if len(consecutive)>10 else None
+                )
+                last_spread = Decimal(rows[0][3])
+                if not last_spread.is_finite() or last_spread < 0:
+                    raise PublicDataError("CORRUPT_MOMENTUM_STORED_SPREAD")
+                acceleration = r5-previous5 if r5 is not None and previous5 is not None else None
+                if r5 is None or r1 is None:
+                    status = "WARMUP_OR_GAPPED_MINUTE_SAMPLES"
+                elif r5 < 0 and r1 > 0:
+                    status = "CONFIRMATION_PENDING"
+                elif (acceleration is not None and r5 > 0
+                      and r1 > 0 and acceleration > 0
+                      and last_spread <= Decimal("80")):
+                    status = "EARLY_WATCH_UNCALIBRATED"
+                elif (r5 > 0 and (r1 <= 0 or
+                      (acceleration is not None and acceleration <= 0))):
+                    status = "EXHAUSTION_CAUTION"
+                elif r5 > 0 and r1 > 0:
+                    status = "CONFIRMATION_PENDING"
+                else:
+                    status = "OBSERVED_NO_ACCELERATION"
+                reports[item.pair] = {
+                    "status": status,
+                    "minute_epoch": minute,
+                    "first_observed_epoch_this_minute": rows[0][1],
+                    "consecutive_minute_samples": len(consecutive),
+                    "return_1m_pct": None if r1 is None else str(r1),
+                    "return_5m_pct": None if r5 is None else str(r5),
+                    "return_15m_pct": None if r15 is None else str(r15),
+                    "return_60m_pct": None if r60 is None else str(r60),
+                    "acceleration_current_5m_vs_prior_5m_pct_points":
+                        None if acceleration is None else str(acceleration),
+                    "minute_volume_confirmed": False,
+                    "volume_24h_is_not_1m_volume": True,
+                    "buy_sell_flow_complete": False,
+                    "ticker_is_closed_candle": False,
+                    "source_trust_verified": False,
+                    "g1_verified": False,
+                    "trade_signal": False,
+                }
+        return reports
