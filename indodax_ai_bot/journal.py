@@ -636,13 +636,15 @@ class DecisionJournal:
                  str(candidate.visible_buy_idr),str(candidate.visible_sell_idr)),
             )
             current = con.execute(
-                "SELECT observed_epoch,bid_wall_price,bid_wall_idr,book_status "
+                "SELECT observed_epoch,bid_wall_price,bid_wall_idr,book_status,"
+                "bid_near_idr,ask_near_idr,best_bid,visible_buy_idr,visible_sell_idr "
                 "FROM public_deep_wall_samples WHERE pair=? AND minute_epoch=?",
                 (pair,minute),
             ).fetchone()
             previous = con.execute(
                 """SELECT minute_epoch,observed_epoch,bid_wall_price,
-                          bid_wall_idr,book_status
+                          bid_wall_idr,book_status,bid_near_idr,ask_near_idr,
+                          best_bid,visible_buy_idr,visible_sell_idr
                    FROM public_deep_wall_samples
                    WHERE pair=? AND minute_epoch < ?
                    ORDER BY minute_epoch DESC LIMIT 1""",
@@ -650,40 +652,84 @@ class DecisionJournal:
             ).fetchone()
         if not previous:
             return base
-        prior_minute, old_epoch, old_price_raw, old_idr_raw, old_status = previous
+        prior_minute, old_epoch, old_price_raw, old_idr_raw, old_status = previous[:5]
         elapsed = current[0] - old_epoch
         extra = {
             "previous_minute_epoch": prior_minute,
             "elapsed_seconds": elapsed,
             "previous_book_status": old_status,
         }
-        if elapsed < 60 or elapsed > 300 or now < current[0]:
+        # A repeated request in the same minute cannot create a second
+        # observation, and a future/replayed source never proves persistence.
+        if now != current[0]:
+            return dict(base, **extra, status="WALL_SAME_MINUTE_REPLAY")
+        if elapsed < 60 or elapsed > 300:
             return dict(base, **extra, status="WALL_OBSERVATION_GAP_OR_REPLAY")
-        if (current[3] in (
-                "WIDE_SPREAD_WALL_UNACTIONABLE",
-                "BOOK_TICKER_MISMATCH_NO_WATCH",
-                "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")
-                or old_status in (
-                "WIDE_SPREAD_WALL_UNACTIONABLE",
-                "BOOK_TICKER_MISMATCH_NO_WATCH",
-                "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")):
+        unsafe = {
+            "WIDE_SPREAD_WALL_UNACTIONABLE",
+            "BOOK_TICKER_MISMATCH_NO_WATCH",
+            "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH",
+        }
+        if current[3] in unsafe or old_status in unsafe:
             return dict(base, **extra, status="WALL_SPREAD_OR_SOURCE_UNACTIONABLE")
-        old_price, old_idr = Decimal(old_price_raw), Decimal(old_idr_raw)
-        new_price, new_idr = Decimal(current[1]), Decimal(current[2])
-        if old_price <= 0 or old_idr <= 0:
+        try:
+            old_price, old_idr = Decimal(old_price_raw), Decimal(old_idr_raw)
+            new_price, new_idr = Decimal(current[1]), Decimal(current[2])
+            old_near_bid, old_near_ask, old_best = (
+                Decimal(x) for x in previous[5:8]
+            )
+            new_near_bid, new_near_ask, new_best = (
+                Decimal(x) for x in current[4:7]
+            )
+            values = (old_price, old_idr, new_price, new_idr,
+                      old_near_bid, old_near_ask, old_best,
+                      new_near_bid, new_near_ask, new_best)
+            if any(not v.is_finite() or v <= 0 for v in values):
+                raise ValueError("bad book row")
+            old_ratio = old_near_bid/old_near_ask
+            new_ratio = new_near_bid/new_near_ask
+            observed_price_change = (new_best/old_best-1)*Decimal(100)
+        except (ValueError, TypeError, ArithmeticError):
             return dict(base, **extra, status="WALL_INVALID_PRIOR_EVIDENCE")
-        moved_bps = abs(new_price - old_price) * Decimal(10000) / old_price
-        retained = moved_bps <= 50 and new_idr >= old_idr * Decimal("0.60")
+        old_support = (
+            old_status in ("BID_WALL_WATCH_UNCONFIRMED",
+                           "PANIC_REBOUND_WATCH_UNCONFIRMED")
+            and old_ratio >= Decimal("3")
+        )
+        new_support = (
+            current[3] in ("BID_WALL_WATCH_UNCONFIRMED",
+                           "PANIC_REBOUND_WATCH_UNCONFIRMED")
+            and new_ratio >= Decimal("3")
+        )
+        moved_bps = abs(new_price-old_price)*Decimal(10000)/old_price
+        retained = (
+            old_support and new_support and moved_bps <= Decimal("50")
+            and new_idr >= old_idr * Decimal("0.60")
+        )
+        if not old_support and not new_support:
+            state = "NO_DOMINANT_BID_WALL_IN_EITHER_SNAPSHOT"
+        elif not old_support and new_support:
+            state = "BID_WALL_NEWLY_OBSERVED_UNCONFIRMED"
+        elif retained:
+            state = "BID_WALL_RETAINED_OBSERVED"
+        else:
+            # Withdrawal vs match/absorption is not identifiable from two
+            # public snapshots and an incomplete visible trade sample.
+            state = "BID_WALL_DISAPPEARED_OR_MOVED_UNKNOWN"
         return dict(
-            base, **extra,
-            status=("BID_WALL_RETAINED_OBSERVED" if retained
-                    else "BID_WALL_DISAPPEARED_OR_MOVED_UNKNOWN"),
+            base, **extra, status=state,
             bid_wall_retained_observed=retained,
-            observed_wall_notional_change_pct=str(
-                (new_idr/old_idr-1)*Decimal(100)
-            ),
+            observed_wall_notional_change_pct=str((new_idr/old_idr-1)*Decimal(100)),
             wall_price_shift_bps=str(moved_bps),
+            observed_best_bid_return_pct=str(observed_price_change),
+            old_bid_ask_near_notional_ratio=str(old_ratio),
+            new_bid_ask_near_notional_ratio=str(new_ratio),
+            old_visible_buy_idr_sampled=previous[8],
+            old_visible_sell_idr_sampled=previous[9],
+            new_visible_buy_idr_sampled=current[7],
+            new_visible_sell_idr_sampled=current[8],
             observations_compared=2,
+            future_price_continuation_proven=False,
         )
 
     def record_public_surge_experience(self, screening, reports: dict) -> None:
