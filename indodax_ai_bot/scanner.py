@@ -52,6 +52,7 @@ class ScannerResult:
     scan_context: PublicScanContext | None = None
     universe: tuple[ScreenedPair, ...] = ()
     momentum_status: str = "NOT_RECORDED"
+    surge_experience: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -76,6 +77,7 @@ class ScannerResult:
             "momentum_status": self.momentum_status,
             "momentum_provenance": "PUBLIC_TICKER_ALL_FIRST_MINUTE_SAMPLE_UNATTESTED",
             "momentum_buy_sell_flow_is_complete": False,
+            "surge_experience": self.surge_experience,
             "early_watch_count": sum(
                 x.early_momentum is not None and
                 x.early_momentum.get("status") == "EARLY_WATCH_UNCALIBRATED"
