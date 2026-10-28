@@ -598,7 +598,8 @@ class DecisionJournal:
         if (diag.get("status") in (
                 "BOOK_LEVELS_NOT_OBSERVED", "BOOK_TICKER_MISMATCH_NO_WATCH",
                 "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")
-                or candidate.closed_1m_epoch != source.closed_1m_epoch):
+                or (candidate.closed_1m_epoch is not None and
+                    candidate.closed_1m_epoch != source.closed_1m_epoch)):
             return dict(base, status="WALL_SOURCE_NOT_ALIGNED")
         try:
             values = [Decimal(diag[key]) for key in (
@@ -796,14 +797,23 @@ class DecisionJournal:
         groups = {}
         for cohort,p60,p24 in rows:
             g=groups.setdefault(cohort,{"cases":0,"matured_60m":0,
-                                      "matured_24h":0,"up_20pct_24h":0})
+                                      "matured_24h":0,"up_20pct_24h":0,
+                                      "up_50pct_24h":0,"up_100pct_24h":0,
+                                      "down_10pct_24h":0})
             g["cases"]+=1
             if p60 is not None:
                 g["matured_60m"]+=1
             if p24 is not None:
                 g["matured_24h"]+=1
-                if Decimal(p24)>=Decimal("20"):
+                value = Decimal(p24)
+                if value >= Decimal("20"):
                     g["up_20pct_24h"]+=1
+                if value >= Decimal("50"):
+                    g["up_50pct_24h"]+=1
+                if value >= Decimal("100"):
+                    g["up_100pct_24h"]+=1
+                if value <= Decimal("-10"):
+                    g["down_10pct_24h"]+=1
         return {
             "status":"DESCRIPTIVE_EXPERIENCE_NOT_PREDICTIVE",
             "cohorts":groups,
