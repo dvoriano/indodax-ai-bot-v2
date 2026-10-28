@@ -807,8 +807,10 @@ class DecisionJournal:
                 ).fetchone()
                 if not observed:
                     continue
+                from .scanner import surge_pattern_signature
                 frozen = {
                     "label_asof_minute_epoch": minute,
+                    "pattern_signature": surge_pattern_signature(m,item.spread_bps),
                     "cohort": cohort,
                     "momentum_status": m.get("status"),
                     "return_1m_pct": m.get("return_1m_pct"),
@@ -834,36 +836,98 @@ class DecisionJournal:
                 )
 
     def public_surge_casebook_summary(self) -> dict:
-        """Descriptive mature outcomes only. No AI training permission."""
+        """Describe forward outcomes for prospective as-of cohorts.
+
+        Historical feature-pattern matches are NOT evidence of a repeatable
+        advantage until independent walk-forward evaluation and fees.
+        Missing +60m/+24h snapshots remain UNKNOWN, never negative labels.
+        """
+        from .scanner import surge_pattern_signature
         with self._connect() as con:
             rows = con.execute(
-                """SELECT cohort,future_60m_return_pct,future_24h_return_pct
-                   FROM public_surge_cases"""
+                """SELECT cohort,future_60m_return_pct,future_24h_return_pct,
+                          features_json,minute_epoch,pair
+                   FROM public_surge_cases
+                   ORDER BY minute_epoch ASC,pair ASC"""
             ).fetchall()
-        groups = {}
-        for cohort,p60,p24 in rows:
+        groups: dict[str, dict] = {}
+        patterns: dict[str, dict] = {}
+        for cohort,p60,p24,features_json,minute_epoch,pair in rows:
             g=groups.setdefault(cohort,{"cases":0,"matured_60m":0,
-                                      "matured_24h":0,"up_20pct_24h":0,
-                                      "up_50pct_24h":0,"up_100pct_24h":0,
-                                      "down_10pct_24h":0})
+                                        "matured_24h":0,"up_20pct_24h":0,
+                                        "up_50pct_24h":0,"up_100pct_24h":0,
+                                        "down_10pct_24h":0})
             g["cases"]+=1
+            try:
+                features = json.loads(features_json)
+                if not isinstance(features, dict):
+                    features = {}
+                signature = features.get("pattern_signature")
+                if not isinstance(signature, str):
+                    signature = surge_pattern_signature(
+                        {
+                            "return_5m_pct": features.get("return_5m_pct"),
+                            "acceleration_current_5m_vs_prior_5m_pct_points":
+                                features.get("acceleration_5m_pct_points"),
+                        },
+                        Decimal(features.get("spread_bps","NaN")),
+                    )
+            except (ValueError, TypeError, ArithmeticError):
+                signature = None
+            pattern = None
+            if signature is not None:
+                pattern = patterns.setdefault(signature, {
+                    "cases":0,"matured_60m":0,"matured_24h":0,
+                    "up_20pct_24h":0,"up_50pct_24h":0,"up_100pct_24h":0,
+                    "down_10pct_24h":0,
+                    "_pair_set":set(),"_day_set":set(),
+                })
+                pattern["cases"] += 1
+                pattern["_pair_set"].add(pair)
+                pattern["_day_set"].add(minute_epoch//86400)
             if p60 is not None:
                 g["matured_60m"]+=1
+                if pattern is not None:
+                    pattern["matured_60m"]+=1
             if p24 is not None:
                 g["matured_24h"]+=1
-                value = Decimal(p24)
-                if value >= Decimal("20"):
-                    g["up_20pct_24h"]+=1
-                if value >= Decimal("50"):
-                    g["up_50pct_24h"]+=1
-                if value >= Decimal("100"):
-                    g["up_100pct_24h"]+=1
+                if pattern is not None:
+                    pattern["matured_24h"]+=1
+                value=Decimal(p24)
+                for threshold,field in (
+                    (Decimal("20"),"up_20pct_24h"),
+                    (Decimal("50"),"up_50pct_24h"),
+                    (Decimal("100"),"up_100pct_24h"),
+                ):
+                    if value >= threshold:
+                        g[field]+=1
+                        if pattern is not None:
+                            pattern[field]+=1
                 if value <= Decimal("-10"):
                     g["down_10pct_24h"]+=1
+                    if pattern is not None:
+                        pattern["down_10pct_24h"]+=1
+        for item in patterns.values():
+            item["distinct_pairs"]=len(item.pop("_pair_set"))
+            item["distinct_days"]=len(item.pop("_day_set"))
+            # Even if sample counts rise, this remains descriptive because
+            # there is no independent holdout or all-in-fee outcome yet.
+            item["status"]=(
+                "DESCRIPTIVE_HISTORY_NOT_VALIDATED"
+                if item["matured_24h"] >= 30 and item["distinct_pairs"] >= 5
+                   and item["distinct_days"] >= 3
+                else "INSUFFICIENT_MATURED_COMPARABLE_CASES"
+            )
+            item["out_of_sample_validated"]=False
+            item["net_fee_adjusted_edge_proven"]=False
         return {
             "status":"DESCRIPTIVE_EXPERIENCE_NOT_PREDICTIVE",
             "cohorts":groups,
-            "forward_24h_endpoint_not_maximum": True,
+            "pattern_library":patterns,
+            "casebook_rows":len(rows),
+            "forward_24h_endpoint_not_maximum":True,
+            "only_asof_frozen_features":True,
+            "control_cohort_available":"CONTROL" in groups,
             "learning_guard":"NEED_MATURED_CONTROLS_OUT_OF_SAMPLE_AND_FEES",
             "trainable_model_authorized":False,
             "g1_verified":False,
