@@ -30,6 +30,40 @@ class StreamEvidenceError(ValueError):
     pass
 
 
+def _safe_ws_receive_failure(exc: Exception, websocket_module: Any) -> str:
+    """Bounded, non-secret failure class for recv() after subscription.
+
+    Historical PUBLIC_WS_STREAM_RECEIVE_FAILED collapses every unexpected
+    exception type. This diagnostic never logs exception strings, remote
+    frames, request headers, URL, token, or the socket object; a 'closed'
+    exception does not establish whether the peer or network caused it.
+    Unknown errors preserve the old fail-stop phase code.
+    """
+    for library_class, suffix in (
+        ("WebSocketConnectionClosedException", "CLOSED_OR_LOST"),
+        ("WebSocketProtocolException", "PROTOCOL_ERROR"),
+        ("WebSocketPayloadException", "PAYLOAD_ERROR"),
+    ):
+        cls = getattr(websocket_module, library_class, None)
+        if isinstance(cls, type) and isinstance(exc, cls):
+            return "PUBLIC_WS_STREAM_RECEIVE_" + suffix
+    if isinstance(exc, ConnectionResetError):
+        return "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_RESET"
+    if isinstance(exc, ConnectionAbortedError):
+        return "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_ABORTED"
+    if isinstance(exc, BrokenPipeError):
+        return "PUBLIC_WS_STREAM_RECEIVE_BROKEN_PIPE"
+    if isinstance(exc, EOFError):
+        return "PUBLIC_WS_STREAM_RECEIVE_EOF"
+    # SSL errors are OSErrors too, so this order is important.
+    import ssl
+    if isinstance(exc, ssl.SSLError):
+        return "PUBLIC_WS_STREAM_RECEIVE_TLS_ERROR"
+    if isinstance(exc, OSError):
+        return "PUBLIC_WS_STREAM_RECEIVE_OS_ERROR"
+    return "PUBLIC_WS_STREAM_RECEIVE_FAILED"
+
+
 def channel_for_pair(pair: str) -> str:
     if not isinstance(pair, str) or not _PAIR.fullmatch(pair):
         raise StreamEvidenceError("INVALID_PUBLIC_STREAM_PAIR")
@@ -717,6 +751,10 @@ def probe_official_public_ws(
             except websocket.WebSocketTimeoutException:
                 timeout_reads += 1
                 continue
+            if raw is None or raw == "":
+                # Some websocket-client versions return empty on close.
+                # Never treat this as a valid empty-trade minute.
+                raise StreamEvidenceError("PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
             if not isinstance(raw, str) or len(raw) > 512_000:
                 raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
             failure_phase = "STREAM_DECODE"
@@ -779,10 +817,16 @@ def probe_official_public_ws(
         }
     except StreamEvidenceError:
         raise
-    except Exception:
+    except Exception as exc:
         # No exception text, URLs, raw frames, or tokens in logs/sidecar.
-        # Keep the failure fatal; only classify *where* it happened.
-        raise StreamEvidenceError("PUBLIC_WS_" + failure_phase + "_FAILED") from None
+        # Keep fail-stop, but expose a SAFE subtype on actual stream recv.
+        # Crucial: no blanket retry, no fabricated trade continuity.
+        reason = (
+            _safe_ws_receive_failure(exc, websocket)
+            if failure_phase == "STREAM_RECEIVE"
+            else "PUBLIC_WS_" + failure_phase + "_FAILED"
+        )
+        raise StreamEvidenceError(reason) from None
     finally:
         if ws is not None:
             try:
