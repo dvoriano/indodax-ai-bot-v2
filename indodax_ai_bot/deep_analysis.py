@@ -454,16 +454,26 @@ def assess_orderbook_rebound(
     minute = _last_continuous(obs.candles_1m,60,22)
     if minute[-1].start+60 != obs.snapshot.source.closed_1m_epoch:
         raise PublicDataError("BOOK_WALL_CANDLE_SOURCE_MISMATCH")
+    if any(not all(x.is_finite() for x in (c.open,c.high,c.low,c.close,c.volume))
+           or c.low <= ZERO or c.high < max(c.open,c.close)
+           or c.low > min(c.open,c.close) or c.volume < ZERO
+           for c in minute):
+        raise PublicDataError("INVALID_BOOK_REBOUND_CANDLE")
     past_peak = max(c.high for c in minute[:-1])
     observed_low = min(c.low for c in minute)
     selloff = (observed_low/past_peak-1)*HUNDRED
     recovery = (minute[-1].close/observed_low-1)*HUNDRED
     last_change = (minute[-1].close/minute[-2].close-1)*HUNDRED
     fiveminute = (obs.candle_5m.close/obs.candle_5m.open-1)*HUNDRED
+    last_close_vs_quote_bps = (
+        abs(minute[-1].close-bid)*Decimal(10000)/bid
+    )
     if price_source_mismatch:
         state = "BOOK_TICKER_MISMATCH_NO_WATCH"
     elif spread > spread_guard_bps:
         state = "WIDE_SPREAD_WALL_UNACTIONABLE"
+    elif last_close_vs_quote_bps > Decimal("300"):
+        state = "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH"
     elif (selloff <= Decimal("-7") and recovery >= Decimal("0.3")
           and last_change > ZERO and ratio >= Decimal("3")):
         state = "PANIC_REBOUND_WATCH_UNCONFIRMED"
@@ -490,6 +500,7 @@ def assess_orderbook_rebound(
         "largest_ask_wall_price_idr": str(ask_wall_price),
         "largest_ask_wall_notional_idr": str(ask_wall_idr),
         "spread_bps": str(spread),
+        "last_close_vs_bid_gap_bps": str(last_close_vs_quote_bps),
         "observed_22m_peak_to_low_pct": str(selloff),
         "recovery_from_visible_low_pct": str(recovery),
         "last_closed_1m_return_pct": str(last_change),
