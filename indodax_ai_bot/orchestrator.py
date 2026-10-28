@@ -306,13 +306,38 @@ class DailyScalpingOrchestrator:
         return CycleResult(trace_id, FinalDecision.REJECT, reason, False, None, summary)
 
     def run_deep_cycle(self, trace_id: str, *,
-                       market: IndodaxPublicMarket | None = None) -> CycleResult:
-        """One bounded M03-B public-only discovery→closed-candle analysis mainpath."""
+                       market: IndodaxPublicMarket | None = None,
+                       target_pair: str | None = None) -> CycleResult:
+        """Same M03-B mainpath; optional bounded, source-eligible pair re-observation.
+
+        Targeting is PUBLIC observation only. It cannot add ineligible pairs,
+        shortcut the full-market scanner, G1 attestation, or BUY/RISK gates.
+        The existing no-target two-pair scan remains unchanged.
+        """
         client = market if market is not None else IndodaxPublicMarket()
         try:
             preliminary = self._scan_with_early_momentum(client)
+            limit = 2
+            if target_pair is not None:
+                from .scanner import MAIN_EXCLUDED_PAIRS
+                if (not isinstance(target_pair, str)
+                        or not target_pair.endswith("_idr")
+                        or target_pair in MAIN_EXCLUDED_PAIRS
+                        or not preliminary.universe):
+                    raise PublicDataError("TARGET_DEEP_PAIR_NOT_ELIGIBLE")
+                matching = tuple(
+                    x for x in preliminary.universe if x.pair == target_pair
+                )
+                if len(matching) != 1:
+                    raise PublicDataError("TARGET_DEEP_PAIR_NOT_ELIGIBLE")
+                # Preserve full all-pair observation context, but observe
+                # exactly ONE source-screened pair with original deep_scan.
+                preliminary = replace(
+                    preliminary, shortlist=matching, watchlist=matching,
+                )
+                limit = 1
             evidence = deep_scan(
-                client, preliminary, limit=2,
+                client, preliminary, limit=limit,
                 on_candidate=self._attach_public_wall_experience,
             )
         except PublicDataError as exc:
