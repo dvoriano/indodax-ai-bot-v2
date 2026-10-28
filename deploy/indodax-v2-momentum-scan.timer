@@ -1,0 +1,13 @@
+# M03-N staged only. Timer does not call scanner in parallel with itself.
+# No catch-up fake historical quotes; missed minutes remain missing.
+[Unit]
+Description=Run V2 public momentum scanner at second 10 of each minute
+
+[Timer]
+OnCalendar=*-*-* *:*:10
+AccuracySec=1s
+Persistent=false
+Unit=indodax-v2-momentum-scan.service
+
+[Install]
+WantedBy=timers.target
