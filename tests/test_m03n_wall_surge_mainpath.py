@@ -253,6 +253,7 @@ class M03NWallSurgeMainpathTest(unittest.TestCase):
                 "up_20pct_24h":0,"up_50pct_24h":0,
                 "up_100pct_24h":0,"down_10pct_24h":0,
                 "distinct_pairs":1,"distinct_days":1,
+                "matured_distinct_pairs":0,"matured_distinct_days":0,
                 "status":"INSUFFICIENT_MATURED_COMPARABLE_CASES",
                 "out_of_sample_validated":False,
                 "net_fee_adjusted_edge_proven":False,
