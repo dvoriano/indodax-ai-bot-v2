@@ -47,8 +47,18 @@ def panic(obs=None, *, bouncing=True):
     # Keep current quote and depth near the actual rebound close.
     receipt=obs.snapshot.source
     bid,ask=D("90.49"),D("90.50")
+    recent_five=history[-5:]
+    consistent_5m=replace(
+        obs.candle_5m,
+        open=recent_five[0].open,
+        high=max(c.high for c in recent_five),
+        low=min(c.low for c in recent_five),
+        close=recent_five[-1].close,
+        volume=sum((c.volume for c in recent_five),D("0")),
+    )
     return replace(
         obs, candles_1m=tuple(history),candle_1m=history[-1],
+        candle_5m=consistent_5m,
         snapshot=MarketSnapshot(receipt,bid,ask),
         bid_book_levels=((bid,D("1000000")/bid),),
         ask_book_levels=((ask,D("200000")/ask),),
@@ -87,9 +97,8 @@ class M03NBookWallTests(unittest.TestCase):
         self.assertLessEqual(D(result["observed_22m_peak_to_low_pct"]),D("-7"))
         self.assertGreaterEqual(D(result["recovery_from_visible_low_pct"]),D("0.3"))
         self.assertEqual(
-            result["continuation_hypothesis"],
-            "NEEDS_NEXT_CLOSED_CANDLE_AND_FLOW_CONFIRMATION",
-        )
+            result["continuation_hypothesis"],"NOT_CONFIRMED"
+        )  # 5m is still bearish despite a single 1m rebound
         self.assertEqual(result["fade_hypothesis"],
                          "RETEST_OR_SECOND_LEG_DOWN_REMAINS_POSSIBLE")
         self.assertFalse(result["trade_signal"])
@@ -167,6 +176,18 @@ class M03NBookWallTests(unittest.TestCase):
         ]),2)  # reuses existing closed-candle GETs, no new call
         self.assertFalse(obs.ready)
         self.assertFalse(obs.trade_history_complete)
+
+    def test_dislocated_last_closed_price_rejects_buy_wall_watch(self):
+        x=with_wall()
+        minute=list(x.candles_1m)
+        minute[-1]=replace(
+            minute[-1],open=D("92"),high=D("93"),low=D("89"),
+            close=D("90"),
+        )
+        x=replace(x,candles_1m=tuple(minute),candle_1m=minute[-1])
+        report=assess_orderbook_rebound(x)
+        self.assertEqual(report["status"],"BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")
+        self.assertFalse(report["trade_signal"])
 
     def test_depth_endpoint_unsorted_levels_refused_before_book_analysis(self):
         class BadDepth(OfficialPublicFixtures):
