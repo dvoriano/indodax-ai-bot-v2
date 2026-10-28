@@ -411,6 +411,7 @@ class DecisionJournal:
                     # last price: skip rather than manufacture midpoint price.
                     continue
                 if (item.ticker_epoch // 60 != minute
+                        or item.ticker_epoch > screening.observed_epoch
                         or item.last_idr <= 0
                         or not item.last_idr.is_finite()
                         or item.spread_bps < 0
@@ -434,8 +435,9 @@ class DecisionJournal:
                     "SELECT minute_epoch,observed_epoch,last_idr,spread_bps "
                     "FROM public_ticker_minute_samples "
                     "WHERE pair=? AND minute_epoch BETWEEN ? AND ? "
+                    "AND observed_epoch <= ? "
                     "ORDER BY minute_epoch DESC LIMIT 61",
-                    (item.pair,minute-3600,minute),
+                    (item.pair,minute-3600,minute,screening.observed_epoch),
                 ).fetchall()
                 if not rows or rows[0][0] != minute:
                     reports[item.pair] = {
