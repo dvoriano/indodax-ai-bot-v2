@@ -881,6 +881,7 @@ class DecisionJournal:
                     "up_20pct_24h":0,"up_50pct_24h":0,"up_100pct_24h":0,
                     "down_10pct_24h":0,
                     "_pair_set":set(),"_day_set":set(),
+                    "_mature_pair_set":set(),"_mature_day_set":set(),
                 })
                 pattern["cases"] += 1
                 pattern["_pair_set"].add(pair)
@@ -893,6 +894,8 @@ class DecisionJournal:
                 g["matured_24h"]+=1
                 if pattern is not None:
                     pattern["matured_24h"]+=1
+                    pattern["_mature_pair_set"].add(pair)
+                    pattern["_mature_day_set"].add(minute_epoch//86400)
                 value=Decimal(p24)
                 for threshold,field in (
                     (Decimal("20"),"up_20pct_24h"),
@@ -910,12 +913,14 @@ class DecisionJournal:
         for item in patterns.values():
             item["distinct_pairs"]=len(item.pop("_pair_set"))
             item["distinct_days"]=len(item.pop("_day_set"))
+            item["matured_distinct_pairs"]=len(item.pop("_mature_pair_set"))
+            item["matured_distinct_days"]=len(item.pop("_mature_day_set"))
             # Even if sample counts rise, this remains descriptive because
             # there is no independent holdout or all-in-fee outcome yet.
             item["status"]=(
                 "DESCRIPTIVE_HISTORY_NOT_VALIDATED"
-                if item["matured_24h"] >= 30 and item["distinct_pairs"] >= 5
-                   and item["distinct_days"] >= 3
+                if item["matured_24h"] >= 30 and item["matured_distinct_pairs"] >= 5
+                   and item["matured_distinct_days"] >= 3
                 else "INSUFFICIENT_MATURED_COMPARABLE_CASES"
             )
             item["out_of_sample_validated"]=False
