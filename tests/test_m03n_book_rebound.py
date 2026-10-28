@@ -44,8 +44,14 @@ def panic(obs=None, *, bouncing=True):
         close=D("90.5") if bouncing else D("88.5"),
         volume=D("40"),
     )
+    # Keep current quote and depth near the actual rebound close.
+    receipt=obs.snapshot.source
+    bid,ask=D("90.49"),D("90.50")
     return replace(
         obs, candles_1m=tuple(history),candle_1m=history[-1],
+        snapshot=MarketSnapshot(receipt,bid,ask),
+        bid_book_levels=((bid,D("1000000")/bid),),
+        ask_book_levels=((ask,D("200000")/ask),),
     )
 
 
@@ -59,7 +65,9 @@ class M03NBookWallTests(unittest.TestCase):
             ask_book_levels=((D("10500"),D("20000000")/D("10500")),),
         )
         result=assess_orderbook_rebound(x)
-        self.assertEqual(result["near_bid_ask_notional_ratio"],"5")
+        self.assertAlmostEqual(
+            float(result["near_bid_ask_notional_ratio"]),5.0,places=9
+        )
         self.assertEqual(result["status"],"WIDE_SPREAD_WALL_UNACTIONABLE")
         self.assertEqual(result["largest_bid_wall_notional_idr"],"100000000")
         self.assertFalse(result["resting_orders_are_executed_buys"])
@@ -154,7 +162,9 @@ class M03NBookWallTests(unittest.TestCase):
         self.assertEqual(len(obs.ask_book_levels),10)
         self.assertEqual(obs.bid_book_levels[0],(D("100"),D("2")))
         self.assertEqual(obs.ask_book_levels[0],(D("101"),D("1")))
-        self.assertEqual(len(fixture.paths),0)  # overridden path not tracked
+        self.assertEqual(len([
+            p for p in fixture.paths if "/tradingview/history_v2?" in p
+        ]),2)  # reuses existing closed-candle GETs, no new call
         self.assertFalse(obs.ready)
         self.assertFalse(obs.trade_history_complete)
 
