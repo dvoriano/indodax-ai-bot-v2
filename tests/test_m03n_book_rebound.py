@@ -144,6 +144,31 @@ class M03NBookWallTests(unittest.TestCase):
                 self.assertIsNone(res["sampled_60m_ticker_return_pct"])
                 self.assertFalse(res["g1_verified"])
 
+    def test_rebound_requires_confirmation_in_existing_quality_review(self):
+        from indodax_ai_bot.deep_analysis import _quality_review
+        candidate=analyze_observation(panic())
+        self.assertEqual(candidate.book_wall_diagnostic["status"],
+                         "PANIC_REBOUND_WATCH_UNCONFIRMED")
+        review=_quality_review(candidate,"BTC_DOWNTREND_DIAGNOSTIC")
+        self.assertEqual(review["book_wall_status"],
+                         "PANIC_REBOUND_WATCH_UNCONFIRMED")
+        self.assertIn("PANIC_REBOUND_NOT_CONFIRMED",review["review_flags"])
+        self.assertFalse(review["wall_persistence_proven"])
+        self.assertFalse(review["g2_candidate_authorized"])
+        self.assertFalse(review["trade_authorized"])
+
+    def test_quote_depth_mismatch_cannot_pass_quality_preview(self):
+        from indodax_ai_bot.deep_analysis import _quality_review
+        x=with_wall()
+        x=replace(x,bid_book_levels=((D("120"),D("10000")),),
+                   ask_book_levels=((D("121"),D("1000")),))
+        candidate=analyze_observation(x)
+        self.assertEqual(candidate.book_wall_diagnostic["status"],
+                         "BOOK_TICKER_MISMATCH_NO_WATCH")
+        review=_quality_review(candidate,"BTC_MIXED_DIAGNOSTIC")
+        self.assertIn("UNALIGNED_DEPTH_QUOTE_OR_CANDLE",review["review_flags"])
+        self.assertFalse(review["clear_of_provisional_cautions"])
+
     def test_second_leg_down_reported_even_with_very_large_bid_wall(self):
         diag=assess_orderbook_rebound(panic(bouncing=False))
         self.assertEqual(diag["status"],"SECOND_LEG_DOWN_RISK")
