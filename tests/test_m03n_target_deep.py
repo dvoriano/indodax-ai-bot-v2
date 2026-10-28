@@ -20,6 +20,7 @@ from indodax_ai_bot.config import Settings
 from indodax_ai_bot.contracts import FinalDecision
 from indodax_ai_bot.orchestrator import CycleResult
 from indodax_ai_bot.journal import DecisionJournal
+from indodax_ai_bot.public_market import PublicScanContext
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from test_m03b_deep import observation, screening
 from test_m03n_book_rebound import with_wall
@@ -40,7 +41,36 @@ class M03NTargetDeepMainpath(unittest.TestCase):
         self.j=DecisionJournal(Path(self.tmp.name)/"journal.sqlite3")
         self.app=DailyScalpingOrchestrator(Settings.from_env({}),self.j)
         original=screening()
-        self.scan=replace(original, universe=original.shortlist)
+        # The original M03-B legacy fixture has neither an all-pair universe
+        # nor the source-aligned PUBLIC scan context required by M03-N.
+        # Build a genuine timestamp-consistent PUBLIC-only receipt instead
+        # of bypassing the journal's fail-closed provenance checks.
+        epoch=original.observed_epoch
+        candidates=tuple(
+            replace(x, ticker_epoch=epoch, last_idr=x.bid_idr)
+            for x in original.shortlist
+        )
+        ctx=PublicScanContext(
+            observed_epoch=epoch, exchange_epoch=epoch,
+            pairs={
+                x.pair: (x.pair.replace("_", ""), x.pair.upper())
+                for x in candidates
+            },
+            tickers={
+                x.pair: {
+                    "server_time":epoch,
+                    "last":str(x.last_idr),
+                    "buy":str(x.bid_idr),
+                    "sell":str(x.ask_idr),
+                    "vol_idr":str(x.volume_idr_24h),
+                }
+                for x in candidates
+            },
+        )
+        self.scan=replace(
+            original, shortlist=candidates, watchlist=candidates[:2],
+            universe=candidates, scan_context=ctx,
+        )
 
     def test_original_mainpath_can_reobserve_pair_outside_top_two(self):
         market=TargetMarket()
@@ -98,6 +128,19 @@ class M03NTargetDeepMainpath(unittest.TestCase):
                 self.assertIsNone(outcome.deep)
                 self.assertEqual(market.called,[])
                 self.assertFalse(outcome.execution_allowed)
+
+    def test_malformed_source_context_still_fails_closed(self):
+        market=TargetMarket()
+        unsafe=replace(self.scan, scan_context=None)
+        with patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scan:
+            scan.return_value.scan.return_value=unsafe
+            outcome=self.app.run_deep_cycle(
+                "missing-context",market=market,target_pair="sol_idr"
+            )
+        self.assertEqual(market.called,[])
+        self.assertIn("INVALID_MOMENTUM_SCREENING_CONTEXT",outcome.reason)
+        self.assertIsNone(outcome.deep)
+        self.assertFalse(outcome.execution_allowed)
 
     def test_cli_dispatches_target_to_original_orchestrator(self):
         output=StringIO()
