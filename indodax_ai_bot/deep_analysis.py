@@ -51,6 +51,7 @@ class DeepCandidate:
     book_wall_diagnostic: dict | None = None
     wall_temporal_evidence: dict | None = None
     surge_experience_context: dict | None = None
+    surge_pattern: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -75,6 +76,7 @@ class DeepCandidate:
             "book_wall_diagnostic": self.book_wall_diagnostic,
             "wall_temporal_evidence": self.wall_temporal_evidence,
             "surge_experience_context": self.surge_experience_context,
+            "surge_pattern": self.surge_pattern,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -839,6 +841,7 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
                 analyze_observation(obs, early_momentum=item.early_momentum),
                 early_momentum=item.early_momentum,
                 surge_experience_context=screening.surge_experience,
+                surge_pattern=item.surge_pattern,
             )
             # Only the SAME source-bound observation becomes wall evidence;
             # journal callback is injected by the original orchestrator.
@@ -926,6 +929,10 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
             analyze_observation(obs, early_momentum=history),
             early_momentum=history,
             surge_experience_context=screening.surge_experience,
+            surge_pattern=next(
+                (x.surge_pattern for x in screening.shortlist[:limit]
+                 if x.pair == pair), None,
+            ),
         )
         if on_candidate is not None:
             candidate = on_candidate(candidate, obs)
