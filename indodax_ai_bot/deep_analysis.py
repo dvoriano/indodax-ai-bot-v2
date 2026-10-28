@@ -6,7 +6,7 @@ research diagnostics until G1 provenance/coverage gates are implemented.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from hashlib import sha256
 
@@ -42,6 +42,8 @@ class DeepCandidate:
     # M03-J closed-candle research only, never an entry or risk decision.
     market_structure_diagnostic: dict | None = None
     structure_replay: dict | None = None
+    # M03-N sampled first-seen-minute ticker momentum, never closed OHLC.
+    early_momentum: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -59,6 +61,7 @@ class DeepCandidate:
             "anomaly_flags": list(self.anomaly_flags),
             "market_structure_diagnostic": self.market_structure_diagnostic,
             "structure_replay": self.structure_replay,
+            "early_momentum": self.early_momentum,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -615,7 +618,10 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
             if abs(obs.snapshot.source.observed_epoch - screening.observed_epoch) > 120:
                 raise PublicDataError("OUT_OF_SYNC_SCREENING")
             observations[item.pair] = obs
-            found.append(analyze_observation(obs))
+            found.append(replace(
+                analyze_observation(obs),
+                early_momentum=item.early_momentum,
+            ))
         except PublicDataError as exc:
             found.append(DeepCandidate(item.pair, None, "REJECT_SOURCE_ERROR", str(exc)))
     synchronized: dict | None = None
@@ -688,7 +694,13 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                 pair, None, "REJECT_SOURCE_ERROR", str(exc)))
             continue
         observations[pair] = obs
-        candidates.append(analyze_observation(obs))
+        history = next(
+            (x.early_momentum for x in screening.shortlist[:limit]
+             if x.pair == pair), None,
+        )
+        candidates.append(replace(
+            analyze_observation(obs), early_momentum=history,
+        ))
     completed = attempted == len(selected) and len(candidates) == len(selected)
     valid = completed and not window_expired and all(c.score is not None for c in candidates)
     # Population-wide acceptance remains STRICT: 1 invalid pair blocks it.
