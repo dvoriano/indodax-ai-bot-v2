@@ -89,6 +89,8 @@ class PublicObservation:
     visible_closed_1m_trade_count: int = 0
     bid_depth_top5_idr: Decimal = Decimal("0")
     ask_depth_top5_idr: Decimal = Decimal("0")
+    visible_closed_1m_buy_count: int = 0
+    visible_closed_1m_sell_count: int = 0
 
     def summary(self) -> dict[str, str | int | bool]:
         return {
@@ -102,6 +104,9 @@ class PublicObservation:
             "candle_5m_start": self.candle_5m.start,
             "candle_15m_start": self.candle_15m.start,
             "trades_visible": self.trade_count_visible,
+            "visible_closed_1m_buy_count_sampled": self.visible_closed_1m_buy_count,
+            "visible_closed_1m_sell_count_sampled": self.visible_closed_1m_sell_count,
+            "visible_trade_side_counts_complete": False,
             "trade_history_complete": self.trade_history_complete,
             "depth_levels_visible": self.depth_levels_visible,
         }
@@ -282,6 +287,8 @@ class IndodaxPublicMarket:
         buy_flow = Decimal("0")
         sell_flow = Decimal("0")
         visible_trade_count_closed = 0
+        visible_buy_count = 0
+        visible_sell_count = 0
         for trade in trades:
             if not isinstance(trade, dict):
                 raise PublicDataError("INVALID_TRADE_ROW")
@@ -298,8 +305,10 @@ class IndodaxPublicMarket:
                 visible_trade_count_closed += 1
                 if trade["type"] == "buy":
                     buy_flow += price * amount
+                    visible_buy_count += 1
                 else:
                     sell_flow += price * amount
+                    visible_sell_count += 1
         depth = self._get(f"/api/depth/{pair_id}")
         if not isinstance(depth, dict) or not isinstance(depth.get("buy"), list) or not isinstance(depth.get("sell"), list):
             raise PublicDataError("INVALID_DEPTH")
@@ -327,6 +336,7 @@ class IndodaxPublicMarket:
             tuple(one), tuple(fifteen),
             buy_flow, sell_flow, visible_trade_count_closed,
             bid_depth5, ask_depth5,
+            visible_buy_count, visible_sell_count,
         )
 
     def closed_1m_research_history(self, pair: str = "btc_idr", *,
