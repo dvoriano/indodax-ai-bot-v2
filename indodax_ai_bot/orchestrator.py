@@ -1,7 +1,7 @@
 """SINGLE app entrypoint: safe vertical slice; real G1/G2/Indodax deferred."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import time
@@ -151,7 +151,15 @@ class DailyScalpingOrchestrator:
             # Legacy mocked M03 scanner fixture, no historical price source.
             return screening
         reports = self.journal.record_and_assess_public_ticker_momentum(screening)
-        return rank_scanner_with_early_momentum(screening, reports)
+        ranked = rank_scanner_with_early_momentum(screening, reports)
+        return replace(
+            ranked, surge_experience=self.journal.public_surge_casebook_summary()
+        )
+
+    def _attach_public_wall_experience(self, candidate, observation):
+        """Same original deep path, no extra fetch, provider or trade."""
+        wall = self.journal.record_and_compare_public_wall(candidate, observation)
+        return replace(candidate, wall_temporal_evidence=wall)
 
     def run_cycle(self, trace_id: str) -> CycleResult:
         # No synthetic candles, mock AI authority, private API or phantom orders.
@@ -300,7 +308,10 @@ class DailyScalpingOrchestrator:
         client = market if market is not None else IndodaxPublicMarket()
         try:
             preliminary = self._scan_with_early_momentum(client)
-            evidence = deep_scan(client, preliminary, limit=2)
+            evidence = deep_scan(
+                client, preliminary, limit=2,
+                on_candidate=self._attach_public_wall_experience,
+            )
         except PublicDataError as exc:
             reason = f"PUBLIC_DEEP_SOURCE_INVALID:{exc}"
             result = None
@@ -324,8 +335,11 @@ class DailyScalpingOrchestrator:
                 trace_id, tuple(x.pair for x in preliminary.shortlist),
                 observed_epoch=preliminary.observed_epoch,
             )
-            evidence = deep_scan(client, preliminary, limit=len(selected.pair_ids),
-                                 offset=selected.starting_index, require_btc=True)
+            evidence = deep_scan(
+                client, preliminary, limit=len(selected.pair_ids),
+                offset=selected.starting_index, require_btc=True,
+                on_candidate=self._attach_public_wall_experience,
+            )
             data = evidence.summary()
             data.update({
                 "reserved_pairs": list(selected.pair_ids),
@@ -350,7 +364,10 @@ class DailyScalpingOrchestrator:
         client = market if market is not None else IndodaxPublicMarket()
         try:
             preliminary = self._scan_with_early_momentum(client)
-            evidence = bulk_public_deep_scan(client, preliminary, limit=20)
+            evidence = bulk_public_deep_scan(
+                client, preliminary, limit=20,
+                on_candidate=self._attach_public_wall_experience,
+            )
         except PublicDataError as exc:
             reason = f"PUBLIC_BULK_BLOCKED:{exc}"
             result = None
