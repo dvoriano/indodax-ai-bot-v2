@@ -163,6 +163,61 @@ class M03NWallSurgeMainpathTest(unittest.TestCase):
             {"return_5m_pct":"NaN",
              "acceleration_current_5m_vs_prior_5m_pct_points":"1"},D("35")))
 
+    def test_surge_control_cohort_and_missing_future_are_not_winners(self):
+        fake=FakeIndodaxAll()
+        start=1800000000
+        fake.now=start+10
+        for ticker in fake.tickers.values():
+            ticker["server_time"]=fake.now-1
+        screen=DailyPairScanner(fake.client()).scan()
+        coins=[x.pair for x in screen.universe[:5]]
+        with self.j._connect() as con:
+            for p in coins:
+                con.execute(
+                    """INSERT INTO public_ticker_minute_samples
+                       (pair,minute_epoch,observed_epoch,ticker_epoch,
+                        last_idr,volume_24h_idr,spread_bps)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (p,start,start+10,start+9,"100","10000000","50"),
+                )
+        features={
+            "consecutive_minute_samples":11,
+            "return_1m_pct":"0.4","return_5m_pct":"2.5",
+            "acceleration_current_5m_vs_prior_5m_pct_points":"1",
+        }
+        reports={
+            coins[0]:dict(features,status="EARLY_WATCH_UNCALIBRATED"),
+            **{p:dict(features,status="OBSERVED_NO_ACCELERATION")
+               for p in coins[1:]},
+        }
+        self.j.record_public_surge_experience(screen,reports)
+        current=self.j.public_surge_casebook_summary()
+        self.assertEqual(current["cohorts"]["EARLY_WATCH"]["cases"],1)
+        self.assertEqual(current["cohorts"]["CONTROL"]["cases"],3)
+        self.assertTrue(current["control_cohort_available"])
+        future=start+86400
+        # Only FIRST early winner and ONE losing control have a real
+        # follow-up quote. The other controls remain UNKNOWN, not losses.
+        with self.j._connect() as con:
+            for p,value in ((coins[0],"135"),(coins[1],"91")):
+                con.execute(
+                    """INSERT INTO public_ticker_minute_samples
+                       (pair,minute_epoch,observed_epoch,ticker_epoch,
+                        last_idr,volume_24h_idr,spread_bps)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (p,future,future+10,future+9,value,"10000000","50"),
+                )
+        self.j.record_public_surge_experience(
+            replace(screen,observed_epoch=future+10),{},
+        )
+        result=self.j.public_surge_casebook_summary()
+        self.assertEqual(result["cohorts"]["EARLY_WATCH"]["up_20pct_24h"],1)
+        self.assertEqual(result["cohorts"]["CONTROL"]["matured_24h"],1)
+        self.assertEqual(result["cohorts"]["CONTROL"]["cases"],3)
+        self.assertEqual(result["cohorts"]["CONTROL"]["up_20pct_24h"],0)
+        self.assertFalse(result["trainable_model_authorized"])
+        self.assertFalse(result["trade_authorized"])
+
     def test_surge_case_created_before_outcome_and_matures_only_after_future_snapshot(self):
         fake=FakeIndodaxAll()
         start=1800000000 # 5m boundary
