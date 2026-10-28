@@ -91,6 +91,10 @@ class PublicObservation:
     ask_depth_top5_idr: Decimal = Decimal("0")
     visible_closed_1m_buy_count: int = 0
     visible_closed_1m_sell_count: int = 0
+    # Price/asset-quantity ladders from the SAME REST depth snapshot.
+    # First 10 per side are not exchange-attested and may be canceled.
+    bid_book_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    ask_book_levels: tuple[tuple[Decimal, Decimal], ...] = ()
 
     def summary(self) -> dict[str, str | int | bool]:
         return {
@@ -107,6 +111,9 @@ class PublicObservation:
             "visible_closed_1m_buy_count_sampled": self.visible_closed_1m_buy_count,
             "visible_closed_1m_sell_count_sampled": self.visible_closed_1m_sell_count,
             "visible_trade_side_counts_complete": False,
+            "book_ladder_levels_bid_visible": len(self.bid_book_levels),
+            "book_ladder_levels_ask_visible": len(self.ask_book_levels),
+            "book_liquidity_is_guaranteed": False,
             "trade_history_complete": self.trade_history_complete,
             "depth_levels_visible": self.depth_levels_visible,
         }
@@ -312,12 +319,25 @@ class IndodaxPublicMarket:
         depth = self._get(f"/api/depth/{pair_id}")
         if not isinstance(depth, dict) or not isinstance(depth.get("buy"), list) or not isinstance(depth.get("sell"), list):
             raise PublicDataError("INVALID_DEPTH")
+        ladders: dict[str, tuple[tuple[Decimal, Decimal], ...]] = {}
         for side in ("buy", "sell"):
+            validated = []
             for level in depth[side]:
                 if not isinstance(level, list) or len(level) < 2:
                     raise PublicDataError("INVALID_DEPTH_LEVEL")
-                _number(level[0], "DEPTH_PRICE")
-                _number(level[1], "DEPTH_AMOUNT")
+                validated.append((
+                    _number(level[0], "DEPTH_PRICE"),
+                    _number(level[1], "DEPTH_AMOUNT"),
+                ))
+            # Bound evidence footprint; do not invent missing depth levels.
+            # An unordered REST response is unusable for a distance-based wall.
+            prices = [row[0] for row in validated]
+            if any(
+                (a <= b if side == "buy" else a >= b)
+                for a, b in zip(prices, prices[1:])
+            ):
+                raise PublicDataError("UNSORTED_OR_DUPLICATE_BOOK_LEVEL")
+            ladders[side] = tuple(validated[:10])
         if not depth["buy"] or not depth["sell"]:
             raise PublicDataError("EMPTY_DEPTH")
         if _number(depth["buy"][0][0], "DEPTH_BID") > _number(depth["sell"][0][0], "DEPTH_ASK"):
@@ -337,6 +357,7 @@ class IndodaxPublicMarket:
             buy_flow, sell_flow, visible_trade_count_closed,
             bid_depth5, ask_depth5,
             visible_buy_count, visible_sell_count,
+            ladders["buy"], ladders["sell"],
         )
 
     def closed_1m_research_history(self, pair: str = "btc_idr", *,
