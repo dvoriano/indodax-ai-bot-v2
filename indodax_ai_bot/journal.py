@@ -108,6 +108,51 @@ class DecisionJournal:
                 "ON public_ticker_minute_samples(minute_epoch)"
             )
 
+            # M03-N: first observed real DEPTH diagnostic per pair/minute.
+            # No implied full book, exchange authentication or filled orders.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS public_deep_wall_samples (
+                   pair TEXT NOT NULL,
+                   minute_epoch INTEGER NOT NULL,
+                   observed_epoch INTEGER NOT NULL,
+                   closed_epoch INTEGER NOT NULL,
+                   book_status TEXT NOT NULL,
+                   bid_wall_price TEXT NOT NULL,
+                   bid_wall_idr TEXT NOT NULL,
+                   bid_near_idr TEXT NOT NULL,
+                   ask_near_idr TEXT NOT NULL,
+                   best_bid TEXT NOT NULL,
+                   best_ask TEXT NOT NULL,
+                   visible_buy_idr TEXT NOT NULL,
+                   visible_sell_idr TEXT NOT NULL,
+                   PRIMARY KEY(pair, minute_epoch)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_public_wall_retention "
+                "ON public_deep_wall_samples(minute_epoch)"
+            )
+            # Candidate features are frozen BEFORE future labels arrive.
+            # Controls permit comparing winners vs non-winners, not just pumps.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS public_surge_cases (
+                   pair TEXT NOT NULL,
+                   minute_epoch INTEGER NOT NULL,
+                   observed_epoch INTEGER NOT NULL,
+                   cohort TEXT NOT NULL,
+                   entry_price_idr TEXT NOT NULL,
+                   features_json TEXT NOT NULL,
+                   future_60m_return_pct TEXT,
+                   future_24h_return_pct TEXT,
+                   PRIMARY KEY(pair, minute_epoch)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_public_surge_retention "
+                "ON public_surge_cases(minute_epoch)"
+            )
+
+
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -509,4 +554,262 @@ class DecisionJournal:
                     "g1_verified": False,
                     "trade_signal": False,
                 }
+        # Frozen early-warning/control cases and only matured future outcomes.
+        # Same persistent scanner/journal path. No network/AI/trade side effects.
+        self.record_public_surge_experience(screening, reports)
         return reports
+
+
+    def record_and_compare_public_wall(self, candidate, observation) -> dict:
+        """Persist real two-sided depth evidence and compare DISTINCT minutes.
+
+        A moved/disappeared BUY wall is ambiguous: cancel, fill, or refresh
+        cannot be distinguished from two public snapshots.
+        """
+        from .scanner import MAIN_EXCLUDED_PAIRS
+        pair = candidate.pair
+        source = observation.snapshot.source
+        diag = candidate.book_wall_diagnostic
+        now = source.observed_epoch
+        minute = now // 60 * 60
+        base = {
+            "status": "BID_WALL_PERSISTENCE_UNPROVEN",
+            "pair": pair,
+            "minute_epoch": minute,
+            "previous_minute_epoch": None,
+            "elapsed_seconds": None,
+            "bid_wall_retained_observed": False,
+            "bid_wall_persistence_proven": False,
+            "cancel_vs_fill_distinguishable": False,
+            "source_verified": False,
+            "trade_signal": False,
+            "execution_allowed": False,
+        }
+        if (not isinstance(diag, dict) or
+                not isinstance(pair, str) or not pair.endswith("_idr") or
+                pair in MAIN_EXCLUDED_PAIRS or observation.pair != pair or
+                source.pair != pair or type(now) is not int or now <= 0 or
+                type(source.closed_1m_epoch) is not int or
+                now < source.closed_1m_epoch or
+                now - source.closed_1m_epoch > 120):
+            return dict(base, status="WALL_SOURCE_NOT_ALIGNED")
+        # Rejected source still has diagnostic fields, but must never be
+        # promoted into reliable wall continuity.
+        if (diag.get("status") in (
+                "BOOK_LEVELS_NOT_OBSERVED", "BOOK_TICKER_MISMATCH_NO_WATCH",
+                "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")
+                or candidate.closed_1m_epoch != source.closed_1m_epoch):
+            return dict(base, status="WALL_SOURCE_NOT_ALIGNED")
+        try:
+            values = [Decimal(diag[key]) for key in (
+                "largest_bid_wall_price_idr", "largest_bid_wall_notional_idr",
+                "bid_near_total_idr", "ask_near_total_idr",
+            )]
+            bid_price, bid_idr, near_bid, near_ask = values
+            best_bid = observation.snapshot.best_bid_idr
+            best_ask = observation.snapshot.best_ask_idr
+            if (not all(x.is_finite() and x > 0 for x in (
+                    *values, best_bid, best_ask))
+                    or best_bid >= best_ask):
+                return dict(base, status="WALL_INVALID_DEPTH_VALUES")
+        except (KeyError, ValueError, TypeError, ArithmeticError):
+            return dict(base, status="WALL_INVALID_DEPTH_VALUES")
+
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                "DELETE FROM public_deep_wall_samples WHERE minute_epoch < ?",
+                (minute - 7*86400,),
+            )
+            # One initial snapshot each minute. Same-minute rescan is NOT
+            # independent temporal evidence even when the book changed.
+            con.execute(
+                """INSERT OR IGNORE INTO public_deep_wall_samples
+                (pair,minute_epoch,observed_epoch,closed_epoch,book_status,
+                 bid_wall_price,bid_wall_idr,bid_near_idr,ask_near_idr,
+                 best_bid,best_ask,visible_buy_idr,visible_sell_idr)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (pair,minute,now,source.closed_1m_epoch,diag["status"],
+                 str(bid_price),str(bid_idr),str(near_bid),str(near_ask),
+                 str(best_bid),str(best_ask),
+                 str(candidate.visible_buy_idr),str(candidate.visible_sell_idr)),
+            )
+            current = con.execute(
+                "SELECT observed_epoch,bid_wall_price,bid_wall_idr,book_status "
+                "FROM public_deep_wall_samples WHERE pair=? AND minute_epoch=?",
+                (pair,minute),
+            ).fetchone()
+            previous = con.execute(
+                """SELECT minute_epoch,observed_epoch,bid_wall_price,
+                          bid_wall_idr,book_status
+                   FROM public_deep_wall_samples
+                   WHERE pair=? AND minute_epoch < ?
+                   ORDER BY minute_epoch DESC LIMIT 1""",
+                (pair,minute),
+            ).fetchone()
+        if not previous:
+            return base
+        prior_minute, old_epoch, old_price_raw, old_idr_raw, old_status = previous
+        elapsed = current[0] - old_epoch
+        extra = {
+            "previous_minute_epoch": prior_minute,
+            "elapsed_seconds": elapsed,
+            "previous_book_status": old_status,
+        }
+        if elapsed < 60 or elapsed > 300 or now < current[0]:
+            return dict(base, **extra, status="WALL_OBSERVATION_GAP_OR_REPLAY")
+        if (current[3] in (
+                "WIDE_SPREAD_WALL_UNACTIONABLE",
+                "BOOK_TICKER_MISMATCH_NO_WATCH",
+                "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")
+                or old_status in (
+                "WIDE_SPREAD_WALL_UNACTIONABLE",
+                "BOOK_TICKER_MISMATCH_NO_WATCH",
+                "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")):
+            return dict(base, **extra, status="WALL_SPREAD_OR_SOURCE_UNACTIONABLE")
+        old_price, old_idr = Decimal(old_price_raw), Decimal(old_idr_raw)
+        new_price, new_idr = Decimal(current[1]), Decimal(current[2])
+        if old_price <= 0 or old_idr <= 0:
+            return dict(base, **extra, status="WALL_INVALID_PRIOR_EVIDENCE")
+        moved_bps = abs(new_price - old_price) * Decimal(10000) / old_price
+        retained = moved_bps <= 50 and new_idr >= old_idr * Decimal("0.60")
+        return dict(
+            base, **extra,
+            status=("BID_WALL_RETAINED_OBSERVED" if retained
+                    else "BID_WALL_DISAPPEARED_OR_MOVED_UNKNOWN"),
+            bid_wall_retained_observed=retained,
+            observed_wall_notional_change_pct=str(
+                (new_idr/old_idr-1)*Decimal(100)
+            ),
+            wall_price_shift_bps=str(moved_bps),
+            observations_compared=2,
+        )
+
+    def record_public_surge_experience(self, screening, reports: dict) -> None:
+        """Time-locked prospective casebook with matched non-pump controls.
+
+        The label is ONLY the actually observed endpoint price at +60m/+24h,
+        not the maximum future price nor a made-up 24h rally prediction.
+        """
+        if not screening.universe or not isinstance(reports, dict):
+            return
+        minute = screening.observed_epoch // 60 * 60
+        # Five-minute source-aligned cohort. Controls prevent learning only
+        # from winners. Limit rows and total history for a small VPS.
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                "DELETE FROM public_surge_cases WHERE minute_epoch < ?",
+                (minute-14*86400,),
+            )
+            for horizon,col in (
+                (60,"future_60m_return_pct"),
+                (1440,"future_24h_return_pct"),
+            ):
+                due = con.execute(
+                    f"""SELECT c.pair,c.minute_epoch,c.entry_price_idr,
+                               s.last_idr
+                        FROM public_surge_cases c
+                        JOIN public_ticker_minute_samples s
+                          ON s.pair=c.pair AND
+                             s.minute_epoch=c.minute_epoch+?
+                        WHERE c.{col} IS NULL AND c.minute_epoch=?""",
+                    (horizon*60,minute-horizon*60),
+                ).fetchall()
+                for pair,epoch,entry_raw,future_raw in due:
+                    entry, future = Decimal(entry_raw), Decimal(future_raw)
+                    if entry > 0 and future > 0 and all(
+                        x.is_finite() for x in (entry,future)
+                    ):
+                        con.execute(
+                            f"UPDATE public_surge_cases SET {col}=? "
+                            "WHERE pair=? AND minute_epoch=?",
+                            (str((future/entry-1)*Decimal(100)),pair,epoch),
+                        )
+            if minute % 300 != 0:
+                # Scanner is normally at second 10, minute still 5m boundary.
+                return
+            chosen = []
+            for item in screening.universe:
+                m = reports.get(item.pair) or {}
+                if (m.get("status") == "EARLY_WATCH_UNCALIBRATED"
+                        and m.get("consecutive_minute_samples",0) >= 11):
+                    chosen.append((item,m,"EARLY_WATCH"))
+                    if len(chosen) == 20:
+                        break
+            # Avoid selecting only winners. 3 turnover-ranked non-alerts
+            # each 5m form a time-matched baseline, not a trading signal.
+            controls = 0
+            for item in screening.universe:
+                m = reports.get(item.pair) or {}
+                if (controls >= 3 or item.pair in {x[0].pair for x in chosen}):
+                    continue
+                if (m.get("consecutive_minute_samples",0) >= 11 and
+                        m.get("status") != "EARLY_WATCH_UNCALIBRATED"):
+                    chosen.append((item,m,"CONTROL"))
+                    controls += 1
+            for item,m,cohort in chosen:
+                if item.last_idr is None or item.last_idr <= 0 or not item.last_idr.is_finite():
+                    continue
+                # Quote must actually have been captured in THIS minute; not
+                # a previous/out-of-sync ticker.
+                observed = con.execute(
+                    "SELECT last_idr,observed_epoch FROM public_ticker_minute_samples "
+                    "WHERE pair=? AND minute_epoch=?",
+                    (item.pair,minute),
+                ).fetchone()
+                if not observed:
+                    continue
+                frozen = {
+                    "label_asof_minute_epoch": minute,
+                    "cohort": cohort,
+                    "momentum_status": m.get("status"),
+                    "return_1m_pct": m.get("return_1m_pct"),
+                    "return_5m_pct": m.get("return_5m_pct"),
+                    "return_15m_pct": m.get("return_15m_pct"),
+                    "return_60m_pct": m.get("return_60m_pct"),
+                    "acceleration_5m_pct_points":
+                        m.get("acceleration_current_5m_vs_prior_5m_pct_points"),
+                    "spread_bps": str(item.spread_bps),
+                    "volume_24h_idr": str(item.volume_idr_24h),
+                    "true_minute_volume_known": False,
+                    "complete_trade_tape_known": False,
+                    "orderbook_wall_persistence_known": False,
+                    "btc_regime_proven": False,
+                    "future_return_known_at_entry": False,
+                }
+                con.execute(
+                    """INSERT OR IGNORE INTO public_surge_cases
+                       (pair,minute_epoch,observed_epoch,cohort,entry_price_idr,
+                        features_json) VALUES (?,?,?,?,?,?)""",
+                    (item.pair,minute,observed[1],cohort,observed[0],
+                     json.dumps(frozen,sort_keys=True)),
+                )
+
+    def public_surge_casebook_summary(self) -> dict:
+        """Descriptive mature outcomes only. No AI training permission."""
+        with self._connect() as con:
+            rows = con.execute(
+                """SELECT cohort,future_60m_return_pct,future_24h_return_pct
+                   FROM public_surge_cases"""
+            ).fetchall()
+        groups = {}
+        for cohort,p60,p24 in rows:
+            g=groups.setdefault(cohort,{"cases":0,"matured_60m":0,
+                                      "matured_24h":0,"up_20pct_24h":0})
+            g["cases"]+=1
+            if p60 is not None:
+                g["matured_60m"]+=1
+            if p24 is not None:
+                g["matured_24h"]+=1
+                if Decimal(p24)>=Decimal("20"):
+                    g["up_20pct_24h"]+=1
+        return {
+            "status":"DESCRIPTIVE_EXPERIENCE_NOT_PREDICTIVE",
+            "cohorts":groups,
+            "forward_24h_endpoint_not_maximum": True,
+            "learning_guard":"NEED_MATURED_CONTROLS_OUT_OF_SAMPLE_AND_FEES",
+            "trainable_model_authorized":False,
+            "g1_verified":False,
+            "trade_authorized":False,
+        }
