@@ -28,7 +28,9 @@ def fake_minute(fake: FakeIndodaxAll, i: int) -> None:
         base = D("100")
         if pair == "m044_idr":
             base += D("0.08") * D(min(i, 50))
-            base += D("0.4") * D(max(0, i-50))
+            # Increasing slope, not constant absolute price increments:
+            # 5m % momentum must exceed the PREVIOUS 5m % momentum.
+            base += D("0.04") * D(max(0, i-50) ** 2)
         ticker.update({
             "server_time":fake.now-1,
             "last":str(base),
@@ -81,6 +83,30 @@ class M03NEarlyMomentumTests(unittest.TestCase):
         self.assertFalse(obs.summary()["visible_trade_side_counts_complete"])
         self.assertFalse(obs.trade_history_complete)
         self.assertFalse(obs.ready)
+
+    def test_valid_epoch_minute_is_archived_not_mistaken_for_minute_index(self):
+        with TemporaryDirectory() as td:
+            db=Path(td)/"db.sqlite3"
+            j=DecisionJournal(db)
+            fake_minute(self.f,0)
+            raw=DailyPairScanner(self.f.client()).scan()
+            pair=next(x for x in raw.universe if x.pair=="m044_idr")
+            minute=raw.observed_epoch//60*60
+            self.assertEqual(pair.ticker_epoch//60*60,minute)
+            self.assertNotEqual(pair.ticker_epoch//60,minute)
+            reports=j.record_and_assess_public_ticker_momentum(raw)
+            self.assertEqual(
+                reports["m044_idr"]["status"],
+                "WARMUP_OR_GAPPED_MINUTE_SAMPLES",
+            )
+            self.assertEqual(reports["m044_idr"]["consecutive_minute_samples"],1)
+            with j._connect() as con:
+                saved=con.execute(
+                    "SELECT minute_epoch,ticker_epoch,last_idr "
+                    "FROM public_ticker_minute_samples WHERE pair=?",
+                    ("m044_idr",),
+                ).fetchone()
+            self.assertEqual(saved,(minute,pair.ticker_epoch,"100"))
 
     def test_startup_never_invents_5m_15m_60m_data(self):
         with TemporaryDirectory() as td:
