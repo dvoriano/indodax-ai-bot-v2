@@ -108,6 +108,42 @@ class M03NBookWallTests(unittest.TestCase):
         self.assertEqual(out["state"],"PUBLIC_EVIDENCE_UNATTESTED")
         self.assertFalse(out["g1_verified"])
 
+    def test_contiguous_same_minute_60m_crash_can_trigger_rebound_watch(self):
+        x=with_wall()
+        epoch=(x.snapshot.source.observed_epoch//60)*60
+        m={
+            "minute_epoch":epoch,
+            "consecutive_minute_samples":61,
+            "return_60m_pct":"-11.5",
+            "status":"EXHAUSTION_CAUTION",
+        }
+        report=assess_orderbook_rebound(x,early_momentum=m)
+        self.assertEqual(report["status"],"PANIC_REBOUND_WATCH_UNCONFIRMED")
+        self.assertEqual(report["crash_evidence_horizon"],
+                         "60M_CONTIGUOUS_TICKER_SAMPLES")
+        self.assertEqual(report["sampled_60m_ticker_return_pct"],"-11.5")
+        full=analyze_observation(x,early_momentum=m).summary()
+        self.assertEqual(full["book_wall_diagnostic"]["status"],
+                         "PANIC_REBOUND_WATCH_UNCONFIRMED")
+        self.assertFalse(full["trade_authorized"])
+
+    def test_incomplete_or_future_60m_ticker_context_cannot_fake_panic(self):
+        x=with_wall()
+        epoch=(x.snapshot.source.observed_epoch//60)*60
+        for m in (
+            {"minute_epoch":epoch,"consecutive_minute_samples":60,
+             "return_60m_pct":"-15"},
+            {"minute_epoch":epoch+60,"consecutive_minute_samples":61,
+             "return_60m_pct":"-15"},
+            {"minute_epoch":epoch,"consecutive_minute_samples":61,
+             "return_60m_pct":"NaN"},
+        ):
+            with self.subTest(m=m):
+                res=assess_orderbook_rebound(x,early_momentum=m)
+                self.assertEqual(res["status"],"BID_WALL_WATCH_UNCONFIRMED")
+                self.assertIsNone(res["sampled_60m_ticker_return_pct"])
+                self.assertFalse(res["g1_verified"])
+
     def test_second_leg_down_reported_even_with_very_large_bid_wall(self):
         diag=assess_orderbook_rebound(panic(bouncing=False))
         self.assertEqual(diag["status"],"SECOND_LEG_DOWN_RISK")
