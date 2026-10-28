@@ -26,6 +26,19 @@ class SellTargetAssessment:
 
 
 @dataclass(frozen=True)
+class ScalpingTimeAssessment:
+    """Position holding-time advice, never a SELL/BUY authorization."""
+    elapsed_seconds: int
+    phase: str
+    risk_review_priority: str
+    review_interval_seconds: int
+    pump_exception_observed: bool
+    forced_sell: bool = False
+    execution_allowed: bool = False
+    reference: str = "ACTUAL_BOT_OWNED_BUY_FILL_EPOCH"
+
+
+@dataclass(frozen=True)
 class ScalpingPolicy:
     min_net_profit_idr: Decimal = Decimal("10000")
     min_net_roi_percent: Decimal = Decimal("2")
@@ -35,6 +48,55 @@ class ScalpingPolicy:
     max_active_main_pairs: int = 2
     manual_proposal_ttl_seconds: int = 90
     reporting_timezone: str = "Asia/Jakarta"
+    scalp_fast_window_seconds: int = 30 * 60
+    scalp_preferred_exit_seconds: int = 60 * 60
+    scalp_pump_extension_review_seconds: int = 90 * 60
+
+    def assess_position_holding_time(
+        self, *,
+        actual_buy_fill_epoch: int,
+        observed_epoch: int,
+        pump_continuation_confirmed: bool = False,
+        trailing_protection_active: bool = False,
+        market_source_fresh: bool = False,
+        risk_review_clear: bool = False,
+    ) -> ScalpingTimeAssessment:
+        """30/60m scalping review clock starts at an ACTUAL owned BUY fill.
+
+        A strong pump may justify bounded trailing observation after 60m,
+        but must be fresh, protected and Risk-cleared, and 90m triggers
+        escalated review even then. Never fabricate fills or authorize SELL.
+        Price returns and T1/T2/T3 still refer to actual BUY cost basis.
+        """
+        if (type(actual_buy_fill_epoch) is not int or
+                type(observed_epoch) is not int or
+                actual_buy_fill_epoch <= 0 or
+                observed_epoch < actual_buy_fill_epoch):
+            raise ValueError("INVALID_ACTUAL_BUY_HOLDING_TIME")
+        flags = (pump_continuation_confirmed, trailing_protection_active,
+                 market_source_fresh, risk_review_clear)
+        if any(type(flag) is not bool for flag in flags):
+            raise ValueError("INVALID_PUMP_EXCEPTION_EVIDENCE")
+        age = observed_epoch - actual_buy_fill_epoch
+        exception = all(flags)
+        if age < self.scalp_fast_window_seconds:
+            phase, priority = "FAST_SCALP_MONITOR", "NORMAL"
+        elif age < self.scalp_preferred_exit_seconds:
+            phase, priority = "EXIT_PRIORITY_REVIEW", "ELEVATED"
+        elif (exception and
+              age < self.scalp_pump_extension_review_seconds):
+            phase, priority = "PUMP_TRAILING_EXCEPTION_REVIEW", "ELEVATED"
+        elif age >= self.scalp_pump_extension_review_seconds:
+            phase, priority = "EXTENDED_POSITION_RISK_REVIEW", "URGENT"
+        else:
+            phase, priority = "TIME_STOP_PROTECTIVE_REVIEW", "URGENT"
+        return ScalpingTimeAssessment(
+            elapsed_seconds=age,
+            phase=phase,
+            risk_review_priority=priority,
+            review_interval_seconds=60,
+            pump_exception_observed=exception,
+        )
 
     def eligible_buy(self, estimated_net_profit_idr: Decimal, estimated_net_roi_percent: Decimal) -> bool:
         return (
