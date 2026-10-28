@@ -375,6 +375,7 @@ def assess_orderbook_rebound(
     obs: PublicObservation,
     *, near_bps: Decimal = Decimal("200"),
     spread_guard_bps: Decimal = Decimal("80"),
+    early_momentum: dict | None = None,
 ) -> dict:
     """M03-N: source-bound *visible resting order* vs actual trade diagnostic.
 
@@ -464,6 +465,26 @@ def assess_orderbook_rebound(
     selloff = (observed_low/past_peak-1)*HUNDRED
     recovery = (minute[-1].close/observed_low-1)*HUNDRED
     last_change = (minute[-1].close/minute[-2].close-1)*HUNDRED
+    # Only reference 60m ticker returns if SAME-minute, uninterrupted 61
+    # first-observed quotes exist. This is not a certified closed 60m candle.
+    ticker_60m = None
+    if isinstance(early_momentum, dict):
+        epoch = early_momentum.get("minute_epoch")
+        count = early_momentum.get("consecutive_minute_samples")
+        reported = early_momentum.get("return_60m_pct")
+        if (type(epoch) is int and epoch ==
+                (obs.snapshot.source.observed_epoch//60)*60
+                and type(count) is int and count >= 61
+                and isinstance(reported, str)):
+            try:
+                candidate = Decimal(reported)
+                if candidate.is_finite():
+                    ticker_60m = candidate
+            except (ArithmeticError, ValueError):
+                pass
+    severe_selloff = selloff <= Decimal("-7") or (
+        ticker_60m is not None and ticker_60m <= Decimal("-7")
+    )
     fiveminute = (obs.candle_5m.close/obs.candle_5m.open-1)*HUNDRED
     last_close_vs_quote_bps = (
         abs(minute[-1].close-bid)*Decimal(10000)/bid
@@ -474,10 +495,10 @@ def assess_orderbook_rebound(
         state = "WIDE_SPREAD_WALL_UNACTIONABLE"
     elif last_close_vs_quote_bps > Decimal("300"):
         state = "BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH"
-    elif (selloff <= Decimal("-7") and recovery >= Decimal("0.3")
+    elif (severe_selloff and recovery >= Decimal("0.3")
           and last_change > ZERO and ratio >= Decimal("3")):
         state = "PANIC_REBOUND_WATCH_UNCONFIRMED"
-    elif selloff <= Decimal("-7") and last_change <= ZERO:
+    elif severe_selloff and last_change <= ZERO:
         state = "SECOND_LEG_DOWN_RISK"
     elif ratio >= Decimal("3"):
         state = "BID_WALL_WATCH_UNCONFIRMED"
@@ -502,6 +523,13 @@ def assess_orderbook_rebound(
         "spread_bps": str(spread),
         "last_close_vs_bid_gap_bps": str(last_close_vs_quote_bps),
         "observed_22m_peak_to_low_pct": str(selloff),
+        "sampled_60m_ticker_return_pct":
+            None if ticker_60m is None else str(ticker_60m),
+        "crash_evidence_horizon": (
+            "22M_CLOSED_OHLC" if selloff <= Decimal("-7") else
+            "60M_CONTIGUOUS_TICKER_SAMPLES" if ticker_60m is not None and
+                ticker_60m <= Decimal("-7") else "NO_SEVERE_SELLOFF"
+        ),
         "recovery_from_visible_low_pct": str(recovery),
         "last_closed_1m_return_pct": str(last_change),
         "closed_5m_return_pct": str(fiveminute),
@@ -518,7 +546,10 @@ def assess_orderbook_rebound(
     return book
 
 
-def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Decimal("80")) -> DeepCandidate:
+def analyze_observation(
+    obs: PublicObservation, *, max_spread_bps: Decimal = Decimal("80"),
+    early_momentum: dict | None = None,
+) -> DeepCandidate:
     """One pair; reject incomplete/stale evidence rather than create synthetic candles."""
     pair = obs.pair
     book_diagnostic: dict | None = None
@@ -526,7 +557,9 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
         if obs.snapshot.source.pair != pair or obs.snapshot.source.observed_epoch - obs.snapshot.source.closed_1m_epoch > 120:
             raise PublicDataError("STALE_OR_WRONG_SOURCE")
         minute = _last_continuous(obs.candles_1m, 60, 22)
-        book_diagnostic = assess_orderbook_rebound(obs)
+        book_diagnostic = assess_orderbook_rebound(
+            obs, early_momentum=early_momentum
+        )
         fifteen = _last_continuous(obs.candles_15m, 900, 2)
         if minute[-1].start + 60 != obs.snapshot.source.closed_1m_epoch:
             raise PublicDataError("CANDLE_RECEIPT_MISMATCH")
@@ -784,7 +817,7 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
                 raise PublicDataError("OUT_OF_SYNC_SCREENING")
             observations[item.pair] = obs
             found.append(replace(
-                analyze_observation(obs),
+                analyze_observation(obs, early_momentum=item.early_momentum),
                 early_momentum=item.early_momentum,
             ))
         except PublicDataError as exc:
@@ -864,7 +897,8 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
              if x.pair == pair), None,
         )
         candidates.append(replace(
-            analyze_observation(obs), early_momentum=history,
+            analyze_observation(obs, early_momentum=history),
+            early_momentum=history,
         ))
     completed = attempted == len(selected) and len(candidates) == len(selected)
     valid = completed and not window_expired and all(c.score is not None for c in candidates)
