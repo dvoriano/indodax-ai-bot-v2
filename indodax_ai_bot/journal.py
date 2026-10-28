@@ -103,6 +103,10 @@ class DecisionJournal:
                 "CREATE INDEX IF NOT EXISTS idx_public_ticker_minute_latest "
                 "ON public_ticker_minute_samples(pair,minute_epoch DESC)"
             )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_public_ticker_minute_retention "
+                "ON public_ticker_minute_samples(minute_epoch)"
+            )
 
 
     @contextmanager
@@ -394,6 +398,13 @@ class DecisionJournal:
             raise PublicDataError("INVALID_MOMENTUM_UNIVERSE")
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
+            # Keep a bounded 24h source-sample buffer (61 consecutive
+            # minutes suffice for the 60m context); prevent unbounded VPS DB.
+            # These are not used as a certified historical trade ledger.
+            con.execute(
+                "DELETE FROM public_ticker_minute_samples WHERE minute_epoch < ?",
+                (minute - 86400,),
+            )
             for item in screening.universe:
                 if item.last_idr is None:
                     # Older fixture/previous M03 scanner inputs provide no
