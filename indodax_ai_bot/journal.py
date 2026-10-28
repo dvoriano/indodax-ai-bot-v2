@@ -856,7 +856,10 @@ class DecisionJournal:
             g=groups.setdefault(cohort,{"cases":0,"matured_60m":0,
                                         "matured_24h":0,"up_20pct_24h":0,
                                         "up_50pct_24h":0,"up_100pct_24h":0,
-                                        "down_10pct_24h":0})
+                                        "down_10pct_24h":0,
+                                        "up_2pct_60m":0,"up_8pct_60m":0,
+                                        "up_11pct_60m":0,"down_2pct_60m":0,
+                                        "_sum_return_60m":Decimal("0")})
             g["cases"]+=1
             try:
                 features = json.loads(features_json)
@@ -880,6 +883,9 @@ class DecisionJournal:
                     "cases":0,"matured_60m":0,"matured_24h":0,
                     "up_20pct_24h":0,"up_50pct_24h":0,"up_100pct_24h":0,
                     "down_10pct_24h":0,
+                    "up_2pct_60m":0,"up_8pct_60m":0,
+                    "up_11pct_60m":0,"down_2pct_60m":0,
+                    "_sum_return_60m":Decimal("0"),
                     "_pair_set":set(),"_day_set":set(),
                     "_mature_pair_set":set(),"_mature_day_set":set(),
                 })
@@ -887,9 +893,29 @@ class DecisionJournal:
                 pattern["_pair_set"].add(pair)
                 pattern["_day_set"].add(minute_epoch//86400)
             if p60 is not None:
+                # +60m endpoint is an observed quote, NOT an intrahour
+                # peak or fee-adjusted filled exit.
+                value60=Decimal(p60)
+                if not value60.is_finite():
+                    raise ValueError("INVALID_STORED_60M_OUTCOME")
                 g["matured_60m"]+=1
+                g["_sum_return_60m"]+=value60
                 if pattern is not None:
                     pattern["matured_60m"]+=1
+                    pattern["_sum_return_60m"]+=value60
+                for threshold,field in (
+                    (Decimal("2"),"up_2pct_60m"),
+                    (Decimal("8"),"up_8pct_60m"),
+                    (Decimal("11"),"up_11pct_60m"),
+                ):
+                    if value60 >= threshold:
+                        g[field]+=1
+                        if pattern is not None:
+                            pattern[field]+=1
+                if value60 <= Decimal("-2"):
+                    g["down_2pct_60m"]+=1
+                    if pattern is not None:
+                        pattern["down_2pct_60m"]+=1
             if p24 is not None:
                 g["matured_24h"]+=1
                 if pattern is not None:
@@ -910,7 +936,24 @@ class DecisionJournal:
                     g["down_10pct_24h"]+=1
                     if pattern is not None:
                         pattern["down_10pct_24h"]+=1
+        for item in groups.values():
+            total=item.pop("_sum_return_60m")
+            n=item["matured_60m"]
+            item["mean_return_60m_pct"]=(
+                str((total/Decimal(n)).quantize(Decimal("0.0001")))
+                if n else None
+            )
         for item in patterns.values():
+            total=item.pop("_sum_return_60m")
+            n=item["matured_60m"]
+            item["mean_return_60m_pct"]=(
+                str((total/Decimal(n)).quantize(Decimal("0.0001")))
+                if n else None
+            )
+            item["scalp_60m_descriptive_status"]=(
+                "OBSERVED_ENDPOINT_HISTORY_NOT_TRADE_VALIDATED"
+                if n else "NO_MATURED_60M_OUTCOMES"
+            )
             item["distinct_pairs"]=len(item.pop("_pair_set"))
             item["distinct_days"]=len(item.pop("_day_set"))
             item["matured_distinct_pairs"]=len(item.pop("_mature_pair_set"))
@@ -931,6 +974,8 @@ class DecisionJournal:
             "pattern_library":patterns,
             "casebook_rows":len(rows),
             "forward_24h_endpoint_not_maximum":True,
+            "forward_60m_endpoint_not_intrahour_maximum":True,
+            "return_60m_is_gross_ticker_quote_not_position_net_roi":True,
             "only_asof_frozen_features":True,
             "control_cohort_available":"CONTROL" in groups,
             "learning_guard":"NEED_MATURED_CONTROLS_OUT_OF_SAMPLE_AND_FEES",
