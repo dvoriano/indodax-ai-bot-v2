@@ -151,10 +151,13 @@ class DailyScalpingOrchestrator:
             # Legacy mocked M03 scanner fixture, no historical price source.
             return screening
         reports = self.journal.record_and_assess_public_ticker_momentum(screening)
-        ranked = rank_scanner_with_early_momentum(screening, reports)
-        return replace(
-            ranked, surge_experience=self.journal.public_surge_casebook_summary()
+        # One source-bound prospective casebook, read ONCE for this cycle.
+        # Annotates each new scanner candidate, never overrides BUY gates.
+        experience = self.journal.public_surge_casebook_summary()
+        ranked = rank_scanner_with_early_momentum(
+            screening, reports, casebook=experience,
         )
+        return replace(ranked, surge_experience=experience)
 
     def _attach_public_wall_experience(self, candidate, observation):
         """Same original deep path, no extra fetch, provider or trade."""
