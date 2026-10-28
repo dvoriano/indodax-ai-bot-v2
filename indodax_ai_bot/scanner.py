@@ -27,6 +27,8 @@ class ScreenedPair:
     ticker_epoch: int
     last_idr: Decimal | None = None
     early_momentum: dict | None = None
+    # Historical *descriptive* similarity, never a predictive BUY score.
+    surge_pattern: dict | None = None
 
     def summary(self) -> dict[str, str | int]:
         return {
@@ -36,6 +38,7 @@ class ScreenedPair:
             "day_range_percent": str(self.day_range_percent.quantize(Decimal("0.01"))),
             "ticker_epoch": self.ticker_epoch,
             "early_momentum": self.early_momentum,
+            "surge_pattern": self.surge_pattern,
         }
 
 
@@ -162,8 +165,39 @@ class DailyPairScanner:
         )
 
 
+def surge_pattern_signature(momentum: dict | None, spread_bps: Decimal) -> str | None:
+    """Timestamp-locked coarse pattern shared by current and past cases.
+
+    Derived solely from observed 5-minute return, change from previous 5m,
+    and current spread. Not a classifier fitted to future outcomes.
+    """
+    if not isinstance(momentum, dict) or not spread_bps.is_finite() or spread_bps < 0:
+        return None
+    r5, delta = momentum.get("return_5m_pct"), momentum.get(
+        "acceleration_current_5m_vs_prior_5m_pct_points"
+    )
+    if not isinstance(r5, str) or not isinstance(delta, str):
+        return None
+    try:
+        value, acceleration = Decimal(r5), Decimal(delta)
+    except (ArithmeticError, ValueError):
+        return None
+    if not value.is_finite() or not acceleration.is_finite():
+        return None
+    level = (
+        "FALLING" if value <= 0 else
+        "EARLY_UP_0_2" if value < 2 else
+        "RISING_2_5" if value < 5 else
+        "EXTENDED_UP_5_PLUS"
+    )
+    return ("__".join((level,
+            "ACCELERATING" if acceleration > 0 else "SLOWING",
+            "TIGHT_SPREAD" if spread_bps <= Decimal("80") else "WIDE_SPREAD")))
+
+
 def rank_scanner_with_early_momentum(
     screening: ScannerResult, observations: dict[str, dict],
+    *, casebook: dict | None = None,
 ) -> ScannerResult:
     """Reprioritize same-cycle DISCOVERY with history from existing journal.
 
@@ -176,7 +210,32 @@ def rank_scanner_with_early_momentum(
     pool = screening.universe
     if not pool:
         return replace(screening, momentum_status="NO_REAL_UNIVERSE_TO_RANK")
-    rows = tuple(replace(x, early_momentum=observations.get(x.pair)) for x in pool)
+    patterns = (casebook.get("pattern_library") or {}) if isinstance(casebook, dict) else {}
+    rows = []
+    for item in pool:
+        momentum = observations.get(item.pair)
+        signature = surge_pattern_signature(momentum, item.spread_bps)
+        sample = patterns.get(signature) if signature is not None else None
+        similarity = {
+            "signature": signature,
+            "historical_matured_24h_cases": (
+                sample.get("matured_24h", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_up_20pct_24h_cases": (
+                sample.get("up_20pct_24h", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_down_10pct_24h_cases": (
+                sample.get("down_10pct_24h", 0) if isinstance(sample, dict) else 0
+            ),
+            "status": ("NO_MATCHED_MATURED_HISTORY" if not isinstance(sample, dict)
+                      else sample.get("status", "DESCRIPTIVE_ONLY")),
+            "predictive_model_validated": False,
+            "future_outcome_known_now": False,
+            "buy_authorized": False,
+        }
+        rows.append(replace(item, early_momentum=momentum,
+                            surge_pattern=similarity))
+    rows = tuple(rows)
     def sort_key(x: ScreenedPair) -> tuple:
         report = x.early_momentum or {}
         label = report.get("status")
