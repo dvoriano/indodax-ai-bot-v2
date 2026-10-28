@@ -218,6 +218,32 @@ def rank_scanner_with_early_momentum(
         sample = patterns.get(signature) if signature is not None else None
         similarity = {
             "signature": signature,
+            # Forward 60m endpoint cohort is descriptive for a 30-60m
+            # scalper. It is NEVER the peak, executable price or net ROI
+            # since bot-owned BUY; ranking and entry authorization unchanged.
+            "historical_matured_60m_cases": (
+                sample.get("matured_60m", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_up_2pct_gross_60m_cases": (
+                sample.get("up_2pct_60m", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_up_8pct_gross_60m_cases": (
+                sample.get("up_8pct_60m", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_up_11pct_gross_60m_cases": (
+                sample.get("up_11pct_60m", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_down_2pct_gross_60m_cases": (
+                sample.get("down_2pct_60m", 0) if isinstance(sample, dict) else 0
+            ),
+            "historical_mean_return_60m_gross_pct": (
+                sample.get("mean_return_60m_pct") if isinstance(sample, dict) else None
+            ),
+            "historical_60m_status": (
+                sample.get("scalp_60m_descriptive_status", "NO_MATURED_60M_OUTCOMES")
+                if isinstance(sample, dict) else "NO_MATCHED_60M_HISTORY"
+            ),
+            "historical_60m_endpoint_not_executable_exit": True,
             "historical_matured_24h_cases": (
                 sample.get("matured_24h", 0) if isinstance(sample, dict) else 0
             ),
