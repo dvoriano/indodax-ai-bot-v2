@@ -141,7 +141,31 @@ class M03NEarlyMomentumTests(unittest.TestCase):
     def test_deep_analysis_binds_early_watch_but_not_trade_authority(self):
         with TemporaryDirectory() as td:
             rank=self._populate(DecisionJournal(Path(td)/"db.sqlite3"))
-            deep=deep_scan(MarketFixture(),rank,limit=2)
+            class SameMinuteFixture(MarketFixture):
+                def observe(self, pair):
+                    raw=super().observe(pair)
+                    # Preserve each source and candle timestamp relation.
+                    shifted_close=rank.observed_epoch//60*60
+                    delta=shifted_close-raw.snapshot.source.closed_1m_epoch
+                    receipt=replace(
+                        raw.snapshot.source,
+                        closed_1m_epoch=shifted_close,
+                        observed_epoch=rank.observed_epoch,
+                    )
+                    from indodax_ai_bot.contracts import MarketSnapshot
+                    snap=MarketSnapshot(receipt,raw.snapshot.best_bid_idr,
+                                        raw.snapshot.best_ask_idr)
+                    minute=tuple(replace(c,start=c.start+delta)
+                                 for c in raw.candles_1m)
+                    fifteen=tuple(replace(c,start=c.start+delta)
+                                  for c in raw.candles_15m)
+                    return replace(
+                        raw,snapshot=snap,candle_1m=minute[-1],
+                        candle_5m=replace(raw.candle_5m,start=raw.candle_5m.start+delta),
+                        candle_15m=fifteen[-1],
+                        candles_1m=minute,candles_15m=fifteen,
+                    )
+            deep=deep_scan(SameMinuteFixture(),rank,limit=2)
             candidate=deep.analyzed[0].summary()
             self.assertEqual(candidate["pair"],"m044_idr")
             self.assertEqual(candidate["early_momentum"]["status"],
