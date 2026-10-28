@@ -11,12 +11,14 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 import json
 import unittest
 
 from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.config import Settings
+from indodax_ai_bot.contracts import FinalDecision
+from indodax_ai_bot.orchestrator import CycleResult
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from test_m03b_deep import observation, screening
@@ -96,6 +98,32 @@ class M03NTargetDeepMainpath(unittest.TestCase):
                 self.assertIsNone(outcome.deep)
                 self.assertEqual(market.called,[])
                 self.assertFalse(outcome.execution_allowed)
+
+    def test_cli_dispatches_target_to_original_orchestrator(self):
+        output=StringIO()
+        with patch.object(DailyScalpingOrchestrator,"run_deep_cycle") as run:
+            run.return_value=CycleResult(
+                "cli-test",FinalDecision.REJECT,
+                "G1_TRADE_COVERAGE_AND_RISK_NOT_CONNECTED",
+                False,None,None,{
+                    "ranked_diagnostics":[{"pair":"sol_idr",
+                                            "trade_authorized":False}],
+                    "deep_examined_count":1,
+                },
+            )
+            with redirect_stdout(output):
+                rc=main([
+                    "--deep-once","--deep-pair","sol_idr",
+                    "--db",str(Path(self.tmp.name)/"cli-target.sqlite3"),
+                ])
+            self.assertEqual(run.call_count,1)
+            self.assertEqual(run.call_args.kwargs["target_pair"],"sol_idr")
+        data=json.loads(output.getvalue())
+        self.assertEqual(rc,0)
+        self.assertEqual(data["deep_target_pair"],"sol_idr")
+        self.assertEqual(data["public_deep"]["deep_examined_count"],1)
+        self.assertEqual(data["final_decision"],"REJECT")
+        self.assertFalse(data["execution_allowed"])
 
     def test_cli_deep_pair_is_disallowed_for_scan_only(self):
         err=StringIO()
