@@ -164,8 +164,8 @@ class M03NBookWallTests(unittest.TestCase):
             (bid*D("0.90"),D("100000000")),
         ))
         res=assess_orderbook_rebound(x)
-        self.assertEqual(res["near_bid_ask_notional_ratio"],"0.5")
-        self.assertEqual(res["bid_near_total_idr"],"1000")
+        self.assertAlmostEqual(float(res["near_bid_ask_notional_ratio"]),0.5,places=9)
+        self.assertAlmostEqual(float(res["bid_near_total_idr"]),1000.0,places=6)
         self.assertEqual(res["status"],"NO_STRONG_NEAR_BID_WALL")
 
     def test_incomplete_and_wrong_order_book_evidence_is_never_approved(self):
