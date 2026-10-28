@@ -49,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--health-max-age-seconds", type=int, default=3600,
                         help="Max age 60..86400s for operator last-batch check; does NOT prove service running")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
+    parser.add_argument(
+        "--deep-pair", default=None,
+        help="Observe exactly one currently eligible IDR pair through original --deep-once mainpath; diagnostic only",
+    )
     parser.add_argument("--history-minutes", type=int, default=180,
                         help="PUBLIC historical closed 1m bars for research only: 90..360")
     parser.add_argument("--history-windows", type=int, default=4,
@@ -66,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         # payment-disabled at this milestone and public G1 cannot qualify it.
         if args.sumopod_shadow and not args.bulk_deep_once:
             raise ConfigurationError("SUMOPOD_SHADOW_REQUIRES_BULK_DEEP_ONCE")
+        if args.deep_pair is not None and not args.deep_once:
+            raise ConfigurationError("DEEP_PAIR_REQUIRES_DEEP_ONCE")
         provider = (
             SumopodChatAdapter.configured_from_env()
             if args.sumopod_shadow else None
@@ -128,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.rolling_deep_once:
                 outcome = app.run_rolling_deep_cycle(uuid4().hex)
             elif args.deep_once:
-                outcome = app.run_deep_cycle(uuid4().hex)
+                outcome = app.run_deep_cycle(
+                    uuid4().hex, target_pair=args.deep_pair,
+                )
             elif args.public_history_archive_once:
                 outcome = app.run_public_history_archive_cycle(
                     uuid4().hex, pair=args.pair,
@@ -187,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
                 result["research_is_trade_signal"] = False
                 result["live_trading_authorized"] = False
             if args.deep_once:
+                result["deep_target_pair"] = args.deep_pair
                 result["public_deep"] = outcome.deep
                 result["deep_probe_status"] = "PUBLIC_DEEP_UNATTESTED" if outcome.deep is not None else "PUBLIC_DEEP_ERROR"
                 result["live_trading_authorized"] = False
