@@ -46,6 +46,8 @@ class DeepCandidate:
     early_momentum: dict | None = None
     visible_buy_trade_count_sampled: int = 0
     visible_sell_trade_count_sampled: int = 0
+    # M03-N extension: non-executable book-wall/rebound evidence.
+    book_wall_diagnostic: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -67,6 +69,7 @@ class DeepCandidate:
             "market_structure_diagnostic": self.market_structure_diagnostic,
             "structure_replay": self.structure_replay,
             "early_momentum": self.early_momentum,
+            "book_wall_diagnostic": self.book_wall_diagnostic,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -367,13 +370,152 @@ def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict
     }
 
 
+
+def assess_orderbook_rebound(
+    obs: PublicObservation,
+    *, near_bps: Decimal = Decimal("200"),
+    spread_guard_bps: Decimal = Decimal("80"),
+) -> dict:
+    """M03-N: source-bound *visible resting order* vs actual trade diagnostic.
+
+    The depth REST endpoint is a single snapshot, so large BUY/SELL walls
+    could be canceled, moved or spoofed. NEVER convert them to executed flow
+    or to a probabilistic signal. Price drawdown uses only closed 1m candles.
+    """
+    bid = obs.snapshot.best_bid_idr
+    ask = obs.snapshot.best_ask_idr
+    if (bid <= ZERO or ask < bid or
+            obs.snapshot.source.pair != obs.pair or
+            obs.snapshot.source.observed_epoch < obs.snapshot.source.closed_1m_epoch or
+            obs.snapshot.source.observed_epoch - obs.snapshot.source.closed_1m_epoch > 120):
+        raise PublicDataError("STALE_OR_INVALID_BOOK_SOURCE")
+    book = {
+        "status": "BOOK_LEVELS_NOT_OBSERVED",
+        "pair": obs.pair,
+        "observed_epoch": obs.snapshot.source.observed_epoch,
+        "closed_1m_epoch": obs.snapshot.source.closed_1m_epoch,
+        "source": "INDODAX_PUBLIC_DEPTH_SNAPSHOT_UNATTESTED",
+        "resting_orders_are_executed_buys": False,
+        "full_orderbook_proven": False,
+        "wall_persistence_proven": False,
+        "spoofing_excluded": False,
+        "visible_trade_flow_complete": False,
+        "g1_verified": False,
+        "trade_signal": False,
+        "execution_allowed": False,
+    }
+    if not obs.bid_book_levels or not obs.ask_book_levels:
+        return book
+    if (not near_bps.is_finite() or near_bps <= ZERO or
+            not spread_guard_bps.is_finite() or spread_guard_bps <= ZERO):
+        raise PublicDataError("INVALID_BOOK_WALL_WINDOW")
+    for side, levels in (("BID", obs.bid_book_levels),
+                         ("ASK", obs.ask_book_levels)):
+        for price, amount in levels:
+            if (not price.is_finite() or not amount.is_finite()
+                    or price <= ZERO or amount <= ZERO):
+                raise PublicDataError("INVALID_BOOK_WALL_LEVEL")
+        prices = [x[0] for x in levels]
+        if any(
+            (a <= b if side == "BID" else a >= b)
+            for a, b in zip(prices,prices[1:])
+        ):
+            raise PublicDataError("UNORDERED_BOOK_WALL_LEVELS")
+    # A distinct ticker/depth snapshot can be inconsistent. Refuse even a
+    # large wall when the book best level is far from quoted best bid/ask.
+    best_bid, best_ask = obs.bid_book_levels[0][0], obs.ask_book_levels[0][0]
+    if best_bid >= best_ask:
+        raise PublicDataError("CROSSED_BOOK_WALL_DEPTH")
+    price_source_mismatch = (
+        abs(best_bid-bid)*Decimal(10000)/bid > Decimal("100")
+        or abs(best_ask-ask)*Decimal(10000)/ask > Decimal("100")
+    )
+    spread = (ask-bid)*Decimal(10000)/ask
+    # Comparable price-proximate IDR notionals. Sum nearby notional AND
+    # report the strongest single wall, not a misleading number of orders.
+    near_bid = [
+        (p,p*q) for p,q in obs.bid_book_levels
+        if (best_bid-p)*Decimal(10000)/best_bid <= near_bps
+    ]
+    near_ask = [
+        (p,p*q) for p,q in obs.ask_book_levels
+        if (p-best_ask)*Decimal(10000)/best_ask <= near_bps
+    ]
+    bid_total = sum((notional for _,notional in near_bid), ZERO)
+    ask_total = sum((notional for _,notional in near_ask), ZERO)
+    # first book level always lies in near range when input is genuine.
+    if bid_total <= ZERO or ask_total <= ZERO:
+        raise PublicDataError("EMPTY_NEAR_BOOK_WALL")
+    bid_wall_price,bid_wall_idr = max(near_bid,key=lambda x:x[1])
+    ask_wall_price,ask_wall_idr = max(near_ask,key=lambda x:x[1])
+    ratio = bid_total/ask_total
+    # 22 candles are already required by primary analysis. No future bars
+    # are read; compare last CLOSED close to an earlier observed high/low.
+    minute = _last_continuous(obs.candles_1m,60,22)
+    if minute[-1].start+60 != obs.snapshot.source.closed_1m_epoch:
+        raise PublicDataError("BOOK_WALL_CANDLE_SOURCE_MISMATCH")
+    past_peak = max(c.high for c in minute[:-1])
+    observed_low = min(c.low for c in minute)
+    selloff = (observed_low/past_peak-1)*HUNDRED
+    recovery = (minute[-1].close/observed_low-1)*HUNDRED
+    last_change = (minute[-1].close/minute[-2].close-1)*HUNDRED
+    fiveminute = (obs.candle_5m.close/obs.candle_5m.open-1)*HUNDRED
+    if price_source_mismatch:
+        state = "BOOK_TICKER_MISMATCH_NO_WATCH"
+    elif spread > spread_guard_bps:
+        state = "WIDE_SPREAD_WALL_UNACTIONABLE"
+    elif (selloff <= Decimal("-7") and recovery >= Decimal("0.3")
+          and last_change > ZERO and ratio >= Decimal("3")):
+        state = "PANIC_REBOUND_WATCH_UNCONFIRMED"
+    elif selloff <= Decimal("-7") and last_change <= ZERO:
+        state = "SECOND_LEG_DOWN_RISK"
+    elif ratio >= Decimal("3"):
+        state = "BID_WALL_WATCH_UNCONFIRMED"
+    else:
+        state = "NO_STRONG_NEAR_BID_WALL"
+    # Two possible scenarios, not probabilities or guaranteed prediction.
+    continuation = (
+        state == "PANIC_REBOUND_WATCH_UNCONFIRMED"
+        and fiveminute > ZERO
+        and obs.visible_closed_1m_buy_idr > obs.visible_closed_1m_sell_idr
+    )
+    book.update({
+        "status": state,
+        "near_book_window_bps": str(near_bps),
+        "bid_near_total_idr": str(bid_total),
+        "ask_near_total_idr": str(ask_total),
+        "near_bid_ask_notional_ratio": str(ratio),
+        "largest_bid_wall_price_idr": str(bid_wall_price),
+        "largest_bid_wall_notional_idr": str(bid_wall_idr),
+        "largest_ask_wall_price_idr": str(ask_wall_price),
+        "largest_ask_wall_notional_idr": str(ask_wall_idr),
+        "spread_bps": str(spread),
+        "observed_22m_peak_to_low_pct": str(selloff),
+        "recovery_from_visible_low_pct": str(recovery),
+        "last_closed_1m_return_pct": str(last_change),
+        "closed_5m_return_pct": str(fiveminute),
+        "continuation_hypothesis":
+            "NEEDS_NEXT_CLOSED_CANDLE_AND_FLOW_CONFIRMATION" if continuation
+            else "NOT_CONFIRMED",
+        "fade_hypothesis": "RETEST_OR_SECOND_LEG_DOWN_REMAINS_POSSIBLE",
+        "visible_buy_idr_sampled": str(obs.visible_closed_1m_buy_idr),
+        "visible_sell_idr_sampled": str(obs.visible_closed_1m_sell_idr),
+        "visible_buy_count_sampled": obs.visible_closed_1m_buy_count,
+        "visible_sell_count_sampled": obs.visible_closed_1m_sell_count,
+        "thresholds_backtested": False,
+    })
+    return book
+
+
 def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Decimal("80")) -> DeepCandidate:
     """One pair; reject incomplete/stale evidence rather than create synthetic candles."""
     pair = obs.pair
+    book_diagnostic: dict | None = None
     try:
         if obs.snapshot.source.pair != pair or obs.snapshot.source.observed_epoch - obs.snapshot.source.closed_1m_epoch > 120:
             raise PublicDataError("STALE_OR_WRONG_SOURCE")
         minute = _last_continuous(obs.candles_1m, 60, 22)
+        book_diagnostic = assess_orderbook_rebound(obs)
         fifteen = _last_continuous(obs.candles_15m, 900, 2)
         if minute[-1].start + 60 != obs.snapshot.source.closed_1m_epoch:
             raise PublicDataError("CANDLE_RECEIPT_MISMATCH")
@@ -429,6 +571,7 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
                 market_structure_diagnostic=structure, structure_replay=replay,
                 visible_buy_trade_count_sampled=obs.visible_closed_1m_buy_count,
                 visible_sell_trade_count_sampled=obs.visible_closed_1m_sell_count,
+                book_wall_diagnostic=book_diagnostic,
             )
 
         # Deterministic indicators, NOT a trading probability or expected ROI.
@@ -449,9 +592,11 @@ def analyze_observation(obs: PublicObservation, *, max_spread_bps: Decimal = Dec
                              market_structure_diagnostic=structure,
                              structure_replay=replay,
                              visible_buy_trade_count_sampled=obs.visible_closed_1m_buy_count,
-                             visible_sell_trade_count_sampled=obs.visible_closed_1m_sell_count)
+                             visible_sell_trade_count_sampled=obs.visible_closed_1m_sell_count,
+                             book_wall_diagnostic=book_diagnostic)
     except PublicDataError as exc:
-        return DeepCandidate(pair, None, "REJECT_INCOMPLETE_EVIDENCE", str(exc))
+        return DeepCandidate(pair, None, "REJECT_INCOMPLETE_EVIDENCE", str(exc),
+                             book_wall_diagnostic=book_diagnostic)
 
 
 @dataclass(frozen=True)
