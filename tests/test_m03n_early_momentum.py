@@ -106,7 +106,11 @@ class M03NEarlyMomentumTests(unittest.TestCase):
                     "FROM public_ticker_minute_samples WHERE pair=?",
                     ("m044_idr",),
                 ).fetchone()
-            self.assertEqual(saved,(minute,pair.ticker_epoch,"100"))
+            self.assertIsNotNone(saved)
+            self.assertEqual(saved[:2],(minute,pair.ticker_epoch))
+            # SQLite stores the exact Decimal string scale (100.00).
+            # Compare price numerically, never by textual representation.
+            self.assertEqual(D(saved[2]),D("100"))
 
     def test_startup_never_invents_5m_15m_60m_data(self):
         with TemporaryDirectory() as td:
@@ -155,7 +159,9 @@ class M03NEarlyMomentumTests(unittest.TestCase):
                     "SELECT last_idr FROM public_ticker_minute_samples "
                     "WHERE pair='m044_idr'",
                 ).fetchone()[0]
-            self.assertEqual(x,"100")
+            # A first-seen persisted quote is numerically immutable, even
+            # when its Decimal string includes trailing zeroes.
+            self.assertEqual(D(x),D("100"))
 
     def test_missing_minute_cannot_yield_fabricated_60m_return(self):
         with TemporaryDirectory() as td:
