@@ -250,6 +250,37 @@ class M03NBookWallTests(unittest.TestCase):
         self.assertEqual(report["status"],"BOOK_LAST_CLOSE_DISLOCATION_NO_WATCH")
         self.assertFalse(report["trade_signal"])
 
+    def test_existing_orchestrator_deep_mainpath_includes_wall_and_final_reject(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+        from indodax_ai_bot.config import Settings
+        from indodax_ai_bot.journal import DecisionJournal
+        from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
+        from test_m03b_deep import screening
+
+        class BookMarket:
+            def observe(self,pair):
+                return with_wall(observation(pair))
+        with TemporaryDirectory() as td:
+            journal=DecisionJournal(Path(td)/"journal.sqlite3")
+            app=DailyScalpingOrchestrator(Settings.from_env({}),journal)
+            with patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scanner:
+                scanner.return_value.scan.return_value=screening()
+                result=app.run_deep_cycle(
+                    "wall-mainpath", market=BookMarket()
+                )
+            self.assertEqual(result.final_decision.value,"REJECT")
+            self.assertFalse(result.execution_allowed)
+            ranked=result.deep["ranked_diagnostics"]
+            self.assertTrue(ranked)
+            self.assertEqual(
+                ranked[0]["book_wall_diagnostic"]["status"],
+                "BID_WALL_WATCH_UNCONFIRMED",
+            )
+            self.assertFalse(ranked[0]["trade_authorized"])
+            self.assertEqual(journal.count(),1)
+
     def test_depth_endpoint_unsorted_levels_refused_before_book_analysis(self):
         class BadDepth(OfficialPublicFixtures):
             def fetch(self,path):
