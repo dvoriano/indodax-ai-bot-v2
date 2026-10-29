@@ -77,7 +77,7 @@ class M03VolumeFloorTests(unittest.TestCase):
         scan = DailyPairScanner(fake.client()).scan()
         below = next(x for x in scan.universe if x.pair == "m044_idr")
         prioritized = replace(scan, universe=(
-            below, *(x for x in scan.universe if x.pair != below)
+            below, *(x for x in scan.universe if x.pair != below.pair)
         ))
         deep = apply_deep_volume_floor(prioritized)
         self.assertNotIn("m044_idr", {x.pair for x in deep.shortlist})
