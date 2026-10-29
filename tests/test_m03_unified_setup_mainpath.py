@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from hashlib import sha256
+import hmac
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import unittest
@@ -19,7 +21,9 @@ from indodax_ai_bot.deep_analysis import (
     bulk_public_deep_scan, classify_candidate_entry_stage,
 )
 from indodax_ai_bot.three_role_ai import ThreeRoleShadow
+from indodax_ai_bot.g1_receipt import G1ReceiptVerifier, canonical_receipt_bytes
 from indodax_ai_bot.scanner import DailyPairScanner
+from test_m04a_three_role_shadow import RoleCaller, TEST_G1_SECRET
 from test_m03b_deep import observation
 from test_m03g_bulk import FakeBulkMarket, fake_screen
 from test_m03_volume_screen import boosted_fake
@@ -132,6 +136,60 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
         self.assertEqual(shadow["candidate_pair"], "token018_idr")
         self.assertEqual(len(shadow["source_digest_sha256"]), 64)
         self.assertFalse(shadow["execution_allowed"])
+
+    def test_quality_ranked_outside_top10_reaches_market_role_only_with_synthetic_receipt(self):
+        # A second, intentionally test-only full chain demonstrates that the
+        # chosen low-scalar-score PULLBACK enters MARKET's immutable source
+        # digest, but a signed *internal synthetic* receipt still cannot BUY.
+        def assigned(obs, *, early_momentum=None):
+            if obs.pair == "token018_idr":
+                return candidate(obs.pair, score=78,
+                                 structure="PULLBACK_REBOUND_OBSERVED")
+            if obs.pair == "btc_idr":
+                return candidate(obs.pair, score=99)
+            return candidate(obs.pair, score=96, rsi="78")
+        with patch("indodax_ai_bot.deep_analysis.analyze_observation",
+                   side_effect=assigned):
+            data = bulk_public_deep_scan(FakeBulkMarket(), fake_screen())
+        selected = data["eligible_cohort"]["provisional_watchlist_preview"]
+        self.assertEqual(selected, ["token018_idr"])
+        for key in ("g1_verified", "source_trust_verified", "trade_history_complete"):
+            data[key] = True
+            data["eligible_cohort"][key] = True
+        before = ThreeRoleShadow(clock=lambda: 1800000140).run("trace", data)
+        self.assertEqual(before["reason"], "G1_ISSUER_RECEIPT_UNVERIFIED")
+        digest = before["source_digest_sha256"]
+        claims = {
+            "schema_version": 1, "issuer_id": "synthetic-unit-issuer",
+            "trace_id": "trace", "pair": "token018_idr",
+            "closed_1m_epoch": 1800000120,
+            "source_digest_sha256": digest, "expires_epoch": 1800000180,
+        }
+        data["g1_attestation"] = {
+            "claims": claims,
+            "mac_sha256": hmac.new(
+                TEST_G1_SECRET, canonical_receipt_bytes(claims),
+                sha256,
+            ).hexdigest(),
+        }
+        verifier = G1ReceiptVerifier(
+            issuer_id="synthetic-unit-issuer",
+            verification_secret=TEST_G1_SECRET,
+        )
+        role_caller = RoleCaller()
+        out = ThreeRoleShadow(
+            caller=role_caller, clock=lambda: 1800000140,
+            source_verifier=verifier,
+        ).run("trace", data)
+        self.assertEqual(role_caller.calls, ["MARKET", "RISK", "STRATEGY"])
+        self.assertEqual(role_caller.inputs[0]["source"]["pair"], "token018_idr")
+        self.assertEqual(
+            role_caller.inputs[0]["market_evidence"]["scalp_setup_stage"]["stage"],
+            "PULLBACK_REBOUND_WATCH",
+        )
+        self.assertEqual(out["final_decision"], "REJECT")
+        self.assertFalse(out["execution_allowed"])
+        self.assertFalse(out["g2_candidate_authorized"])
 
     def test_original_orchestrator_150m_floor_no_trade_on_same_pipeline(self):
         fake = boosted_fake(high=22, amount="150000000")
