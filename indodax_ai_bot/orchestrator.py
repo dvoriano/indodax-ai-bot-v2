@@ -12,6 +12,7 @@ from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner, rank_scanner_with_early_momentum
+from .volume_screening import apply_deep_volume_floor
 from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
@@ -387,11 +388,22 @@ class DailyScalpingOrchestrator:
 
     def run_bulk_deep_cycle(self, trace_id: str, *,
                             market: IndodaxPublicMarket | None = None,
-                            ws_db_path: str | None = None) -> CycleResult:
-        """One bounded 20-pair public attempt; never use stale/replayed ranks."""
+                            ws_db_path: str | None = None,
+                            min_volume_idr: Decimal = Decimal("0")) -> CycleResult:
+        """One bounded 20-pair public attempt; optional 24h IDR liquidity floor.
+
+        The full IDR universe is still sampled by the original scanner/journal.
+        A positive filter only changes the same-cycle deep shortlist, never
+        the radar, source trust, AI permissions, or order authorization.
+        """
         client = market if market is not None else IndodaxPublicMarket()
         try:
             preliminary = self._scan_with_early_momentum(client)
+            if min_volume_idr != Decimal("0"):
+                preliminary = apply_deep_volume_floor(
+                    preliminary, minimum_idr=min_volume_idr,
+                    max_deep_pairs=20,
+                )
             evidence = bulk_public_deep_scan(
                 client, preliminary, limit=20,
                 on_candidate=self._attach_public_wall_experience,

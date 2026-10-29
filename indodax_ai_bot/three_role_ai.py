@@ -209,12 +209,30 @@ class ThreeRoleShadow:
             "root_trade_history_complete": bulk.get("trade_history_complete") is True,
             "root_source_trust_verified": bulk.get("source_trust_verified") is True,
         }
-        raw_market_evidence = bulk.get("ranked_diagnostics_top10")
-        pair_evidence = next(
-            (item for item in raw_market_evidence
-             if isinstance(item, dict) and item.get("pair") == source["pair"]),
-            None,
-        ) if isinstance(raw_market_evidence, list) else None
+        # M03 final max-2 preview is quality/stage ranked, so its candidate
+        # may sit below scalar-score top10. Prefer the SAME-cycle selected
+        # evidence, not a historical or partial unrelated top10 row.
+        selected_evidence = bulk.get("provisional_market_evidence")
+        selected_matches = (
+            [item for item in selected_evidence if isinstance(item, dict)
+             and item.get("pair") == source["pair"]]
+            if isinstance(selected_evidence, list) else []
+        )
+        if len(selected_matches) > 1:
+            return _reject("G1_DUPLICATE_BOUND_MARKET_EVIDENCE",
+                           candidate_pair=source["pair"])
+        if len(selected_matches) == 1:
+            pair_evidence = selected_matches[0]
+        else:
+            # Legacy M04 signed fixtures have an owner-injected preview and
+            # only a scalar top10; production candidate exists in the
+            # selected evidence already, even if ranked below scalar top10.
+            raw_market_evidence = bulk.get("ranked_diagnostics_top10")
+            pair_evidence = next(
+                (item for item in raw_market_evidence
+                 if isinstance(item, dict) and item.get("pair") == source["pair"]),
+                None,
+            ) if isinstance(raw_market_evidence, list) else None
         if (not isinstance(pair_evidence, dict)
                 or pair_evidence.get("closed_1m_epoch") != epoch
                 or pair_evidence.get("trade_authorized") is not False):
