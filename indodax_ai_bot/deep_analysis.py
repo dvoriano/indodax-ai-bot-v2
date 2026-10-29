@@ -52,6 +52,7 @@ class DeepCandidate:
     wall_temporal_evidence: dict | None = None
     surge_experience_context: dict | None = None
     surge_pattern: dict | None = None
+    public_maintenance_flag: bool = False
 
     def summary(self) -> dict:
         return {
@@ -78,6 +79,8 @@ class DeepCandidate:
             "wall_temporal_evidence": self.wall_temporal_evidence,
             "surge_experience_context": self.surge_experience_context,
             "surge_pattern": self.surge_pattern,
+            "public_maintenance_flag": self.public_maintenance_flag,
+            "market_tradability_verified": False,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -774,6 +777,11 @@ def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
         "score": candidate.score,
         "review_flags": flags,
         "clear_of_provisional_cautions": not flags,
+        # Maintenance may be a wallet restriction; never claim tradability
+        # merely because public OHLC and books can be observed.
+        "maintenance_flag_requires_independent_order_preflight": (
+            candidate.public_maintenance_flag
+        ),
         "scalp_setup_stage": timing,
         "risk_ai_evaluated": False,
         "book_wall_status": wall_status,
@@ -1013,6 +1021,7 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                 (x.surge_pattern for x in screening.shortlist[:limit]
                  if x.pair == pair), None,
             ),
+            public_maintenance_flag=(pair in context.maintenance_pair_ids),
         )
         if on_candidate is not None:
             candidate = on_candidate(candidate, obs)
