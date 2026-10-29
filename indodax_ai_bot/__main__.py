@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from .config import ConfigurationError, Settings
@@ -57,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="PUBLIC historical closed 1m bars for research only: 90..360")
     parser.add_argument("--history-windows", type=int, default=4,
                         help="Bounded M03-L archive windows per call, 1..4; future calls resume oldest archived minute")
+    parser.add_argument("--bulk-min-volume-idr", default="0",
+                        help="Optional PUBLIC bulk 24h IDR-volume floor; 0 keeps existing behavior (test with 100000000)")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
     parser.add_argument("--sumopod-shadow", action="store_true",
@@ -65,6 +68,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        try:
+            bulk_min_volume_idr = Decimal(args.bulk_min_volume_idr)
+        except (InvalidOperation, ValueError, TypeError):
+            raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR") from None
+        if not bulk_min_volume_idr.is_finite() or bulk_min_volume_idr < 0:
+            raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR")
+        if bulk_min_volume_idr != 0 and not args.bulk_deep_once:
+            raise ConfigurationError("BULK_VOLUME_FLOOR_REQUIRES_BULK_DEEP_ONCE")
         # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
         # Sumopod adapter from protected process environment. It is always
         # payment-disabled at this milestone and public G1 cannot qualify it.
@@ -130,7 +141,13 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = app.run_public_ws_cycle(uuid4().hex, db_path=args.db,
                                                   pair=args.pair, seconds=args.stream_seconds)
             elif args.bulk_deep_once:
-                outcome = app.run_bulk_deep_cycle(uuid4().hex, ws_db_path=args.ws_db)
+                if bulk_min_volume_idr > 0:
+                    outcome = app.run_bulk_deep_cycle(
+                        uuid4().hex, ws_db_path=args.ws_db,
+                        min_volume_idr=bulk_min_volume_idr,
+                    )
+                else:
+                    outcome = app.run_bulk_deep_cycle(uuid4().hex, ws_db_path=args.ws_db)
             elif args.rolling_deep_once:
                 outcome = app.run_rolling_deep_cycle(uuid4().hex)
             elif args.deep_once:
