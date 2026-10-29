@@ -1,0 +1,14 @@
+# STAGED / DISABLED. Do not enable until owner approves recurring
+# public REST budget and confirms all peers sharing the egress IP.
+[Unit]
+Description=Indodax V2 PUBLIC M03 scanner minute boundary timer (no trading)
+
+[Timer]
+# Closed 1m candle, not in-progress. A missed tick is NOT backfilled.
+OnCalendar=*-*-* *:*:10
+AccuracySec=1s
+Persistent=false
+Unit=indodax-v2-m03-mainpath.service
+
+[Install]
+WantedBy=timers.target
