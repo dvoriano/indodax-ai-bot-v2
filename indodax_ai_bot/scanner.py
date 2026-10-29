@@ -29,6 +29,7 @@ class ScreenedPair:
     early_momentum: dict | None = None
     # Historical *descriptive* similarity, never a predictive BUY score.
     surge_pattern: dict | None = None
+    public_maintenance_flag: bool = False
 
     def summary(self) -> dict[str, str | int]:
         return {
@@ -39,6 +40,8 @@ class ScreenedPair:
             "ticker_epoch": self.ticker_epoch,
             "early_momentum": self.early_momentum,
             "surge_pattern": self.surge_pattern,
+            "public_maintenance_flag": self.public_maintenance_flag,
+            "market_tradability_verified": False,
         }
 
 
@@ -81,6 +84,10 @@ class ScannerResult:
             "momentum_provenance": "PUBLIC_TICKER_ALL_FIRST_MINUTE_SAMPLE_UNATTESTED",
             "momentum_buy_sell_flow_is_complete": False,
             "surge_experience": self.surge_experience,
+            "maintenance_flagged_public_pairs": sum(
+                x.public_maintenance_flag for x in self.universe
+            ),
+            "maintenance_flag_does_not_authorize_trade": True,
             "early_watch_count": sum(
                 x.early_momentum is not None and
                 x.early_momentum.get("status") == "EARLY_WATCH_UNCALIBRATED"
@@ -140,8 +147,13 @@ class DailyPairScanner:
                 if spread > self.max_spread_bps:
                     continue
                 day_range = (high - low) * Decimal("100") / last
-                eligible.append(ScreenedPair(pair, volume, bid, ask, spread, day_range, ts,
-                                             last_idr=last))
+                eligible.append(ScreenedPair(
+                    pair, volume, bid, ask, spread, day_range, ts,
+                    last_idr=last,
+                    public_maintenance_flag=(
+                        pair in getattr(self.market, "public_maintenance_pairs", frozenset())
+                    ),
+                ))
             except PublicDataError:
                 continue
 
@@ -161,6 +173,9 @@ class DailyPairScanner:
             scan_context=PublicScanContext(
                 observed_epoch=now, exchange_epoch=server_epoch,
                 pairs=pairs, tickers=all_tickers["tickers"],
+                maintenance_pair_ids=getattr(
+                    self.market, "public_maintenance_pairs", frozenset()
+                ),
             ),
         )
 
