@@ -11,10 +11,11 @@ from decimal import Decimal
 from .public_market import PublicDataError
 from .scanner import ScannerResult
 
-DEFAULT_DEEP_VOLUME_FLOOR_IDR = Decimal("100000000")
+DEFAULT_DEEP_VOLUME_FLOOR_IDR = Decimal("150000000")
 VOLUME_PROBE_THRESHOLDS_IDR = (
     Decimal("50000000"),
     Decimal("100000000"),
+    Decimal("150000000"),
     Decimal("250000000"),
     Decimal("500000000"),
 )
@@ -77,7 +78,7 @@ def public_volume_distribution(screening: ScannerResult) -> dict:
         "volume_basis": "PUBLIC_TICKER_ALL_ROLLING_24H_VOL_IDR",
         "minimum_deep_volume_idr": str(int(DEFAULT_DEEP_VOLUME_FLOOR_IDR)),
         "at_or_above_volume_idr_counts": counts,
-        "below_100m_but_still_in_radar": len(universe) - above_floor,
+        "below_volume_floor_but_still_in_radar": len(universe) - above_floor,
         "at_least_20_deep_candidates_by_volume_only": above_floor >= 20,
         "at_least_40_deep_candidates_by_volume_only": above_floor >= 40,
         "all_initially_eligible_pairs_still_monitored": True,
