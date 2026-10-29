@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from uuid import uuid4
 
 from .config import ConfigurationError, Settings
@@ -21,6 +22,8 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
     group.add_argument("--once", action="store_true")
+    parser.add_argument("--public-scanner-mainpath", action="store_true",
+                        help="With --once only: opt-in same M03 bulk+G1+M04 no-trade pipeline using an existing BTC WS DB")
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
@@ -63,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bulk-min-volume-idr", default="0",
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--ws-db", default=None,
-                        help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
+                        help="Existing BTC WS SQLite: required by --once --public-scanner-mainpath; optional for --bulk-deep-once, never G1 approval")
     parser.add_argument("--sumopod-shadow", action="store_true",
                         help="Connect configured Sumopod adapter to PUBLIC bulk shadow; paid network OFF, G1 still untrusted")
     args = parser.parse_args(argv)
@@ -76,12 +79,23 @@ def main(argv: list[str] | None = None) -> int:
             raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR") from None
         if not bulk_min_volume_idr.is_finite() or bulk_min_volume_idr < 0:
             raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR")
-        if bulk_min_volume_idr != 0 and not args.bulk_deep_once:
+        if bulk_min_volume_idr != 0 and not (args.bulk_deep_once or
+                                                (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_VOLUME_FLOOR_REQUIRES_BULK_DEEP_ONCE")
         if (type(args.bulk_deep_limit) is not int or not 20 <= args.bulk_deep_limit <= 40):
             raise ConfigurationError("BULK_DEEP_LIMIT_INVALID")
-        if args.bulk_deep_limit != 20 and not args.bulk_deep_once:
+        if args.bulk_deep_limit != 20 and not (args.bulk_deep_once or
+                                                  (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_DEEP_LIMIT_REQUIRES_BULK_DEEP_ONCE")
+        if args.public_scanner_mainpath:
+            if not args.once:
+                raise ConfigurationError("M03_MAINPATH_REQUIRES_ONCE")
+            if not args.ws_db:
+                raise ConfigurationError("M03_MAINPATH_REQUIRES_BTC_WS_DB")
+            if Path(args.ws_db).resolve() == Path(args.db).resolve():
+                raise ConfigurationError("M03_MAINPATH_WS_DB_MUST_BE_SEPARATE")
+            if not Path(args.ws_db).is_file():
+                raise ConfigurationError("M03_MAINPATH_WS_DB_NOT_FOUND")
         # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
         # Sumopod adapter from protected process environment. It is always
         # payment-disabled at this milestone and public G1 cannot qualify it.
@@ -181,6 +195,17 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = app.run_scan_cycle(uuid4().hex)
             elif args.public_once or args.verify_public:
                 outcome = app.run_public_cycle(uuid4().hex, pair=args.pair)
+            elif args.once and args.public_scanner_mainpath:
+                # Exactly ONE original orchestrator and one original scanner.
+                # No new provider, no issuer, no order. Mandatory BTC WS join
+                # observes the live collector's SQLite in read-only mode.
+                outcome = app.run_cycle(
+                    uuid4().hex, public_scanner=True,
+                    ws_db_path=args.ws_db,
+                    min_volume_idr=max(
+                        bulk_min_volume_idr, Decimal("150000000")),
+                    deep_limit=args.bulk_deep_limit,
+                )
             else:
                 outcome = app.run_cycle(uuid4().hex)
             result = {
@@ -193,8 +218,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.public_ws_once or args.public_ws_collect or args.public_ws_supervised_once:
                 result["public_ws"] = outcome.public_ws
                 result["live_trading_authorized"] = False
-            if args.bulk_deep_once:
+            if args.bulk_deep_once or args.public_scanner_mainpath:
                 result["public_bulk"] = outcome.bulk
+                if args.public_scanner_mainpath:
+                    result["mainpath_mode"] = "M03_PUBLIC_SCANNER_TO_M04_REJECT_ONLY"
+                    result["public_24h_volume_floor_idr"] = str(max(
+                        bulk_min_volume_idr, Decimal("150000000")))
+                    result["btc_ws_existing_journal_readonly"] = True
                 result["ai_shadow"] = outcome.ai_shadow
                 # Never show API credentials, request/response bodies or
                 # transport internals; readiness is not provider inference.
@@ -255,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         if args.rolling_deep_once and result["public_rolling"] is None:
             return 3
-        if args.bulk_deep_once and result["public_bulk"] is None:
+        if (args.bulk_deep_once or args.public_scanner_mainpath) and result["public_bulk"] is None:
             return 3
         if args.public_ws_once and outcome.reason.startswith("PUBLIC_WS_PROBE_REJECTED:"):
             return 3
