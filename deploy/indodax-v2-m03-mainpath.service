@@ -3,7 +3,7 @@
 # NEVER update the original BTC WS collector code checkout to deploy M03.
 # No private API, paid AI, source trust promotion, BUY or SELL.
 [Unit]
-Description=Indodax V2 single M03 PUBLIC scanner -> G1/M04 REJECT diagnostic
+Description=Indodax V2 M03 minute ticker casebook with periodic deep20 -> strict G1/M04 REJECT
 ConditionPathExists=%h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3
 ConditionPathExists=%h/indodax-ai-bot-v2-m03-runtime/indodax_ai_bot/__main__.py
 
@@ -13,8 +13,11 @@ Type=oneshot
 # collector's original V2 checkout.
 WorkingDirectory=%h/indodax-ai-bot-v2-m03-runtime
 # User timer never overlaps this unit; flock also blocks accidental concurrent
-# direct starts. No second scanner, no separate model worker.
-ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --once --public-scanner-mainpath --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db %h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3 --db %h/indodax-ai-bot-v2/runtime/decisions.sqlite3
+# direct starts. Exactly ONE scanner: ~3 GET/min light; every fifth minute
+# original 20-deep path (~83 GET) with BTC read-only G1 gate and M04 REJECT.
+# Counts are illustrative not a global IP-budget warranty; no missed-tick replay.
+# Do not start/enable timer without owner IP-budget approval.
+ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --scheduled-public-scanner-once --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db %h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3 --db %h/indodax-ai-bot-v2/runtime/decisions.sqlite3
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN
