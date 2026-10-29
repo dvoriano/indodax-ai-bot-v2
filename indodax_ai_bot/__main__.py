@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--history-windows", type=int, default=4,
                         help="Bounded M03-L archive windows per call, 1..4; future calls resume oldest archived minute")
     parser.add_argument("--bulk-min-volume-idr", default="0",
-                        help="Optional PUBLIC bulk 24h IDR-volume floor; 0 keeps existing behavior (test with 100000000)")
+                        help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--ws-db", default=None,
                         help="Opt-in READ-ONLY diagnostic join of V2 public WS SQLite to --bulk-deep-once; no G1 approval")
     parser.add_argument("--sumopod-shadow", action="store_true",
