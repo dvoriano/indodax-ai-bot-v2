@@ -107,11 +107,14 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
             if p == "token018_idr":
                 return candidate(p, score=78, structure="PULLBACK_REBOUND_OBSERVED")
             if p == "btc_idr":
-                return candidate(p, score=99, rsi="55")
+                return candidate(p, score=99, rsi="78")
             return candidate(p, score=96, rsi="78")
         with patch("indodax_ai_bot.deep_analysis.analyze_observation",
                    side_effect=assigned):
             data = bulk_public_deep_scan(FakeBulkMarket(), fake_screen())
+        # BTC is context and a possible candidate; its synthetic RSI=78
+        # intentionally gives it an overbought quality caution so this
+        # test isolates exactly ONE approved preview (token018_idr).
         self.assertEqual(data["eligible_cohort"]["status"], "ALIGNED_PUBLIC_UNATTESTED")
         self.assertEqual(
             data["eligible_cohort"]["provisional_watchlist_preview"],
@@ -146,7 +149,7 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
                 return candidate(obs.pair, score=78,
                                  structure="PULLBACK_REBOUND_OBSERVED")
             if obs.pair == "btc_idr":
-                return candidate(obs.pair, score=99)
+                return candidate(obs.pair, score=99, rsi="78")
             return candidate(obs.pair, score=96, rsi="78")
         with patch("indodax_ai_bot.deep_analysis.analyze_observation",
                    side_effect=assigned):
