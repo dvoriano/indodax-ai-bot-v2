@@ -6,6 +6,8 @@ systemd changes occur in these tests. Strict G1 Option A remains REJECT.
 from __future__ import annotations
 
 from contextlib import redirect_stdout, redirect_stderr
+from dataclasses import replace
+from decimal import Decimal
 from io import StringIO
 import json
 from pathlib import Path
@@ -44,12 +46,20 @@ class M03MainpathOptInTests(unittest.TestCase):
             db = Path(td) / "decisions.sqlite3"
             ws = Path(td) / "existing-ws.sqlite3"
             PublicTradeStreamJournal(ws)
+            source = fake_screen()
+            eligible = tuple(
+                replace(item, volume_idr_24h=Decimal("500000000"),
+                        last_idr=Decimal("100"))
+                for item in source.shortlist
+            )
+            source = replace(source, universe=eligible, shortlist=eligible,
+                             watchlist=eligible[:2])
             with (patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scanner,
                   patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket",
                         return_value=FakeBulkMarket()),
                   patch("indodax_ai_bot.sumopod_provider._post",
                         side_effect=AssertionError("PAID_NETWORK_FORBIDDEN")) as post):
-                scanner.return_value.scan.return_value = fake_screen()
+                scanner.return_value.scan.return_value = source
                 rc, body, err = self._cli([
                     "--once", "--public-scanner-mainpath",
                     "--ws-db", str(ws), "--db", str(db),
@@ -73,7 +83,11 @@ class M03MainpathOptInTests(unittest.TestCase):
             self.assertFalse(body["execution_allowed"])
             with sqlite3.connect(db) as con:
                 recorded = con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+                samples = con.execute(
+                    "SELECT COUNT(*) FROM public_ticker_minute_samples"
+                ).fetchone()[0]
             self.assertEqual(recorded, 1)
+            self.assertEqual(samples, 20)
 
     def test_optin_requires_existing_distinct_ws_and_once_before_any_fetch(self):
         with TemporaryDirectory() as td:
