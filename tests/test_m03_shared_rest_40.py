@@ -11,6 +11,9 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
+import os
+import subprocess
+import sys
 import unittest
 
 from indodax_ai_bot.__main__ import main
@@ -53,6 +56,36 @@ class M03SharedRestAndFortyTests(unittest.TestCase):
                 SharedPublicRestBudget(db, limit=10, clock=lambda: 1800000061.0).reserve(),
                 1,
             )
+
+    def test_second_real_python_process_shares_the_same_quota_file(self):
+        with TemporaryDirectory() as td:
+            db = Path(td) / "shared.sqlite3"
+            SharedPublicRestBudget(db, limit=1, clock=lambda: 1800000000.0).reserve()
+            code = (
+                "from indodax_ai_bot.public_rest_budget import "
+                "SharedPublicRestBudget,SharedRestBudgetError; "
+                "import sys; "
+                "guard=SharedPublicRestBudget(sys.argv[1], limit=1, "
+                "clock=lambda:1800000001.0); "
+                "\ntry:\n guard.reserve(); sys.exit(3)\n"
+                "except SharedRestBudgetError as e:\n"
+                " print(str(e)); sys.exit(0)\n"
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+            other = subprocess.run(
+                [sys.executable, "-B", "-c", code, str(db)],
+                env=env, capture_output=True, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(other.returncode, 0, other.stderr)
+            self.assertEqual(other.stdout.strip(),
+                             "PUBLIC_SHARED_REST_RATE_BUDGET_EXCEEDED")
+
+    def test_default_http_transport_constructs_shared_guard(self):
+        self.assertIsInstance(
+            IndodaxPublicMarket()._rest_budget, SharedPublicRestBudget,
+        )
+        self.assertIsNone(IndodaxPublicMarket(fetch=lambda _p: {})._rest_budget)
 
     def test_failed_transport_reservation_is_not_refunded(self):
         with TemporaryDirectory() as td:
