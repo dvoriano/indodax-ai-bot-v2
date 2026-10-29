@@ -1,0 +1,23 @@
+# M03 mainpath, STAGED / DISABLED. Owner install+enable only after VPS
+# scoped tests and explicit API egress-IP coordination. Not an order service.
+[Unit]
+Description=Indodax V2 single M03 PUBLIC scanner -> G1/M04 REJECT diagnostic
+ConditionPathExists=%h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/indodax-ai-bot-v2
+# User timer never overlaps this unit; flock also blocks accidental concurrent
+# direct starts. No second scanner, no separate model worker.
+ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --once --public-scanner-mainpath --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db runtime/public_ws_btc.sqlite3 --db runtime/decisions.sqlite3
+Environment=INDODAX_TRADING_ENABLED=NO
+Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
+Environment=INDODAX_EXECUTION_MODE=DRY_RUN
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=55s
+Restart=no
+StandardOutput=journal
+StandardError=journal

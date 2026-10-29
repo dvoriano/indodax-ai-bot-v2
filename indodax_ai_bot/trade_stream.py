@@ -144,9 +144,31 @@ class PublicTradeStreamJournal:
                 observed_at_epoch INTEGER NOT NULL
             )""")
 
+    @classmethod
+    def readonly(cls, database: str | Path) -> "PublicTradeStreamJournal":
+        """Read existing WS evidence without running schema-creating __init__.
+
+        Used by the independent M03 REST diagnostic while the ORIGINAL WS
+        collector owns writes. This cannot create a missing journal.
+        """
+        path = Path(database)
+        if not path.is_file():
+            raise StreamEvidenceError("PUBLIC_WS_SQLITE_NOT_FOUND")
+        obj = cls.__new__(cls)
+        obj._path = path
+        obj._readonly = True
+        return obj
+
     @contextmanager
     def _connect(self):
-        con = sqlite3.connect(self._path, timeout=10)
+        if getattr(self, "_readonly", False):
+            con = sqlite3.connect(
+                self._path.resolve().as_uri() + "?mode=ro",
+                uri=True, timeout=2,
+            )
+            con.execute("PRAGMA query_only=ON")
+        else:
+            con = sqlite3.connect(self._path, timeout=10)
         try:
             with con:
                 yield con
