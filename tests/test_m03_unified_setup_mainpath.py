@@ -29,7 +29,8 @@ def candidate(pair, *, score=85, structure=None, early=None, rsi="55"):
     return DeepCandidate(
         pair=pair, score=score, state="PUBLIC_EVIDENCE_UNATTESTED",
         rejection_reason=None, closed_1m_epoch=1800000120,
-        rsi14=Decimal(rsi), volume_ratio=Decimal("2"),
+        rsi14=Decimal(rsi), ema8=Decimal("101"), ema21=Decimal("100"),
+        volume_ratio=Decimal("2"),
         spread_bps=Decimal("18"), book_imbalance=Decimal("0.2"),
         visible_buy_idr=Decimal("200"), visible_sell_idr=Decimal("100"),
         market_structure_diagnostic=(
@@ -123,8 +124,7 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
         )
         # No issuer means no model calls. Receipt hash still reaches the
         # correct pair even when it was not in scalar-score top10.
-        with patch("indodax_ai_bot.three_role_ai.ThreeRoleShadow._run_two_candidates"):
-            shadow = ThreeRoleShadow(clock=lambda: 1800000140).run("trace", data)
+        shadow = ThreeRoleShadow(clock=lambda: 1800000140).run("trace", data)
         self.assertEqual(shadow["reason"], "G1_PUBLIC_EVIDENCE_UNTRUSTED")
         self.assertEqual(shadow["candidate_pair"], "token018_idr")
         self.assertEqual(len(shadow["source_digest_sha256"]), 64)
@@ -132,6 +132,9 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
 
     def test_original_orchestrator_150m_floor_no_trade_on_same_pipeline(self):
         fake = boosted_fake(high=22, amount="150000000")
+        fake.now = 1800000130
+        for ticker in fake.tickers.values():
+            ticker["server_time"] = fake.now - 1
         screening = DailyPairScanner(fake.client()).scan()
         class TimedMarket(FakeBulkMarket):
             def __init__(self):
