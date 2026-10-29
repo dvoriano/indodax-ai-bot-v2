@@ -52,9 +52,11 @@ class DeepCandidate:
     wall_temporal_evidence: dict | None = None
     surge_experience_context: dict | None = None
     surge_pattern: dict | None = None
+    public_maintenance_flag: bool = False
 
     def summary(self) -> dict:
         return {
+            "scalp_setup_stage": classify_candidate_entry_stage(self),
             "pair": self.pair, "score": self.score, "state": self.state,
             "rejection_reason": self.rejection_reason,
             "closed_1m_epoch": self.closed_1m_epoch,
@@ -77,6 +79,8 @@ class DeepCandidate:
             "wall_temporal_evidence": self.wall_temporal_evidence,
             "surge_experience_context": self.surge_experience_context,
             "surge_pattern": self.surge_pattern,
+            "public_maintenance_flag": self.public_maintenance_flag,
+            "market_tradability_verified": False,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
             "g1_verified": False,
@@ -676,6 +680,57 @@ class DeepScan:
         }
 
 
+def classify_candidate_entry_stage(candidate: DeepCandidate) -> dict:
+    """Unify existing EARLY / closed PULLBACK / pump exhaustion observations.
+
+    This is a same-candidate review label, not a score bonus, predictive edge,
+    complete trade flow, order authorization or a new strategy/scanner.
+    Only available observed evidence is used; no future candle or imputed BUY.
+    """
+    if not isinstance(candidate, DeepCandidate):
+        raise ValueError("INVALID_M03_CANDIDATE_STAGE")
+    structure = candidate.market_structure_diagnostic
+    label = structure.get("label") if isinstance(structure, dict) else None
+    early = candidate.early_momentum
+    early_status = early.get("status") if isinstance(early, dict) else None
+    if label == "FALSE_BREAKOUT_RISK":
+        # An uncalibrated structure high-tick alone may label ordinary
+        # candles as false breakouts. Treat it as a hard caution only if
+        # contemporaneous sampled early momentum corroborates an attempted
+        # surge. Otherwise keep an explicit review label, not a fake veto.
+        stage = (
+            "FALSE_BREAKOUT_CAUTION" if early_status in (
+                "EARLY_WATCH_UNCALIBRATED", "EXHAUSTION_CAUTION"
+            ) else "FALSE_BREAKOUT_REVIEW_UNCONFIRMED"
+        )
+    elif (early_status == "EXHAUSTION_CAUTION"
+          or candidate.rsi14 is not None
+          and candidate.rsi14 >= Decimal("75")):
+        stage = "EXHAUSTED_PUMP_CAUTION"
+    elif label == "PULLBACK_REBOUND_OBSERVED":
+        stage = "PULLBACK_REBOUND_WATCH"
+    elif label == "SURGE_BREAKOUT_OBSERVED":
+        stage = "BREAKOUT_CONTINUATION_WATCH"
+    elif early_status == "EARLY_WATCH_UNCALIBRATED":
+        stage = "EARLY_ACCELERATION_WATCH"
+    elif label == "REVERSAL_ATTEMPT_OBSERVED":
+        stage = "REVERSAL_ATTEMPT_REVIEW"
+    else:
+        stage = "NO_CONFIRMED_ENTRY_SETUP"
+    return {
+        "stage": stage,
+        "structure_label": label,
+        "early_momentum_status": early_status,
+        "uses_closed_1m_structure": isinstance(structure, dict),
+        "ticker_momentum_is_not_closed_candle": True,
+        "entry_timing_confirmed": False,
+        "calibrated": False,
+        "risk_ai_evaluated": False,
+        "g1_verified": False,
+        "trade_authorized": False,
+    }
+
+
 def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
     """M03-F observational caution labels, NOT risk AI/veto or BUY qualification.
 
@@ -699,6 +754,13 @@ def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
         flags.append("ASK_DOMINANT_OR_MISSING_BOOK")
     if candidate.visible_sell_idr > candidate.visible_buy_idr:
         flags.append("VISIBLE_SELL_SAMPLE_DOMINANT")
+    timing = classify_candidate_entry_stage(candidate)
+    # High indicator score never overrides an actually observed fakeout
+    # or exhausted momentum. No threshold change, no trade authority.
+    if timing["stage"] == "FALSE_BREAKOUT_CAUTION":
+        flags.append("CLOSED_CANDLE_FALSE_BREAKOUT_CAUTION")
+    if timing["stage"] == "EXHAUSTED_PUMP_CAUTION":
+        flags.append("MOMENTUM_EXHAUSTION_CAUTION")
     book = candidate.book_wall_diagnostic or {}
     wall_status = book.get("status")
     if wall_status in ("BOOK_TICKER_MISMATCH_NO_WATCH",
@@ -715,6 +777,12 @@ def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
         "score": candidate.score,
         "review_flags": flags,
         "clear_of_provisional_cautions": not flags,
+        # Maintenance may be a wallet restriction; never claim tradability
+        # merely because public OHLC and books can be observed.
+        "maintenance_flag_requires_independent_order_preflight": (
+            candidate.public_maintenance_flag
+        ),
+        "scalp_setup_stage": timing,
         "risk_ai_evaluated": False,
         "book_wall_status": wall_status,
         "wall_persistence_proven": False,
@@ -798,10 +866,30 @@ def _same_window_gate(
     reviews = [_quality_review(c, regime) for c in ranked]
     # This is a PUBLIC-ONLY PREVIEW of current-minute candidates, not a
     # qualified G1 receipt. Prior scan batch scores are never included.
+    # Once baseline quality is clear, prefer real observed EARLY/PULLBACK/
+    # breakout setups over a higher scalar score with no observed setup.
+    # Same-minute diagnostics retain their original score order for audit.
+    # These priorities are UNCALIBRATED and never authorize a provider call.
+    stage_rank = {
+        "PULLBACK_REBOUND_WATCH": 0,
+        "EARLY_ACCELERATION_WATCH": 1,
+        "BREAKOUT_CONTINUATION_WATCH": 2,
+        "NO_CONFIRMED_ENTRY_SETUP": 3,
+        "REVERSAL_ATTEMPT_REVIEW": 4,
+    }
+    clean = [item for item in reviews if item["clear_of_provisional_cautions"]]
     provisional_watchlist = [
-        item["pair"] for item in reviews
-        if item["clear_of_provisional_cautions"]
-    ][:2]
+        item["pair"] for item in sorted(
+            clean,
+            key=lambda item: (
+                stage_rank.get(
+                    (item.get("scalp_setup_stage") or {}).get("stage"), 5,
+                ),
+                -(item["score"] if type(item.get("score")) is int else -1),
+                item["pair"],
+            ),
+        )[:2]
+    ]
     return dict(
         base,
         status="ALIGNED_PUBLIC_UNATTESTED",
@@ -933,6 +1021,7 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                 (x.surge_pattern for x in screening.shortlist[:limit]
                  if x.pair == pair), None,
             ),
+            public_maintenance_flag=(pair in context.maintenance_pair_ids),
         )
         if on_candidate is not None:
             candidate = on_candidate(candidate, obs)
@@ -1091,6 +1180,14 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
         "other_process_requests_accounted_for": False,
         "shared_public_scan_context": True,
         "ranked_diagnostics_top10": [x.summary() for x in diagnostic[:10]],
+        # The quality-first preview can be outside the scalar score top-10.
+        # Preserve exact selected per-pair evidence for M04 MARKET digest
+        # without a second REST scan or mixing closed candle windows.
+        "provisional_market_evidence": [
+            c.summary() for pair in
+            eligible_cohort.get("provisional_watchlist_preview", [])
+            for c in candidates if c.pair == pair and c.score is not None
+        ],
         "same_window": guard,
         "full_universe_deep_verified": False,
         "g1_verified": False,
