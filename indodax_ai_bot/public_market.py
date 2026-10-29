@@ -67,6 +67,8 @@ class PublicScanContext:
     exchange_epoch: int
     pairs: dict[str, tuple[str, str]]
     tickers: dict[str, Any]
+    # Public research only: status is NOT independent proof a pair is tradable.
+    maintenance_pair_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,8 @@ class IndodaxPublicMarket:
         # Per-client diagnostic only: counts attempted PUBLIC GETs in this
         # instance. No global IP accounting; no authorization impact.
         self.public_get_attempt_count = 0
+        # Captured only from the same /api/pairs snapshot, not persisted.
+        self.public_maintenance_pairs: frozenset[str] = frozenset()
 
     def _http_json(self, path: str) -> Any:
         # Every path comes from hardcoded public endpoint constructors.
@@ -174,6 +178,7 @@ class IndodaxPublicMarket:
         if not isinstance(data, list):
             raise PublicDataError("INVALID_PAIRS_PAYLOAD")
         pairs: dict[str, tuple[str, str]] = {}
+        maintenance: set[str] = set()
         for item in data:
             if not isinstance(item, dict) or item.get("base_currency") != "idr":
                 continue
@@ -182,11 +187,30 @@ class IndodaxPublicMarket:
                 continue
             if not _PAIR_RE.fullmatch(ticker_id) or pair_id != ticker_id.replace("_", ""):
                 continue
-            if symbol.upper() != pair_id.upper():
+            # Exchange-provided TradingView symbol may be a distinct alias,
+            # e.g. ticker ACTSOL_IDR / id actsolidr / symbol ACTIDR.
+            # Bound it to the SAME validated pair id and IDR quote, never
+            # synthesize a symbol or accept a foreign quote.
+            if not re.fullmatch(r"[A-Z0-9]+IDR", symbol.upper()):
                 continue
-            if item.get("is_market_suspended") in (1, True, "1") or item.get("is_maintenance") in (1, True, "1"):
+            traded = item.get("traded_currency")
+            if traded is not None and traded != ticker_id[:-4]:
                 continue
+            # Only is_market_suspended is an explicit market suspension gate.
+            # Missing flag is legacy PUBLIC-only research compatibility, NOT
+            # executable trading status. Unknown values reject admission.
+            if item.get("is_market_suspended") not in (None, 0, False, "0"):
+                continue
+            m = item.get("is_maintenance")
+            if m not in (None, 0, 1, False, True, "0", "1"):
+                continue
+            # Indodax wallet maintenance is not necessarily a halt of trades.
+            # Capture a CAUTION but allow public radar/candles only. Execution
+            # remains prohibited until future independent M07 tradability check.
+            if m in (1, True, "1"):
+                maintenance.add(ticker_id)
             pairs[ticker_id] = (pair_id, symbol.upper())
+        self.public_maintenance_pairs = frozenset(maintenance)
         if not pairs:
             raise PublicDataError("NO_ACTIVE_IDR_PAIRS")
         return pairs
