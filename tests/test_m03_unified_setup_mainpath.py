@@ -140,6 +140,30 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
         self.assertEqual(len(shadow["source_digest_sha256"]), 64)
         self.assertFalse(shadow["execution_allowed"])
 
+    def test_btc_may_legitimately_be_second_candidate_if_quality_clean(self):
+        # Explicitly retain original MAX-2 semantics, including BTC itself.
+        # Prior failing fixtures mistakenly expected one with clean BTC.
+        def assigned(obs, *, early_momentum=None):
+            if obs.pair == "token018_idr":
+                return candidate(obs.pair, score=78,
+                                 structure="PULLBACK_REBOUND_OBSERVED")
+            if obs.pair == "btc_idr":
+                return candidate(obs.pair, score=99, rsi="55")
+            return candidate(obs.pair, score=96, rsi="78")
+        with patch("indodax_ai_bot.deep_analysis.analyze_observation",
+                   side_effect=assigned):
+            data = bulk_public_deep_scan(FakeBulkMarket(), fake_screen())
+        self.assertEqual(
+            data["eligible_cohort"]["provisional_watchlist_preview"],
+            ["token018_idr", "btc_idr"],
+        )
+        self.assertEqual(
+            [x["pair"] for x in data["provisional_market_evidence"]],
+            ["token018_idr", "btc_idr"],
+        )
+        self.assertFalse(data["g2_candidate_authorized"])
+        self.assertFalse(data["execution_allowed"])
+
     def test_quality_ranked_outside_top10_reaches_market_role_only_with_synthetic_receipt(self):
         # A second, intentionally test-only full chain demonstrates that the
         # chosen low-scalar-score PULLBACK enters MARKET's immutable source
