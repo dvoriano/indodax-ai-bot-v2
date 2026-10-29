@@ -389,8 +389,9 @@ class DailyScalpingOrchestrator:
     def run_bulk_deep_cycle(self, trace_id: str, *,
                             market: IndodaxPublicMarket | None = None,
                             ws_db_path: str | None = None,
-                            min_volume_idr: Decimal = Decimal("0")) -> CycleResult:
-        """One bounded 20-pair public attempt; optional 24h IDR liquidity floor.
+                            min_volume_idr: Decimal = Decimal("0"),
+                            deep_limit: int = 20) -> CycleResult:
+        """One bounded 20–40-pair public attempt; optional 24h IDR liquidity floor.
 
         The full IDR universe is still sampled by the original scanner/journal.
         A positive filter only changes the same-cycle deep shortlist, never
@@ -398,14 +399,18 @@ class DailyScalpingOrchestrator:
         """
         client = market if market is not None else IndodaxPublicMarket()
         try:
+            if type(deep_limit) is not int or not 20 <= deep_limit <= 40:
+                raise PublicDataError("BULK_LIMIT_MUST_BE_20_TO_40")
             preliminary = self._scan_with_early_momentum(client)
-            if min_volume_idr != Decimal("0"):
+            if min_volume_idr != Decimal("0") or deep_limit > 20:
+                # Keep one original scanner; 40 reads the SAME ranked universe
+                # rather than incorrectly trying to extend the default top30.
                 preliminary = apply_deep_volume_floor(
                     preliminary, minimum_idr=min_volume_idr,
-                    max_deep_pairs=20,
+                    max_deep_pairs=deep_limit,
                 )
             evidence = bulk_public_deep_scan(
-                client, preliminary, limit=20,
+                client, preliminary, limit=deep_limit,
                 on_candidate=self._attach_public_wall_experience,
             )
         except PublicDataError as exc:
