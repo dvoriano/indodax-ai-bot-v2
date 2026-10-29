@@ -45,9 +45,9 @@ class M03VolumeFloorTests(unittest.TestCase):
         self.assertEqual(report["eligible_initial_scanner_pairs"], 45)
         self.assertEqual(report["at_or_above_volume_idr_counts"], {
             "50000000": 21, "100000000": 21,
-            "250000000": 0, "500000000": 0,
+            "150000000": 21, "250000000": 0, "500000000": 0,
         })
-        self.assertEqual(report["below_100m_but_still_in_radar"], 24)
+        self.assertEqual(report["below_volume_floor_but_still_in_radar"], 24)
         self.assertTrue(report["at_least_20_deep_candidates_by_volume_only"])
         self.assertFalse(report["at_least_40_deep_candidates_by_volume_only"])
         self.assertFalse(report["execution_allowed"])
@@ -55,14 +55,14 @@ class M03VolumeFloorTests(unittest.TestCase):
             "/api/pairs", "/api/server_time", "/api/ticker_all",
         ])
 
-    def test_100m_floor_only_changes_deep_not_all_pair_radar(self):
+    def test_150m_floor_only_changes_deep_not_all_pair_radar(self):
         fake = boosted_fake(high=20)
         scan = DailyPairScanner(fake.client()).scan()
         deep = apply_deep_volume_floor(scan)
         self.assertEqual(len(scan.universe), 45)
         self.assertEqual(len(deep.universe), 45)
         self.assertEqual(len(deep.shortlist), 20)
-        self.assertTrue(all(x.volume_idr_24h >= Decimal("100000000")
+        self.assertTrue(all(x.volume_idr_24h >= Decimal("150000000")
                             for x in deep.shortlist))
         self.assertIn("m044_idr", {x.pair for x in deep.universe})
         self.assertNotIn("m044_idr", {x.pair for x in deep.shortlist})
@@ -102,7 +102,7 @@ class M03VolumeFloorTests(unittest.TestCase):
             with patch.object(app, "_scan_with_early_momentum", return_value=scan):
                 result = app.run_bulk_deep_cycle(
                     "volume-insufficient", market=fake.client(),
-                    min_volume_idr=Decimal("100000000"),
+                    min_volume_idr=Decimal("150000000"),
                 )
             self.assertEqual(result.final_decision.value, "REJECT")
             self.assertFalse(result.execution_allowed)
@@ -112,7 +112,7 @@ class M03VolumeFloorTests(unittest.TestCase):
 
     def test_invalid_floor_and_limit_fail_closed(self):
         scan = DailyPairScanner(boosted_fake().client()).scan()
-        for floor in (Decimal("-1"), Decimal("NaN"), Decimal("Infinity"), "100000000"):
+        for floor in (Decimal("-1"), Decimal("NaN"), Decimal("Infinity"), "150000000"):
             with self.subTest(floor=floor):
                 with self.assertRaisesRegex(PublicDataError, "INVALID_DEEP_VOLUME_FLOOR"):
                     apply_deep_volume_floor(scan, minimum_idr=floor)
@@ -132,13 +132,13 @@ class M03VolumeFloorTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         payload = json.loads(out.getvalue())
         self.assertEqual(payload["public_get_attempt_count_this_client"], 3)
-        self.assertEqual(payload["at_or_above_volume_idr_counts"]["100000000"], 23)
+        self.assertEqual(payload["at_or_above_volume_idr_counts"]["150000000"], 23)
         self.assertFalse(payload["g1_verified"])
         self.assertFalse(payload["execution_allowed"])
 
     def test_cli_volume_floor_must_be_bulk_only_and_valid(self):
         for args in (
-            ["--scan-once", "--bulk-min-volume-idr", "100000000"],
+            ["--scan-once", "--bulk-min-volume-idr", "150000000"],
             ["--bulk-deep-once", "--bulk-min-volume-idr", "-1"],
             ["--bulk-deep-once", "--bulk-min-volume-idr", "NaN"],
             ["--bulk-deep-once", "--bulk-min-volume-idr", "oops"],
