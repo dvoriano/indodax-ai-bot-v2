@@ -121,9 +121,16 @@ class M03SharedRestAndFortyTests(unittest.TestCase):
 
     def test_40_pair_opt_in_uses_existing_45_pair_universe_and_no_order(self):
         fake = boosted_fake(high=45, amount="500000000")
-        screened = DailyPairScanner(fake.client()).scan()
-        self.assertEqual(len(screened.shortlist), 30)
         market = FakeBulkMarket()
+        # Keep the original 30-second source gate strict. Earlier fixture
+        # accidentally mixed scanner epoch 1800000065 with market epoch
+        # 1800000130 (65s apart), correctly aborting before pair one.
+        fake.now = market.now
+        for ticker in fake.tickers.values():
+            ticker["server_time"] = fake.now - 1
+        screened = DailyPairScanner(fake.client()).scan()
+        self.assertEqual(screened.observed_epoch, market.now)
+        self.assertEqual(len(screened.shortlist), 30)
         with TemporaryDirectory() as td:
             app = DailyScalpingOrchestrator(
                 Settings.from_env({}),
