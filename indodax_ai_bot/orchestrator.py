@@ -165,7 +165,25 @@ class DailyScalpingOrchestrator:
         wall = self.journal.record_and_compare_public_wall(candidate, observation)
         return replace(candidate, wall_temporal_evidence=wall)
 
-    def run_cycle(self, trace_id: str) -> CycleResult:
+    def run_cycle(self, trace_id: str, *, public_scanner: bool = False,
+                  ws_db_path: str | None = None,
+                  min_volume_idr: Decimal = Decimal("150000000"),
+                  deep_limit: int = 20) -> CycleResult:
+        """Default single entrypoint; PUBLIC M03 path only by explicit opt-in.
+
+        Reuse the original bulk orchestrator with its journal, same-window
+        evidence, source/G1 checks and M04 shadow. No second scanner or
+        executable proposal. Legacy --once performs ZERO public GETs.
+        """
+        if public_scanner:
+            if not ws_db_path:
+                reason = "M03_MAINPATH_REQUIRES_BTC_WS_SOURCE"
+                self.journal.record_reject(trace_id, reason)
+                return CycleResult(trace_id, FinalDecision.REJECT, reason)
+            return self.run_bulk_deep_cycle(
+                trace_id, ws_db_path=ws_db_path,
+                min_volume_idr=min_volume_idr, deep_limit=deep_limit,
+            )
         # No synthetic candles, mock AI authority, private API or phantom orders.
         # Even a configured AUTO policy cannot authorize M01 trade intents.
         reason = "G1_SOURCE_NOT_CONNECTED"
@@ -462,7 +480,7 @@ class DailyScalpingOrchestrator:
             else:
                 try:
                     result["btc_ws_closed_minute_sample"] = (
-                        PublicTradeStreamJournal(ws_db_path).closed_minute_sample(
+                        PublicTradeStreamJournal.readonly(ws_db_path).closed_minute_sample(
                             "btc_idr", closed_1m_epoch=minute,
                             now_epoch=int(time.time()),
                         )
