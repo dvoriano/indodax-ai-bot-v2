@@ -41,6 +41,11 @@ def evaluate_archive(path: Path, *, pair: str = "btc_idr") -> dict:
                        Decimal(lo), Decimal(cl), Decimal(vol))
             if DecisionJournal._public_ohlc_digest(c) != digest:
                 raise PublicDataError("CALIBRATION_ARCHIVE_ROW_DIGEST_MISMATCH")
+        except PublicDataError:
+            # PublicDataError subclasses ValueError. Preserve the specific
+            # digest integrity rejection instead of disguising corruption
+            # as an unparsable archive row.
+            raise
         except (TypeError, ValueError, ArithmeticError):
             raise PublicDataError("INVALID_CALIBRATION_ARCHIVE_ROW") from None
         candles.append(c)
