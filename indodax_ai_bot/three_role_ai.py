@@ -209,12 +209,24 @@ class ThreeRoleShadow:
             "root_trade_history_complete": bulk.get("trade_history_complete") is True,
             "root_source_trust_verified": bulk.get("source_trust_verified") is True,
         }
-        raw_market_evidence = bulk.get("ranked_diagnostics_top10")
-        pair_evidence = next(
-            (item for item in raw_market_evidence
-             if isinstance(item, dict) and item.get("pair") == source["pair"]),
-            None,
-        ) if isinstance(raw_market_evidence, list) else None
+        # M03 final max-2 preview is quality/stage ranked, so its candidate
+        # may sit below scalar-score top10. Prefer the SAME-cycle selected
+        # evidence, not a historical or partial unrelated top10 row.
+        selected_evidence = bulk.get("provisional_market_evidence")
+        if isinstance(selected_evidence, list):
+            matches = [
+                item for item in selected_evidence if isinstance(item, dict)
+                and item.get("pair") == source["pair"]
+            ]
+            pair_evidence = matches[0] if len(matches) == 1 else None
+        else:
+            # Legacy synthetic M04 tests still use scalar top10 only.
+            raw_market_evidence = bulk.get("ranked_diagnostics_top10")
+            pair_evidence = next(
+                (item for item in raw_market_evidence
+                 if isinstance(item, dict) and item.get("pair") == source["pair"]),
+                None,
+            ) if isinstance(raw_market_evidence, list) else None
         if (not isinstance(pair_evidence, dict)
                 or pair_evidence.get("closed_1m_epoch") != epoch
                 or pair_evidence.get("trade_authorized") is not False):
