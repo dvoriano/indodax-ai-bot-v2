@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-history-archive-once", action="store_true",
                        help="Persist 1-4 bounded PUBLIC 1m OHLC backfill windows in the existing SQLite journal; no trading")
     group.add_argument("--rolling-deep-once", action="store_true", help="PUBLIC 2-pair rotating deep scan, SQLite persisted and paced, never trades")
-    group.add_argument("--bulk-deep-once", action="store_true", help="PUBLIC up-to-20 same-cycle deep scan; bounded requests and never trades")
+    group.add_argument("--bulk-deep-once", action="store_true", help="PUBLIC 20..40 same-cycle deep scan; default 20, never trades")
     group.add_argument("--public-ws-once", action="store_true", help="One public BTC trade-activity WS probe; persisted offset, no trades")
     group.add_argument("--public-ws-collect", action="store_true",
                        help="Bounded multi-session PUBLIC WS collection; durable SQLite, never trades")
@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="PUBLIC historical closed 1m bars for research only: 90..360")
     parser.add_argument("--history-windows", type=int, default=4,
                         help="Bounded M03-L archive windows per call, 1..4; future calls resume oldest archived minute")
+    parser.add_argument("--bulk-deep-limit", type=int, default=20,
+                        help="Opt-in PUBLIC 20..40-pair deep limit; default 20. Never trades")
     parser.add_argument("--bulk-min-volume-idr", default="0",
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--ws-db", default=None,
@@ -76,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
             raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR")
         if bulk_min_volume_idr != 0 and not args.bulk_deep_once:
             raise ConfigurationError("BULK_VOLUME_FLOOR_REQUIRES_BULK_DEEP_ONCE")
+        if (type(args.bulk_deep_limit) is not int or not 20 <= args.bulk_deep_limit <= 40):
+            raise ConfigurationError("BULK_DEEP_LIMIT_INVALID")
+        if args.bulk_deep_limit != 20 and not args.bulk_deep_once:
+            raise ConfigurationError("BULK_DEEP_LIMIT_REQUIRES_BULK_DEEP_ONCE")
         # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
         # Sumopod adapter from protected process environment. It is always
         # payment-disabled at this milestone and public G1 cannot qualify it.
@@ -145,9 +151,16 @@ def main(argv: list[str] | None = None) -> int:
                     outcome = app.run_bulk_deep_cycle(
                         uuid4().hex, ws_db_path=args.ws_db,
                         min_volume_idr=bulk_min_volume_idr,
+                        deep_limit=args.bulk_deep_limit,
                     )
                 else:
-                    outcome = app.run_bulk_deep_cycle(uuid4().hex, ws_db_path=args.ws_db)
+                    if args.bulk_deep_limit == 20:
+                        outcome = app.run_bulk_deep_cycle(uuid4().hex, ws_db_path=args.ws_db)
+                    else:
+                        outcome = app.run_bulk_deep_cycle(
+                            uuid4().hex, ws_db_path=args.ws_db,
+                            deep_limit=args.bulk_deep_limit,
+                        )
             elif args.rolling_deep_once:
                 outcome = app.run_rolling_deep_cycle(uuid4().hex)
             elif args.deep_once:
