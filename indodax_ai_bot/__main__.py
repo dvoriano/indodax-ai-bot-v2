@@ -87,11 +87,14 @@ def main(argv: list[str] | None = None) -> int:
             raise ConfigurationError("BULK_VOLUME_FLOOR_REQUIRES_BULK_DEEP_ONCE")
         if (type(args.bulk_deep_limit) is not int or not 20 <= args.bulk_deep_limit <= 40):
             raise ConfigurationError("BULK_DEEP_LIMIT_INVALID")
+        # The scheduled timer is deliberately fixed at deep20; check this
+        # before the generic bulk-only limit guard so an invalid scheduled40
+        # is rejected with its precise, stable fail-closed reason.
+        if args.scheduled_public_scanner_once and args.bulk_deep_limit != 20:
+            raise ConfigurationError("M03_SCHEDULED_BULK_LIMIT_MUST_BE_20")
         if args.bulk_deep_limit != 20 and not (args.bulk_deep_once or
                                                   (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_DEEP_LIMIT_REQUIRES_BULK_DEEP_ONCE")
-        if args.scheduled_public_scanner_once and args.bulk_deep_limit != 20:
-            raise ConfigurationError("M03_SCHEDULED_BULK_LIMIT_MUST_BE_20")
         if args.public_scanner_mainpath:
             if not args.once:
                 raise ConfigurationError("M03_MAINPATH_REQUIRES_ONCE")
