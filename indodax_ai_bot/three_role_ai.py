@@ -213,14 +213,20 @@ class ThreeRoleShadow:
         # may sit below scalar-score top10. Prefer the SAME-cycle selected
         # evidence, not a historical or partial unrelated top10 row.
         selected_evidence = bulk.get("provisional_market_evidence")
-        if isinstance(selected_evidence, list):
-            matches = [
-                item for item in selected_evidence if isinstance(item, dict)
-                and item.get("pair") == source["pair"]
-            ]
-            pair_evidence = matches[0] if len(matches) == 1 else None
+        selected_matches = (
+            [item for item in selected_evidence if isinstance(item, dict)
+             and item.get("pair") == source["pair"]]
+            if isinstance(selected_evidence, list) else []
+        )
+        if len(selected_matches) > 1:
+            return _reject("G1_DUPLICATE_BOUND_MARKET_EVIDENCE",
+                           candidate_pair=source["pair"])
+        if len(selected_matches) == 1:
+            pair_evidence = selected_matches[0]
         else:
-            # Legacy synthetic M04 tests still use scalar top10 only.
+            # Legacy M04 signed fixtures have an owner-injected preview and
+            # only a scalar top10; production candidate exists in the
+            # selected evidence already, even if ranked below scalar top10.
             raw_market_evidence = bulk.get("ranked_diagnostics_top10")
             pair_evidence = next(
                 (item for item in raw_market_evidence
