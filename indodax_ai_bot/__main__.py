@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
@@ -27,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
+    group.add_argument("--scheduled-public-scanner-once", action="store_true",
+                       help="Opt-in ONE minute tick: lightweight all-IDR scan each minute; original 20-deep G1/M04 public reject path every fifth minute, no orders")
     group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
     group.add_argument("--public-history-research-once", action="store_true",
                        help="One PUBLIC 1m OHLC 90-360m time-split price-only research; never trades")
@@ -79,11 +82,16 @@ def main(argv: list[str] | None = None) -> int:
             raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR") from None
         if not bulk_min_volume_idr.is_finite() or bulk_min_volume_idr < 0:
             raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR")
-        if bulk_min_volume_idr != 0 and not (args.bulk_deep_once or
+        if bulk_min_volume_idr != 0 and not (args.bulk_deep_once or args.scheduled_public_scanner_once or
                                                 (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_VOLUME_FLOOR_REQUIRES_BULK_DEEP_ONCE")
         if (type(args.bulk_deep_limit) is not int or not 20 <= args.bulk_deep_limit <= 40):
             raise ConfigurationError("BULK_DEEP_LIMIT_INVALID")
+        # The scheduled timer is deliberately fixed at deep20; check this
+        # before the generic bulk-only limit guard so an invalid scheduled40
+        # is rejected with its precise, stable fail-closed reason.
+        if args.scheduled_public_scanner_once and args.bulk_deep_limit != 20:
+            raise ConfigurationError("M03_SCHEDULED_BULK_LIMIT_MUST_BE_20")
         if args.bulk_deep_limit != 20 and not (args.bulk_deep_once or
                                                   (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_DEEP_LIMIT_REQUIRES_BULK_DEEP_ONCE")
@@ -96,6 +104,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M03_MAINPATH_WS_DB_MUST_BE_SEPARATE")
             if not Path(args.ws_db).is_file():
                 raise ConfigurationError("M03_MAINPATH_WS_DB_NOT_FOUND")
+        if args.scheduled_public_scanner_once:
+            # Require BTC source even on light minutes so the same service
+            # cannot silently run without its planned M04 read-only join.
+            if not args.ws_db:
+                raise ConfigurationError("M03_SCHEDULED_REQUIRES_BTC_WS_DB")
+            if Path(args.ws_db).resolve() == Path(args.db).resolve():
+                raise ConfigurationError("M03_SCHEDULED_WS_DB_MUST_BE_SEPARATE")
+            if not Path(args.ws_db).is_file():
+                raise ConfigurationError("M03_SCHEDULED_WS_DB_NOT_FOUND")
         # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
         # Sumopod adapter from protected process environment. It is always
         # payment-disabled at this milestone and public G1 cannot qualify it.
@@ -195,6 +212,30 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = app.run_scan_cycle(uuid4().hex)
             elif args.public_once or args.verify_public:
                 outcome = app.run_public_cycle(uuid4().hex, pair=args.pair)
+            elif args.scheduled_public_scanner_once:
+                # Schedule is chosen once using UTC minute epoch, not guessed
+                # from historical ticker/WS samples. 5-minute deep uses the
+                # EXACT SAME run_cycle/original bulk path. Other minutes
+                # gather ticker/casebook observations via run_scan_cycle.
+                # A delayed scheduler invocation beyond second 20 is skipped:
+                # don't use stale same-minute data or make a catch-up burst.
+                tick_epoch = int(time.time())
+                tick_second = tick_epoch % 60
+                if not 5 <= tick_second <= 20:
+                    schedule_lane = "SKIPPED_LATE_OR_EARLY_REJECT"
+                    outcome = app.run_cycle(uuid4().hex)
+                elif (tick_epoch // 60) % 5 == 0:
+                    schedule_lane = "DEEP20_EVERY_FIVE_MINUTES"
+                    outcome = app.run_cycle(
+                        uuid4().hex, public_scanner=True,
+                        ws_db_path=args.ws_db,
+                        min_volume_idr=max(
+                            bulk_min_volume_idr, Decimal("150000000")),
+                        deep_limit=20,
+                    )
+                else:
+                    schedule_lane = "LIGHT_ALL_IDR_EVERY_MINUTE"
+                    outcome = app.run_scan_cycle(uuid4().hex)
             elif args.once and args.public_scanner_mainpath:
                 # Exactly ONE original orchestrator and one original scanner.
                 # No new provider, no issuer, no order. Mandatory BTC WS join
@@ -217,6 +258,14 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.public_ws_once or args.public_ws_collect or args.public_ws_supervised_once:
                 result["public_ws"] = outcome.public_ws
+                result["live_trading_authorized"] = False
+            if args.scheduled_public_scanner_once:
+                result["scheduled_m03_lane"] = schedule_lane
+                result["public_scanner"] = outcome.screening
+                result["public_bulk"] = outcome.bulk
+                result["ai_shadow"] = outcome.ai_shadow
+                result["g1_source_policy"] = "A_STRICT_NO_PUBLIC_PROMOTION"
+                result["paid_network_allowed"] = False
                 result["live_trading_authorized"] = False
             if args.bulk_deep_once or args.public_scanner_mainpath:
                 result["public_bulk"] = outcome.bulk
@@ -286,6 +335,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.rolling_deep_once and result["public_rolling"] is None:
             return 3
         if (args.bulk_deep_once or args.public_scanner_mainpath) and result["public_bulk"] is None:
+            return 3
+        if args.scheduled_public_scanner_once and (
+                schedule_lane == "SKIPPED_LATE_OR_EARLY_REJECT"
+                or (schedule_lane == "DEEP20_EVERY_FIVE_MINUTES"
+                    and result["public_bulk"] is None)
+                or (schedule_lane == "LIGHT_ALL_IDR_EVERY_MINUTE"
+                    and result["public_scanner"] is None)):
             return 3
         if args.public_ws_once and outcome.reason.startswith("PUBLIC_WS_PROBE_REJECTED:"):
             return 3

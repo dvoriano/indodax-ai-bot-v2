@@ -171,7 +171,8 @@ class M03MainpathOptInTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         service = (root / "deploy/indodax-v2-m03-mainpath.service").read_text()
         timer = (root / "deploy/indodax-v2-m03-mainpath.timer").read_text()
-        self.assertIn("--once --public-scanner-mainpath", service)
+        self.assertIn("--scheduled-public-scanner-once", service)
+        self.assertNotIn("--once --public-scanner-mainpath", service)
         self.assertIn("--bulk-deep-limit 20", service)
         self.assertIn("--bulk-min-volume-idr 150000000", service)
         self.assertIn("WorkingDirectory=%h/indodax-ai-bot-v2-m03-runtime", service)
