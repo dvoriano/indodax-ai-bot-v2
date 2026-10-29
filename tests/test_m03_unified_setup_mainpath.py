@@ -49,7 +49,8 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
             ("EARLY_ACCELERATION_WATCH", {"early": "EARLY_WATCH_UNCALIBRATED"}),
             ("PULLBACK_REBOUND_WATCH", {"structure": "PULLBACK_REBOUND_OBSERVED"}),
             ("BREAKOUT_CONTINUATION_WATCH", {"structure": "SURGE_BREAKOUT_OBSERVED"}),
-            ("FALSE_BREAKOUT_CAUTION", {"structure": "FALSE_BREAKOUT_RISK"}),
+            ("FALSE_BREAKOUT_CAUTION", {"structure": "FALSE_BREAKOUT_RISK",
+                                         "early": "EARLY_WATCH_UNCALIBRATED"}),
             ("EXHAUSTED_PUMP_CAUTION", {"early": "EXHAUSTION_CAUTION"}),
         ):
             with self.subTest(expected=expected):
@@ -64,7 +65,8 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
     def test_high_score_exhausted_pump_and_false_breakout_cannot_win_preview(self):
         for suspect in (
             candidate("bad_idr", score=99, early="EXHAUSTION_CAUTION"),
-            candidate("bad_idr", score=99, structure="FALSE_BREAKOUT_RISK"),
+            candidate("bad_idr", score=99, structure="FALSE_BREAKOUT_RISK",
+                      early="EARLY_WATCH_UNCALIBRATED"),
             candidate("bad_idr", score=99, rsi="78"),
         ):
             with self.subTest(stage=classify_candidate_entry_stage(suspect)["stage"]):
@@ -81,7 +83,8 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
             candidate("pull_idr", score=80, structure="PULLBACK_REBOUND_OBSERVED"),
             candidate("early_idr", score=84, early="EARLY_WATCH_UNCALIBRATED"),
             candidate("exhausted_idr", score=99, early="EXHAUSTION_CAUTION"),
-            candidate("fakeout_idr", score=98, structure="FALSE_BREAKOUT_RISK"),
+            candidate("fakeout_idr", score=98, structure="FALSE_BREAKOUT_RISK",
+                      early="EARLY_WATCH_UNCALIBRATED"),
         )
         obs = {p: observation(p) for p in pairs}
         btc = observation("btc_idr")
