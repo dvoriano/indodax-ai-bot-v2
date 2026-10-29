@@ -166,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.bulk_deep_once:
                 result["public_bulk"] = outcome.bulk
                 result["ai_shadow"] = outcome.ai_shadow
+                result["final_owner"] = outcome.final_owner
                 # Never show API credentials, request/response bodies or
                 # transport internals; readiness is not provider inference.
                 result["sumopod_shadow"] = {
