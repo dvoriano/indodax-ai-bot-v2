@@ -1,15 +1,20 @@
 # M03 mainpath, STAGED / DISABLED. Owner install+enable only after VPS
-# scoped tests and explicit API egress-IP coordination. Not an order service.
+# scoped tests, independent pinned M03 worktree, and verified egress-IP budget.
+# NEVER update the original BTC WS collector code checkout to deploy M03.
+# No private API, paid AI, source trust promotion, BUY or SELL.
 [Unit]
 Description=Indodax V2 single M03 PUBLIC scanner -> G1/M04 REJECT diagnostic
 ConditionPathExists=%h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3
+ConditionPathExists=%h/indodax-ai-bot-v2-m03-runtime/indodax_ai_bot/__main__.py
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/indodax-ai-bot-v2
+# Import code only from the pinned detached worktree, NOT from the active
+# collector's original V2 checkout.
+WorkingDirectory=%h/indodax-ai-bot-v2-m03-runtime
 # User timer never overlaps this unit; flock also blocks accidental concurrent
 # direct starts. No second scanner, no separate model worker.
-ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --once --public-scanner-mainpath --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db runtime/public_ws_btc.sqlite3 --db runtime/decisions.sqlite3
+ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --once --public-scanner-mainpath --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db %h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3 --db %h/indodax-ai-bot-v2/runtime/decisions.sqlite3
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN
