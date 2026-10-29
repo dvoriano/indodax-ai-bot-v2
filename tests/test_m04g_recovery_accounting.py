@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from indodax_ai_bot.trade_stream import (
-    PublicTradeStreamJournal, probe_official_public_ws,
+    PublicTradeStreamJournal, StreamEvidenceError, probe_official_public_ws,
 )
 from test_m04e_trade_stream import ack, pub, replay_pub
 from test_m04f_ws_heartbeat import FakeClock, FakeSocket, Timeout
@@ -118,32 +118,58 @@ class M04GRecoveryAccountingTests(unittest.TestCase):
             self.assertFalse(second["source_authenticated_for_g1"])
 
     def test_recover_gap_never_claims_contiguous_source_or_issuer(self):
+        # M04-P/R: once a GAP has been durably recorded, subscription
+        # must request a *fresh discontinuous* baseline. Server replay in
+        # that fresh ACK cannot be treated as a valid resumed history.
         with TemporaryDirectory() as td:
             journal = PublicTradeStreamJournal(Path(td)/"state.sqlite3")
             journal.acknowledge("btc_idr", ack(100))
             journal.ingest("btc_idr", pub(104))
-            second, _ = offline_session(
-                journal, acknowledgement=ack(104, publications=[replay_pub(101)]))
-            self.assertEqual(second["recovery_diagnostic"], "REPLAY_GAP_UNRESOLVED")
-            self.assertEqual(second["stream_status_during_probe"], "GAP")
-            self.assertFalse(second["observed_stream_continuity"])
-            self.assertFalse(second["g1_receipt_issuance_allowed"])
-            self.assertFalse(second["g2_provider_call_allowed"])
-            self.assertFalse(second["execution_allowed"])
+            self.assertEqual(journal.status("btc_idr")["stream_status"], "GAP")
+            self.assertNotIn("recover", journal.subscription("btc_idr")["params"])
+            with self.assertRaisesRegex(
+                StreamEvidenceError, "^WS_FRESH_BASELINE_CANNOT_REPLAY$"
+            ):
+                offline_session(
+                    journal,
+                    acknowledgement=ack(104, publications=[replay_pub(101)]),
+                )
+            state = journal.status("btc_idr")
+            self.assertEqual(state["stream_status"], "GAP")
+            self.assertEqual(state["last_publication_offset"], 100)
+            self.assertEqual(state["persisted_publications"], 0)
+            self.assertEqual(state["unrecoverable_gap_rebaseline_count"], 0)
+            self.assertFalse(state["observed_stream_continuity"])
+            self.assertFalse(state["source_authenticated_for_g1"])
+            self.assertFalse(state["g1_receipt_issuance_allowed"])
+            self.assertFalse(state["g2_provider_call_allowed"])
+            self.assertFalse(state["execution_allowed"])
 
     def test_recovery_counts_do_not_depend_on_server_offset_distance_alone(self):
+        # Replay 101(boundary),102,104 skips 103. M04-P/R intentionally
+        # FAILS the entire probe, keeps 102 as the last proven row and
+        # persists GAP; it never returns a normal "recovery" report.
         with TemporaryDirectory() as td:
             journal = PublicTradeStreamJournal(Path(td)/"state.sqlite3")
             offline_session(journal, acknowledgement=ack(100), live=[pub(101)])
-            second, _ = offline_session(journal, acknowledgement=ack(104,
-                publications=[replay_pub(101), replay_pub(102), replay_pub(104)]))
-            # Missing 103: even multiple available replay rows must not
-            # be interpreted as a contiguous source or issuer proof.
-            self.assertEqual(second["recovery_diagnostic"], "REPLAY_GAP_UNRESOLVED")
-            self.assertEqual(second["recovered_publications_newly_persisted"], 1)
-            self.assertEqual(second["live_publications_newly_persisted"], 0)
-            self.assertEqual(second["stream_status_during_probe"], "GAP")
-            self.assertFalse(second["g1_receipt_issuance_allowed"])
+            with self.assertRaisesRegex(
+                StreamEvidenceError, "^WS_RECOVERY_GAP_UNRESOLVED$"
+            ):
+                offline_session(journal, acknowledgement=ack(
+                    104, publications=[
+                        replay_pub(101), replay_pub(102), replay_pub(104),
+                    ]))
+            state = journal.status("btc_idr")
+            self.assertEqual(state["stream_status"], "GAP")
+            self.assertEqual(state["last_publication_offset"], 102)
+            self.assertEqual(state["persisted_publications"], 2)
+            self.assertEqual(state["unrecoverable_gap_rebaseline_count"], 0)
+            self.assertFalse(state["observed_stream_continuity"])
+            self.assertFalse(state["source_authenticated_for_g1"])
+            self.assertFalse(state["indodax_trade_tape_completeness_proven"])
+            self.assertFalse(state["g1_receipt_issuance_allowed"])
+            self.assertFalse(state["g2_provider_call_allowed"])
+            self.assertFalse(state["execution_allowed"])
 
 
 if __name__ == "__main__":
