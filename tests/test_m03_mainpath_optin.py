@@ -17,6 +17,8 @@ from unittest.mock import patch
 import unittest
 
 from indodax_ai_bot.__main__ import main
+from indodax_ai_bot.contracts import FinalDecision
+from indodax_ai_bot.orchestrator import CycleResult, DailyScalpingOrchestrator
 from indodax_ai_bot.trade_stream import PublicTradeStreamJournal, StreamEvidenceError
 from test_m03g_bulk import FakeBulkMarket, fake_screen
 
@@ -113,6 +115,34 @@ class M03MainpathOptInTests(unittest.TestCase):
                     self.assertIn(reason, err)
             self.assertFalse(db.exists())
             self.assertFalse(missing.exists())
+
+    def test_explicit_40_limit_routes_through_same_orchestrator_and_clamps_floor(self):
+        with TemporaryDirectory() as td:
+            db = Path(td) / "decisions.sqlite3"
+            ws = Path(td) / "ws.sqlite3"
+            PublicTradeStreamJournal(ws)
+            fake = CycleResult(
+                "synthetic", FinalDecision.REJECT, "G1_SOURCE_UNVERIFIED",
+                bulk={"coverage_status": "PARTIAL_INVALID_PAIR_EVIDENCE"},
+                ai_shadow={"completed_roles": []},
+            )
+            with patch.object(DailyScalpingOrchestrator,
+                              "run_bulk_deep_cycle", return_value=fake) as bulk:
+                rc, body, err = self._cli([
+                    "--once", "--public-scanner-mainpath",
+                    "--bulk-deep-limit", "40",
+                    "--bulk-min-volume-idr", "100000000",
+                    "--ws-db", str(ws), "--db", str(db),
+                ])
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(bulk.call_count, 1)
+            kw = bulk.call_args.kwargs
+            self.assertEqual(kw["deep_limit"], 40)
+            self.assertEqual(kw["ws_db_path"], str(ws))
+            self.assertEqual(kw["min_volume_idr"], Decimal("150000000"))
+            self.assertEqual(body["public_24h_volume_floor_idr"], "150000000")
+            self.assertEqual(body["final_decision"], "REJECT")
+            self.assertFalse(body["execution_allowed"])
 
     def test_readonly_ws_accessor_cannot_create_or_write_collector_db(self):
         with TemporaryDirectory() as td:
