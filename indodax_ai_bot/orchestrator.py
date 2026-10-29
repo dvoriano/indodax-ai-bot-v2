@@ -9,6 +9,7 @@ import sqlite3
 
 from .config import Settings
 from .contracts import FinalDecision
+from .final_control import FinalOwnerControl
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner, rank_scanner_with_early_momentum
@@ -123,6 +124,7 @@ class CycleResult:
     public_ws: dict | None = None
     public_research: dict | None = None
     research_archive: dict | None = None
+    final_owner: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -480,10 +482,18 @@ class DailyScalpingOrchestrator:
             caller=self._ai_role_caller,
             source_verifier=self._source_verifier,
         ).run(trace_id, result)
+        # M05: one inert Final owner admission in the SAME bulk path.
+        # Public/no-issued G1, no account preflight and no authenticated
+        # Telegram identity: a synthetic M04 PASS cannot grant ownership
+        # of an executable proposal. Stored mode defaults to MANUAL.
+        final_owner = FinalOwnerControl.mainpath_admission(
+            ai_shadow, mode=self.journal.final_mode(),
+        )
         self.journal.record_reject(trace_id, reason)
         return CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
             None, None, None, None, result, ai_shadow,
+            final_owner=final_owner,
         )
 
     def run_public_ws_cycle(self, trace_id: str, *, db_path: str,
