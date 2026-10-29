@@ -154,6 +154,31 @@ class DecisionJournal:
 
 
 
+            # M05: same durable DecisionJournal; no Telegram callbacks or
+            # exchange execution are allowed by these tables. Audit of owner
+            # intent must never alter already persisted Final REJECT records.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m05_final_mode (
+                    singleton TEXT PRIMARY KEY CHECK(singleton='MAIN'),
+                    mode TEXT NOT NULL CHECK(mode IN ('MANUAL','AUTO')),
+                    owner_id TEXT NOT NULL,
+                    changed_epoch INTEGER NOT NULL
+                )"""
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m05_final_previews (
+                    proposal_id TEXT PRIMARY KEY,
+                    pair TEXT NOT NULL,
+                    source_digest TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    issued_epoch INTEGER NOT NULL,
+                    expires_epoch INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('PENDING','DECIDED','EXPIRED')),
+                    owner_vote TEXT CHECK(owner_vote IN ('PASS','REJECT')),
+                    decided_epoch INTEGER
+                )"""
+            )
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self._db_path, timeout=10)
@@ -162,6 +187,95 @@ class DecisionJournal:
                 yield con
         finally:
             con.close()
+
+    def final_mode(self) -> str:
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT mode FROM m05_final_mode WHERE singleton='MAIN'"
+            ).fetchone()
+        return row[0] if row is not None else "MANUAL"
+
+    def final_set_mode(self, mode: str, owner_id: str, *,
+                       now_epoch: int) -> None:
+        """Persist selected mode for future Telegram owner adapter; NO trades."""
+        if (mode not in ("MANUAL", "AUTO")
+                or not isinstance(owner_id, str) or not owner_id
+                or type(now_epoch) is not int or now_epoch <= 0):
+            raise ValueError("INVALID_M05_MODE_CHANGE")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                "INSERT INTO m05_final_mode VALUES ('MAIN', ?, ?, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET "
+                "mode=excluded.mode,owner_id=excluded.owner_id,"
+                "changed_epoch=excluded.changed_epoch",
+                (mode, owner_id, now_epoch),
+            )
+
+    def final_stage_preview(
+        self, proposal_id: str, pair: str, digest: str, owner_id: str,
+        *, now_epoch: int, expires_epoch: int,
+    ) -> None:
+        """Fixture-stage an inert preview. Never called by real PUBLIC mainpath."""
+        if (not proposal_id or not pair.endswith("_idr") or not digest
+                or not owner_id or type(now_epoch) is not int
+                or type(expires_epoch) is not int
+                or not now_epoch < expires_epoch <= now_epoch + 90):
+            raise ValueError("INVALID_M05_PREVIEW")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            # Duplicate proposal IDs are always rejected: no resubmit, no
+            # callback replay, no extending TTL or replacing source digest.
+            exists = con.execute(
+                "SELECT 1 FROM m05_final_previews WHERE proposal_id=?",
+                (proposal_id,),
+            ).fetchone()
+            if exists is not None:
+                raise ValueError("M05_DUPLICATE_PROPOSAL_ID")
+            con.execute(
+                "INSERT INTO m05_final_previews "
+                "(proposal_id,pair,source_digest,owner_id,issued_epoch,"
+                "expires_epoch,state,owner_vote,decided_epoch) "
+                "VALUES (?,?,?,?,?,?,'PENDING',NULL,NULL)",
+                (proposal_id, pair, digest, owner_id, now_epoch, expires_epoch),
+            )
+
+    def final_consume_vote(
+        self, proposal_id: str, source_digest: str, owner_id: str,
+        decision: str, *, now_epoch: int,
+    ) -> str:
+        """Atomic, restart-safe, digest/owner-bound one-shot vote; no order."""
+        if (decision not in ("PASS", "REJECT") or type(now_epoch) is not int
+                or now_epoch <= 0):
+            return "M05_INVALID_VOTE"
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT source_digest,owner_id,expires_epoch,state "
+                "FROM m05_final_previews WHERE proposal_id=?",
+                (proposal_id,),
+            ).fetchone()
+            if row is None:
+                return "M05_PROPOSAL_NOT_FOUND"
+            stored_digest, stored_owner, expiry, state = row
+            if stored_digest != source_digest or stored_owner != owner_id:
+                return "M05_CALLBACK_BINDING_MISMATCH"
+            if state != "PENDING":
+                return "M05_OWNER_VOTE_REPLAY_REJECTED"
+            if now_epoch >= expiry:
+                con.execute(
+                    "UPDATE m05_final_previews SET state='EXPIRED' "
+                    "WHERE proposal_id=? AND state='PENDING'",
+                    (proposal_id,),
+                )
+                return "M05_PROPOSAL_EXPIRED"
+            con.execute(
+                "UPDATE m05_final_previews SET state='DECIDED',"
+                "owner_vote=?,decided_epoch=? "
+                "WHERE proposal_id=? AND state='PENDING'",
+                (decision, now_epoch, proposal_id),
+            )
+            return "M05_OWNER_VOTE_RECORDED"
 
     def record_reject(self, trace_id: str, reason: str) -> None:
         if not trace_id or not trace_id.strip() or not reason:
