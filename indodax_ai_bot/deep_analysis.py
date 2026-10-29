@@ -690,8 +690,16 @@ def classify_candidate_entry_stage(candidate: DeepCandidate) -> dict:
     label = structure.get("label") if isinstance(structure, dict) else None
     early = candidate.early_momentum
     early_status = early.get("status") if isinstance(early, dict) else None
-    if (label == "FALSE_BREAKOUT_RISK"):
-        stage = "FALSE_BREAKOUT_CAUTION"
+    if label == "FALSE_BREAKOUT_RISK":
+        # An uncalibrated structure high-tick alone may label ordinary
+        # candles as false breakouts. Treat it as a hard caution only if
+        # contemporaneous sampled early momentum corroborates an attempted
+        # surge. Otherwise keep an explicit review label, not a fake veto.
+        stage = (
+            "FALSE_BREAKOUT_CAUTION" if early_status in (
+                "EARLY_WATCH_UNCALIBRATED", "EXHAUSTION_CAUTION"
+            ) else "FALSE_BREAKOUT_REVIEW_UNCONFIRMED"
+        )
     elif (early_status == "EXHAUSTION_CAUTION"
           or candidate.rsi14 is not None
           and candidate.rsi14 >= Decimal("75")):
