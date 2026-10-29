@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .contracts import MarketSnapshot, SourceReceipt
+from .public_rest_budget import SharedPublicRestBudget, SharedRestBudgetError
 
 
 class PublicDataError(ValueError):
@@ -141,10 +142,15 @@ class IndodaxPublicMarket:
     ROOT = "https://indodax.com"
 
     def __init__(self, *, fetch: Callable[[str], Any] | None = None,
-                 clock: Callable[[], float] = time, timeout: float = 8.0) -> None:
+                 clock: Callable[[], float] = time, timeout: float = 8.0,
+                 rest_budget: SharedPublicRestBudget | None = None) -> None:
         self._clock = clock
         self._timeout = timeout
         self._fetch = fetch or self._http_json
+        # Live public HTTP ALWAYS shares a local-host, cross-process quota.
+        # Explicit synthetic fetch skips it unless a test injects a guard.
+        self._rest_budget = (rest_budget if rest_budget is not None else
+                             SharedPublicRestBudget() if fetch is None else None)
         # Per-client diagnostic only: counts attempted PUBLIC GETs in this
         # instance. No global IP accounting; no authorization impact.
         self.public_get_attempt_count = 0
@@ -166,6 +172,11 @@ class IndodaxPublicMarket:
 
     def _get(self, path: str) -> Any:
         self.public_get_attempt_count += 1
+        if self._rest_budget is not None:
+            try:
+                self._rest_budget.reserve()
+            except SharedRestBudgetError as exc:
+                raise PublicDataError(str(exc)) from None
         try:
             return self._fetch(path)
         except PublicDataError:
