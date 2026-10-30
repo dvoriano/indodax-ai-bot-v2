@@ -43,7 +43,11 @@ def callback(update_id, callback_id, data, *, user_id=OWNER,
         "callback_query": {
             "id": callback_id, "from": {"id": user_id},
             "data": data,
-            "message": {"chat": {"id": chat_id, "type": chat_type}},
+            "message": {
+                "message_id": 777, "date": NOW - 10,
+                "from": {"id": 999999888, "is_bot": True},
+                "chat": {"id": chat_id, "type": chat_type},
+            },
         },
     }
 
@@ -147,9 +151,8 @@ class M05TelegramApiTransportTests(unittest.TestCase):
             self.owner_db, owner_user_id=OWNER
         ).status(user_id=OWNER, chat_id=OWNER)["owner_mode"], "AUTO")
         self.assertEqual(self.ledger.audit_count(), 1)
-        self.assertIn("Trading OFF", fake.calls[-1][1]["text"]
-                      if "Trading OFF" in fake.calls[-1][1]["text"]
-                      else "Trading OFF")
+        self.assertIn("AUTO tidak mengaktifkan order",
+                      fake.calls[-1][1]["text"])
         self.assertEqual(self.ledger.telegram_next_offset(), 18)
 
     def test_callback_pass_through_real_owner_envelope_stays_final_reject(self):
@@ -274,6 +277,33 @@ class M05TelegramApiTransportTests(unittest.TestCase):
         self.assertEqual(out["handled"], 1)
         self.assertEqual(self.ledger.telegram_next_offset(), 5)
         self.assertEqual(len(fake.calls), 1)
+
+    def test_bot_api_negative_response_is_sanitized_without_description(self):
+        class Refused:
+            def __call__(self, method, payload, timeout):
+                return {"ok": False, "description": "secret " + TOKEN}
+        with self.assertRaises(TelegramTransportError) as ctx:
+            self.poller(Refused()).poll_once()
+        self.assertEqual(str(ctx.exception), "M05_TELEGRAM_API_REJECTED")
+        self.assertNotIn(TOKEN, str(ctx.exception))
+        self.assertEqual(self.ledger.telegram_next_offset(), 0)
+
+    def test_callback_inaccessible_message_and_non_bot_sender_never_consume(self):
+        p = self.proposal()
+        inaccessible = callback(1, "cq-old", p["callbacks"]["PASS"])
+        inaccessible["callback_query"]["message"]["date"] = 0
+        fake_author = callback(2, "cq-fake", p["callbacks"]["PASS"])
+        fake_author["callback_query"]["message"]["from"]["is_bot"] = False
+        fake = FakeBotApi([inaccessible, fake_author])
+        out = self.poller(fake).poll_once()
+        self.assertEqual(out["next_offset"], 3)
+        self.assertEqual([c[0] for c in fake.calls], ["getUpdates"])
+        self.assertEqual(self.ledger.audit_count(), 1)
+        later = self.ledger.apply_callback(
+            user_id=OWNER, chat_id=OWNER,
+            callback_data=p["callbacks"]["REJECT"], now_epoch=NOW+1,
+        )
+        self.assertTrue(later["accepted"])
 
     def test_mock_cli_integration_and_explicit_network_owner_go(self):
         from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient
