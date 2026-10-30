@@ -15,7 +15,7 @@
 | **Kode dan VPS** | GitHub repo `dvoriano/indodax-ai-bot-v2`; scanner Python isolated `~/indodax-ai-bot-v2-m03-runtime` pada SHA `d93cf2aa5ac2d70c8cc2b59af04a68f0b515b9a8`. Diagnostic systemd unit dari [DRAFT PR #18](https://github.com/dvoriano/indodax-ai-bot-v2/pull/18) SHA `49f304efd9a624f93a792e00c2ef6ba63f743dd5` terpasang di VPS, belum merged. Source original collector checkout jangan diganti demi M03. |
 | **Layanan terakhir diverifikasi** | BTC public WS collector **active**, Telegram V2 M05 timer **active**, M03 scanner timer **disabled/inactive**; V1/Hermes harus tetap dipisahkan dan tidak dimodifikasi. BTC recovery sempat membuktikan **satu batch sukses**, bukan jaminan uptime 24/7. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | **M05 Telegram V2 owner-visible read-only `/scanner` dan `/health` lewat service tick/poller/owner handler ASLI**. [DRAFT PR #20](https://github.com/dvoriano/indodax-ai-bot-v2/pull/20) sudah berisi kode dan 8 tes integration yang **belum dites VPS**. Berikutnya owner menjalankan scoped offline pinned SHA, baru staging M05 terpisah. M03 sisa checkbox disusuri kembali pada tahap penutupan; M03 timer tetap disabled dan tidak ada GO paid AI/private API/order. |
+| **ONE NEXT ACTION** | **M05 PR#20 OFFLINE 60/60 original owner Telegram mainpath PASS.** Next, inspect the **existing active M05 systemd `ExecStart`/checkout pin**, especially its separate release worktree, before making any source change. Then stage only original V2 Telegram runtime with a clear rollback and exact SHA while preserving owner SQLite cursor, bot token, 30s timer, BTC collector, and M03 disabled timer. Real Telegram `/scanner` + `/health` not yet verified. No V1 migration or trading activation. |
 
 ## 2. Status milestone M00–M12
 
@@ -26,7 +26,7 @@
 | **M02** Market public | **ADAPTER DONE / VERIFIED_PUBLIC_ONLINE** | REST Indodax publik closed 1m/5m/15m, ticker/trades/depth; bukan trade tape lengkap atau issuer G1. |
 | **M03** Scanner & ranking | **PARTIAL / PUBLIC EXECUTION VERIFIED** | Scanner bulk 20 dan 40 pair diuji di publik; cadence LIGHT4 + DEEP20 satu-shot teruji. **OPEN:** 24/7 admission REST bersama, true valid candidate quality, calibrated net edge. |
 | **M04** 3 role AI | **PARTIAL / OFFLINE CONTRACT + PUBLIC WS** | MARKET/RISK/STRATEGY typed/shadow, frozen source, provider adapter/budget, public WS + G1 safe rejection. **OPEN:** source issuer+complete 15m/1h, paid real models dan full three-role handoff. |
-| **M05** Telegram Final | **PARTIAL / REAL OWNER COMMAND VERIFIED, ACTIVE WORK** | Ledger MANUAL/AUTO + dedicated V2 `@pitidenbot` 30s and real `/status` accepted. Current PR#20 adds true V2-only read-only `/scanner`/`/health` mainpath **pending VPS scope**. Source-qualified proposal/callback and trading gates remain OPEN. |
+| **M05** Telegram Final | **PARTIAL / REAL OWNER COMMAND + PR#20 OFFLINE MAINPATH 60/60 VERIFIED** | `@pitidenbot` 30s timer and real `/status` accepted; 60/60 pinned PR#20 tests prove V2-only `/scanner`/`/health` through original owner Telegram service tick with replies mocked at Bot API boundary. **Not yet installed on active M05 runtime** and no real new command replies. Qualified G1/AI proposals, real buttons/approval, and order gates remain OPEN. |
 | **M06** Account & capital | **NOT ACCEPTED** | Private account readonly, MAIN free IDR, FLOKI/PEPE reserve dan ownership butuh izin/sumber terverifikasi. |
 | **M07** Executor | **NOT ACCEPTED** | Actual order/fill/preflight/idempotency/precision/reconciliation belum diterima; LIVE OFF. |
 | **M08** Position/SELL | **PARTIAL / POLICY TESTED_OFFLINE, UNWIRED** | Fungsi ROI cost-basis dan waktu posisi 12/12 offline PASS, tetapi belum terhubung ke bot-owned Position Manager dalam mainpath. Karena itu, centang integrasi masih `[ ]`; actual fills, SELL, restart/IDR settlement belum terbukti. |
@@ -48,7 +48,7 @@
 | M02 | 3 | 1 |
 | M03 | 13 | 5 |
 | M04 | 7 | 6 |
-| M05 | 5 | 4 |
+| M05 | 6 | 5 |
 | M06 | 0 | 5 |
 | M07 | 0 | 5 |
 | M08 | 0 | 7 |
@@ -56,7 +56,7 @@
 | M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **39** | **51** |
+| **TOTAL** | **40** | **52** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -120,7 +120,9 @@
 - [ ] Complete actual G1+AI proposal → owner PASS/REJECT inline buttons, max90s expiry/source binding.
 - [ ] Prove callback single-use, replay guard, ownership and concurrent mode switching on real messages.
 - [ ] Connect MANUAL/AUTO to same last-moment Risk/account/preflight gates, never bypass veto.
-- [ ] Wire remaining `/scanner`, `/market`, `/ai`, `/buy`, `/positions`, `/sell`, `/balance`, `/profit`, `/history`, `/risk`, `/kontrol`, `/health` to verified real state or explicit unavailable. **Implementasi M05 berikut: `/health`/`/scanner` read-only memakai collector/servis V2 yang sudah ada, PR#20 kode saja (perlu pinned VPS integration PASS serta actual M05 runtime staging sebelum `[x]`).**
+- [x] **M05 PR#20 `/scanner` + `/health` OFFLINE original Telegram mainpath accepted:** pinned VPS SHA `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4`; 8/8 new service-tick→dedicated poller→owner-private gate→real handler→V2 read-only source→safe reply, plus 14/14 owner, 19/19 inbound, 19/19 tick = **60/60 PASS**. No live Telegram message, order, paid AI, private account, or new runtime install claimed.
+- [ ] **M05 PR#20 installed runtime and real dedicated owner reply:** prove active M05 unit's `ExecStart` points to same code/controlled source SHA, stage/rollback safely without concurrent bot poller or cursor reset, and observe real owner `/scanner` + `/health` replies. Source-based only until this PASS.
+- [ ] Finish remaining owner Telegram commands `/market`, `/ai`, `/buy`, `/positions`, `/sell`, `/balance`, `/profit`, `/history`, `/risk` as verified actual V2 state or explicit fail-closed unavailable; source-bound G1/AI proposals and callbacks remain separately unchecked. Existing `/status` and `/kontrol` work through durable V2 ledger.
 
 ### M06: Account and protected capital
 - [ ] Authenticated Indodax **private read-only** balance/orders/fills under explicit scoped GO.
@@ -214,6 +216,7 @@
 | M05 PR#12–#14 | [#12 `810de665`](https://github.com/dvoriano/indodax-ai-bot-v2/pull/12), [#13 `8d58b598`](https://github.com/dvoriano/indodax-ai-bot-v2/pull/13), [#14 `48f402f3`](https://github.com/dvoriano/indodax-ai-bot-v2/pull/14) | Owner MANUAL/AUTO ledger 36/36, Bot API transport 33/33, readonly bot identity/webhook 32/32 accepted OFFLINE; no execution authority. |
 | M05 PR#15–#17 | [#15 `45627533`](https://github.com/dvoriano/indodax-ai-bot-v2/pull/15), [#16 `0533a174`](https://github.com/dvoriano/indodax-ai-bot-v2/pull/16), [#17 `fb1bb29a`](https://github.com/dvoriano/indodax-ai-bot-v2/pull/17) | Owner status sender 28/28, dedicated V2 inbound owner gate 44/44, systemd entrypoint/poller 39/39 + 2/2 final targeted tests accepted. |
 | M05 real private Telegram owner | `@pitidenbot`, dedicated isolated release and 30s timer; owner VPS 2026-10-30 | Real getMe/webhook preflight, incoming owner `/status`, owner SQLite command handled/offset advanced, real Telegram reply witnessed, eight successful automatic scheduled poll ticks. Bot V2 separated from old V1/Hermes; still only status/owner view, not executable PASS/BUY. |
+| **M05 PR#20 original Telegram V2 read-only mainpath OFFLINE ACCEPTED (2026-10-30 WIB)** | [DRAFT PR #20](https://github.com/dvoriano/indodax-ai-bot-v2/pull/20), pinned `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4`; original `telegram_service_tick.service_tick_once → dedicated_owner_poll_once → TelegramOwnerPoller._dispatch → OfflineTelegramOwnerInterface → m05_operator_views.readonly_operator_view`; `/health` reuses original `public_ws_health`, `/scanner` reads only M03 systemd status. | Owner VPS **8/8 new + 14/14 owner ledger + 19/19 dedicated inbound + 19/19 Telegram service tick = 60/60 PASS**. Non-owner rejected, AUTO does not authorize order, restart does not replay, /buy remains blocked, unavailable health not falsely shown active. Bot API synthetic only; test source checked out in temporary pinned worktree. **Active M05 release/runtime not yet staged; real private chat `/scanner` and `/health` not yet observed.** |
 | M08 net exit policy | VPS SHA `f159925`; `ScalpingPolicy.assess_position_exit_targets`, `.assess_position_holding_time` | 12/12 scoped offline PASS for actual-cost-basis-derived hypothetical 2%/8%/11% net targets and time-priority (<30m,30–60m,>=60m,>=90m). Actual bot-owned fills/SELL not wired. |
 
 ## 5. Gerbang yang **belum** memenuhi acceptance
@@ -234,4 +237,4 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** M05 owner-visible `/health` dan `/scanner` integrated mainpath: jalankan scoped OFFLINE VPS pada SHA DRAFT PR#20, cocokkan original Telegram service tick→poller→owner handler→V2 source reader→safe reply; **jangan** ubah token/service aktif sebelum pinned tests PASS. M03 yang belum `[x]` disusuri setelah M05, tetapi timer M03 tetap disabled sampai seluruh syarat REST/owner terpenuhi.
+**NEXT (satu):** READ-ONLY confirm current active M05 user unit `WorkingDirectory`/`ExecStart` and exact Git SHA of the original Telegram release checkout, without dumping token or env, before installing PR#20. Offline **60/60** proof already accepted; no rerun or unnecessary V1 audit. After source-safe staging, observe real `/scanner` and `/health` in `@pitidenbot` owner private chat with timer and cursor preserved. M03 timer stays disabled; no live trades.
