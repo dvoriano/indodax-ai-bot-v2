@@ -338,11 +338,12 @@ class M05TelegramApiTransportTests(unittest.TestCase):
                          return_value=[]):
             with redirect_stdout(output), redirect_stderr(errors):
                 code = main(args)
-        self.assertEqual(code, 0, errors.getvalue())
-        result = json.loads(output.getvalue())
-        self.assertEqual(result["final_decision"], "REJECT")
-        self.assertEqual(result["m05_telegram_poll"]["next_offset"], 0)
-        self.assertFalse(result["execution_allowed"])
+        # Legacy CLI now hard-fails unless operator also opts into the
+        # separately identified NEW dedicated bot. Never trust old Caipiti.
+        self.assertEqual(code, 2)
+        self.assertIn("M05_TELEGRAM_DEDICATED_GO_REQUIRED", errors.getvalue())
+        self.assertEqual(output.getvalue(), "")
+        self.assertNotIn(TOKEN, errors.getvalue())
 
 
 if __name__ == "__main__":
