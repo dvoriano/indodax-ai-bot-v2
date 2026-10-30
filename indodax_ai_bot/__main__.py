@@ -161,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M05_TELEGRAM_PREFLIGHT_GO_REQUIRED")
             expected_text = environ.get("M05_TELEGRAM_EXPECTED_BOT_ID")
             if expected_text is not None and (
-                    not expected_text.isdecimal()
+                    not expected_text.isascii()
+                    or not expected_text.isdecimal()
                     or len(expected_text) > 19
                     or int(expected_text) <= 0):
                 raise ConfigurationError("M05_PREFLIGHT_INVALID_EXPECTED_BOT_ID")
