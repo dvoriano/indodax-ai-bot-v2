@@ -4,11 +4,15 @@
 # No private API, paid AI, source trust promotion, BUY or SELL.
 [Unit]
 Description=Indodax V2 M03 minute ticker casebook with periodic deep20 -> strict G1/M04 REJECT
-ConditionPathExists=%h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3
-ConditionPathExists=%h/indodax-ai-bot-v2-m03-runtime/indodax_ai_bot/__main__.py
+# Missing source files must FAIL the attempted manual start, never silently skip it.
+AssertPathExists=%h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3
+AssertPathExists=%h/indodax-ai-bot-v2-m03-runtime/indodax_ai_bot/__main__.py
 
 [Service]
 Type=oneshot
+# Static journal markers distinguish a skipped unit, a launched process, and an exit.
+# They do not bypass the original scanner or cause additional API requests.
+ExecStartPre=/usr/bin/echo M03_ORIGINAL_SERVICE_PRE_EXEC
 # Import code only from the pinned detached worktree, NOT from the active
 # collector's original V2 checkout.
 WorkingDirectory=%h/indodax-ai-bot-v2-m03-runtime
@@ -18,6 +22,7 @@ WorkingDirectory=%h/indodax-ai-bot-v2-m03-runtime
 # Counts are illustrative not a global IP-budget warranty; no missed-tick replay.
 # Do not start/enable timer without owner IP-budget approval.
 ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --scheduled-public-scanner-once --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db %h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3 --db %h/indodax-ai-bot-v2/runtime/decisions.sqlite3
+ExecStartPost=/usr/bin/echo M03_ORIGINAL_SERVICE_POST_EXEC
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN
