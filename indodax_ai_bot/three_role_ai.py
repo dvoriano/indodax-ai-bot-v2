@@ -21,9 +21,6 @@ from .g1_receipt import G1ReceiptVerifier
 ROLES = ("MARKET", "RISK", "STRATEGY")
 
 
-_MARKET_EVIDENCE_STATUSES = ("PUBLIC_DIAGNOSTIC", "PARTIAL_PUBLIC_SAMPLE", "UNAVAILABLE")
-
-
 def _market_fact_catalog(source: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Build a source-only MARKET schema from one signed candidate snapshot.
 
@@ -60,27 +57,38 @@ def _market_fact_catalog(source: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "value": deepcopy(value),
         }
 
+    def numeric_row(value: Any, ref: str, *, partial: bool = False) -> dict[str, Any]:
+        try:
+            if isinstance(value, bool) or value is None:
+                raise ValueError("NOT_A_FACT")
+            num = Decimal(str(value))
+            if not num.is_finite():
+                raise ValueError("NONFINITE_FACT")
+        except (InvalidOperation, TypeError, ValueError):
+            return row(None, ref)
+        return row(value, ref, partial=partial)
+
     prefix = "source.public_timeframe_evidence." + pair + ".timeframe_diagnostic."
     return {
         "btc_regime": row(source.get("btc_regime"), "source.btc_regime"),
-        "pair_ema8": row(market.get("ema8"), "source.market_evidence.ema8"),
-        "pair_ema21": row(market.get("ema21"), "source.market_evidence.ema21"),
+        "pair_ema8": numeric_row(market.get("ema8"), "source.market_evidence.ema8"),
+        "pair_ema21": numeric_row(market.get("ema21"), "source.market_evidence.ema21"),
         "closed_1m": row(diag.get("closed_1m_end_epoch"),
                          prefix + "closed_1m_end_epoch"),
         "closed_5m": row(diag.get("closed_5m_end_epoch"),
                          prefix + "closed_5m_end_epoch"),
         "closed_15m": row(diag.get("closed_15m_end_epoch"),
                           prefix + "closed_15m_end_epoch"),
-        "volume_ratio": row(market.get("volume_ratio"),
+        "volume_ratio": numeric_row(market.get("volume_ratio"),
                             "source.market_evidence.volume_ratio"),
-        "spread_bps": row(market.get("spread_bps"),
+        "spread_bps": numeric_row(market.get("spread_bps"),
                           "source.market_evidence.spread_bps"),
-        "book_imbalance": row(market.get("book_imbalance"),
+        "book_imbalance": numeric_row(market.get("book_imbalance"),
                               "source.market_evidence.book_imbalance"),
-        "buy_notional_sample_idr": row(
+        "buy_notional_sample_idr": numeric_row(
             market.get("visible_buy_idr"),
             "source.market_evidence.visible_buy_idr", partial=True),
-        "sell_notional_sample_idr": row(
+        "sell_notional_sample_idr": numeric_row(
             market.get("visible_sell_idr"),
             "source.market_evidence.visible_sell_idr", partial=True),
         "setup_stage": row(
@@ -447,9 +455,20 @@ class ThreeRoleShadow:
                     # snapshot's public/partial/unavailable fact catalog.
                     claimed = raw.get("evidence_status")
                     catalog = role_input["market_fact_catalog"]
+                    # Canonical JSON comparison also rejects booleans
+                    # posing as integers and non-finite numeric claims.
+                    try:
+                        exact = (
+                            json.dumps(claimed, sort_keys=True,
+                                       separators=(",", ":"), allow_nan=False)
+                            == json.dumps(catalog, sort_keys=True,
+                                          separators=(",", ":"), allow_nan=False)
+                        )
+                    except (TypeError, ValueError):
+                        exact = False
                     if (not isinstance(claimed, dict)
                             or set(claimed) != set(catalog)
-                            or claimed != catalog):
+                            or not exact):
                         raise ValueError("MARKET_EVIDENCE_NOT_SOURCE_BOUND")
                     parsed = {
                         "role": role, "bias": bias, "reason": reason,
