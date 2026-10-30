@@ -47,7 +47,11 @@ ROLE_PROMPTS = {
         "Missing trade coverage, source issuer, liquidity, capital or spread "
         "evidence warrants NO_TRADE. Never assert that a BUY is safe or executed. "
         "Return ONLY JSON with role='RISK', pair, evidence_digest_sha256, "
-        "decision one of ALLOW/NO_TRADE/EXIT_REVIEW, and reason."
+        "decision one of ALLOW/NO_TRADE/EXIT_REVIEW, reason and "
+        "risk_source_report copied exactly from supplied immutable "
+        "risk_source_report. Never invent missing listing, balance, fee, "
+        "position ownership or complete trade-history proof. Any blockers "
+        "require NO_TRADE for BUY; model ALLOW cannot override blockers."
     ),
     "STRATEGY": (
         "You are STRATEGY, called ONLY after a valid RISK ALLOW. Use the SAME "
