@@ -90,6 +90,7 @@ class RoleCaller:
         }
         if role == "MARKET":
             payload["bias"] = "MIXED"
+            payload["evidence_status"] = deepcopy(evidence["market_fact_catalog"])
         elif role == "RISK":
             payload["decision"] = self.risk
         else:
