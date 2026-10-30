@@ -56,6 +56,18 @@ class DecisionJournal:
                     next_index INTEGER NOT NULL
                 )"""
             )
+            # M03 compact operational record: the SAME original DecisionJournal.
+            # This is not a candidate source, position, or execution ledger.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m03_compact_tick (
+                    trace_id TEXT PRIMARY KEY,
+                    lane TEXT NOT NULL CHECK(lane='DEEP20_EVERY_FIVE_MINUTES'),
+                    summary_json TEXT NOT NULL,
+                    final_decision TEXT NOT NULL CHECK(final_decision='REJECT'),
+                    execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
+                )"""
+            )
+
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
             con.execute(
@@ -178,6 +190,60 @@ class DecisionJournal:
             ).fetchone()
             if row != (FinalDecision.REJECT.value, reason):
                 raise DecisionConflictError("conflicting replay for trace_id")
+
+    def record_m03_compact_tick(self, trace_id: str, summary: dict) -> None:
+        """Append a bounded DEEP20 summary to this journal's existing trace.
+
+        Same SQLite file as `decisions`; no stdout reconstruction or new bot.
+        Replays must match exactly. Caller supplies only allowlisted metrics.
+        """
+        keys = {
+            "schema_version", "lane", "coverage_status",
+            "attempted_count", "analyzed_count", "final_decision",
+            "execution_allowed", "g1_issuer_connected",
+            "paid_network_allowed",
+        }
+        if not isinstance(summary, dict) or set(summary) != keys:
+            raise ValueError("M03_COMPACT_FIELDS_INVALID")
+        if (summary["schema_version"] != 1
+                or type(summary["schema_version"]) is not int
+                or summary["lane"] != "DEEP20_EVERY_FIVE_MINUTES"
+                or summary["final_decision"] != "REJECT"
+                or summary["execution_allowed"] is not False
+                or summary["g1_issuer_connected"] is not False
+                or summary["paid_network_allowed"] is not False):
+            raise ValueError("M03_COMPACT_SAFETY_INVALID")
+        state = summary["coverage_status"]
+        if (not isinstance(state, str) or not 1 <= len(state) <= 64
+                or not all(c.isascii() and (c.isupper() or c.isdigit() or c == "_")
+                           for c in state)):
+            raise ValueError("M03_COMPACT_STATUS_INVALID")
+        for name in ("attempted_count", "analyzed_count"):
+            value = summary[name]
+            if value is not None and (type(value) is not int or not 0 <= value <= 40):
+                raise ValueError("M03_COMPACT_COUNTS_INVALID")
+        raw = json.dumps(summary, sort_keys=True, separators=(",", ":"))
+        if len(raw) > 1024 or not isinstance(trace_id, str) or not 1 <= len(trace_id) <= 128:
+            raise ValueError("M03_COMPACT_SIZE_OR_TRACE_INVALID")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            record = db.execute(
+                "SELECT final_decision FROM decisions WHERE trace_id=?", (trace_id,)
+            ).fetchone()
+            if record != ("REJECT",):
+                raise DecisionConflictError("M03_COMPACT_REQUIRES_ORIGINAL_REJECT")
+            db.execute(
+                "INSERT OR IGNORE INTO m03_compact_tick "
+                "(trace_id,lane,summary_json,final_decision,execution_allowed) "
+                "VALUES (?,?,?,?,0)",
+                (trace_id, summary["lane"], raw, "REJECT"),
+            )
+            observed = db.execute(
+                "SELECT summary_json FROM m03_compact_tick WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+            if observed != (raw,):
+                raise DecisionConflictError("M03_COMPACT_TRACE_CONFLICT")
 
     def count(self) -> int:
         with self._connect() as con:
