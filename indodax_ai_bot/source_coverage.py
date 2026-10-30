@@ -8,19 +8,51 @@ No issuer keys, network access, or executable signals live here.
 from __future__ import annotations
 
 from typing import Any, Mapping
+from decimal import Decimal
+
+
+def _closed_candle_ohlc_check(obs: Any, interval: int) -> str:
+    """Compare closed native/aggregate OHLC using only observed 1m rows.
+
+    A match is a PUBLIC arithmetic consistency check, not completeness or
+    source provenance. No gaps are filled with synthetic candles.
+    """
+    target = obs.candle_5m if interval == 300 else obs.candle_15m
+    bars = getattr(obs, "candles_1m", ())
+    if (type(target.start) is not int or target.interval != interval
+            or target.start <= 0 or target.start % interval != 0):
+        return "REJECT_TARGET_CANDLE_INTERVAL"
+    if not isinstance(bars, (tuple, list)):
+        return "UNKNOWN_NO_CONTIGUOUS_1M"
+    expected = tuple(range(target.start, target.start + interval, 60))
+    observed = [x for x in bars if type(x.start) is int
+                and target.start <= x.start < target.start + interval]
+    if (len(observed) != len(expected)
+            or any(x.interval != 60 for x in observed)
+            or tuple(sorted(x.start for x in observed)) != expected):
+        return "UNKNOWN_NO_CONTIGUOUS_1M"
+    ordered = sorted(observed, key=lambda x: x.start)
+    consistent = (
+        target.open == ordered[0].open
+        and target.high == max(x.high for x in ordered)
+        and target.low == min(x.low for x in ordered)
+        and target.close == ordered[-1].close
+    )
+    return ("MATCHED_CLOSED_OHLC_UNATTESTED" if consistent
+            else "REJECT_CLOSED_OHLC_MISMATCH")
 
 
 def _public_timeframe_diagnostic(obs: Any, screening_epoch: int) -> dict[str, Any]:
-    """Describe real PUBLIC 1m/5m/15m observation timing without trust promotion.
+    """Original M04-D admission: explicit observed vs UNKNOWN evidence.
 
-    SourceReceipt.closed_1m_epoch is the END of the completed 1m candle.
-    This is per-pair diagnostic metadata only, never G1 issuer verification.
-    Exchange-to-local clock skew is intentionally unknown from this receipt.
+    1m/5m/15m OHLC, quote, depth, server_time and ticker timestamps come
+    from several PUBLIC REST calls, never a single atomic book/tape snapshot.
+    No independent clock sync, upstream authentication, trade completeness,
+    source issuer or paid model entitlement can be inferred from this.
     """
     receipt = obs.snapshot.source
     one, five, fifteen = obs.candle_1m, obs.candle_5m, obs.candle_15m
-    end = receipt.closed_1m_epoch
-    observed = receipt.observed_epoch
+    end, observed = receipt.closed_1m_epoch, receipt.observed_epoch
     age = observed - end
     screening_lag = observed - screening_epoch
     aligned = (
@@ -31,14 +63,54 @@ def _public_timeframe_diagnostic(obs: Any, screening_epoch: int) -> dict[str, An
         and type(five.start) is int and five.interval == 300
         and type(fifteen.start) is int and fifteen.interval == 900
         and one.start % 60 == 0 and one.start + 60 == end
-        and five.start % 300 == 0
-        and fifteen.start % 900 == 0
-        and 0 <= age <= 120
-        and 0 <= screening_lag <= 30
+        and five.start % 300 == 0 and fifteen.start % 900 == 0
+        and 0 <= age <= 120 and 0 <= screening_lag <= 30
         and 0 <= end - (five.start + 300) <= 300
         and 0 <= end - (fifteen.start + 900) <= 900
         and receipt.pair == obs.pair
     )
+    exchange_epoch = getattr(obs, "exchange_server_epoch", None)
+    skew = (observed - exchange_epoch
+            if type(exchange_epoch) is int and exchange_epoch > 0 else None)
+    clock_status = ("UNKNOWN_NO_EXCHANGE_EPOCH" if skew is None
+                    else "PUBLIC_SERVER_CLOCK_WITHIN_30S_UNATTESTED"
+                    if abs(skew) <= 30 else "REJECT_PUBLIC_SERVER_CLOCK_SKEW")
+    ticker_epoch = getattr(obs, "ticker_observed_epoch", None)
+    ticker_age = (observed - ticker_epoch
+                  if type(ticker_epoch) is int and ticker_epoch > 0 else None)
+    ticker_status = ("UNKNOWN_NO_TICKER_EPOCH" if ticker_age is None
+                     else "PUBLIC_TICKER_FRESH_UNATTESTED"
+                     if -3 <= ticker_age <= 60 else "REJECT_PUBLIC_TICKER_AGE")
+
+    bid_book = getattr(obs, "bid_book_levels", ())
+    ask_book = getattr(obs, "ask_book_levels", ())
+    book_status = "UNKNOWN_NO_BOTH_BOOK_LADDERS"
+    if isinstance(bid_book, tuple) and isinstance(ask_book, tuple) and bid_book and ask_book:
+        def valid_levels(levels: tuple, *, bid_side: bool) -> bool:
+            if len(levels) > 10:
+                return False
+            for p, q in levels:
+                if (not isinstance(p, Decimal) or not isinstance(q, Decimal)
+                        or not p.is_finite() or not q.is_finite()
+                        or p <= 0 or q <= 0):
+                    return False
+            prices = [p for p, _ in levels]
+            return all((a > b if bid_side else a < b)
+                       for a, b in zip(prices, prices[1:]))
+        if (valid_levels(bid_book, bid_side=True)
+                and valid_levels(ask_book, bid_side=False)
+                and bid_book[0][0] <= ask_book[0][0]):
+            book_status = "PUBLIC_TWO_SIDED_DEPTH_OBSERVED_NONATOMIC"
+        else:
+            book_status = "REJECT_BOOK_LADDER_CONSISTENCY"
+
+    ohlc5 = _closed_candle_ohlc_check(obs, 300)
+    ohlc15 = _closed_candle_ohlc_check(obs, 900)
+    if clock_status.startswith("REJECT_") or ticker_status.startswith("REJECT_"):
+        aligned = False
+    if book_status.startswith("REJECT_") or ohlc5.startswith("REJECT_") or ohlc15.startswith("REJECT_"):
+        aligned = False
+
     return {
         "status": ("ALIGNED_PUBLIC_TIMESTAMPS_UNATTESTED"
                    if aligned else "REJECT_PUBLIC_TIMEFRAME_OR_AGE"),
@@ -52,8 +124,15 @@ def _public_timeframe_diagnostic(obs: Any, screening_epoch: int) -> dict[str, An
         "screening_epoch": screening_epoch,
         "snapshot_age_after_1m_close_seconds": age,
         "screen_to_observation_seconds": screening_lag,
-        "exchange_to_local_clock_skew_seconds": None,
-        "best_bid_ask_visible": True,  # MarketSnapshot validates prices.
+        "exchange_to_local_clock_skew_seconds": skew,
+        "exchange_clock_status": clock_status,
+        "ticker_age_seconds": ticker_age,
+        "ticker_freshness_status": ticker_status,
+        "closed_5m_ohlc_consistency": ohlc5,
+        "closed_15m_ohlc_consistency": ohlc15,
+        "book_ladder_consistency": book_status,
+        "book_and_quote_atomic_snapshot_proven": False,
+        "best_bid_ask_visible": True,
         "orderbook_depth_levels_visible": obs.depth_levels_visible,
         "closed_1m_volume_observed": str(one.volume),
         "recent_trade_rows_visible": obs.trade_count_visible,
@@ -92,6 +171,9 @@ def public_coverage_report(
               or receipt.observed_epoch - screening_epoch > 30
               or receipt.observed_epoch < screening_epoch):
             reason = "PUBLIC_SOURCE_CLOCK_MISMATCH"
+        diagnostic = _public_timeframe_diagnostic(obs, screening_epoch)
+        if diagnostic["status"] != "ALIGNED_PUBLIC_TIMESTAMPS_UNATTESTED":
+            reason = "PUBLIC_CANDLE_QUOTE_DEPTH_OR_CLOCK_INCONSISTENT"
         details.append({
             "pair": pair, "observation_present": True,
             "recent_trade_rows_visible": obs.trade_count_visible,
@@ -99,7 +181,7 @@ def public_coverage_report(
             "closed_1m_epoch": receipt.closed_1m_epoch,
             "source_label": receipt.provenance,
             "can_prove_complete_trade_tape": False,
-            "timeframe_diagnostic": _public_timeframe_diagnostic(obs, screening_epoch),
+            "timeframe_diagnostic": diagnostic,
             "reason": reason,
         })
     observed = sum(item["observation_present"] for item in details)
