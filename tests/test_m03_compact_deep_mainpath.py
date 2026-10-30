@@ -107,16 +107,17 @@ class M03CompactOriginalMainpathTests(unittest.TestCase):
             self.assertEqual(body["public_bulk"]["attempted_count"],
                              summary["attempted_count"])
             self.assertEqual(body["ai_shadow"]["completed_roles"], [])
-            scanner = body["public_scanner"]
-            self.assertIsInstance(scanner, dict)
-            self.assertEqual(set(scanner), {
-                "all_idr_pairs", "shortlist_count",
-                "g1_issuer_verified", "trade_authorized",
+            # The original run_bulk_deep_cycle stores scanner metrics
+            # within the bulk envelope but does not expose outcome.screening.
+            # This must remain None, never a fabricated scanner summary.
+            self.assertIsNone(body["public_scanner"])
+            self.assertIsNotNone(body["public_bulk"])
+            self.assertEqual(set(body["public_bulk"]), {
+                "coverage_status", "attempted_count", "analyzed_count",
+                "g1_verified", "execution_allowed",
             })
-            self.assertFalse(scanner["g1_issuer_verified"])
-            self.assertFalse(scanner["trade_authorized"])
-            self.assertNotIn("shortlist_top10", scanner)
-            self.assertNotIn("surge_experience", scanner)
+            self.assertFalse(body["public_bulk"]["g1_verified"])
+            self.assertFalse(body["public_bulk"]["execution_allowed"])
             self.assertGreaterEqual(len(calls), 3)
             self.assertLessEqual(len(calls), 168)
 
