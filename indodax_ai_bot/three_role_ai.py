@@ -699,12 +699,49 @@ class ThreeRoleShadow:
                     action = raw.get("action")
                     if action not in ("BUY", "WAIT", "EXIT_REVIEW"):
                         raise ValueError("INVALID_STRATEGY_ACTION")
+                    if set(raw) != {
+                            "role", "pair", "evidence_digest_sha256",
+                            "reason", "action", "projected_net_profit_idr",
+                            "projected_net_roi_percent", "strategy_source_plan"}:
+                        raise ValueError("INVALID_STRATEGY_OUTPUT_FIELDS")
+                    # Rebuild expected plan AFTER model return from frozen
+                    # bytes; mutating callback cannot forge quote or targets.
+                    expected_plan = _strategy_source_plan(
+                        json.loads(frozen.source_bytes)
+                    )
+                    try:
+                        exact = (
+                            json.dumps(raw.get("strategy_source_plan"),
+                                       sort_keys=True, allow_nan=False)
+                            == json.dumps(expected_plan, sort_keys=True,
+                                          allow_nan=False)
+                        )
+                    except (TypeError, ValueError):
+                        exact = False
+                    if not exact:
+                        raise ValueError("STRATEGY_PLAN_NOT_SOURCE_BOUND")
+                    model_net = _finite_decimal(
+                        raw.get("projected_net_profit_idr"), "NET_PROFIT")
+                    model_roi = _finite_decimal(
+                        raw.get("projected_net_roi_percent"), "NET_ROI")
+                    if (action == "BUY" and expected_plan["status"] ==
+                            "SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED"):
+                        # Even a synthetic scenario limits optimistic model
+                        # projections. Production has no such verified quote.
+                        if (model_net > Decimal(
+                                expected_plan["estimated_net_profit_idr"])
+                                or model_roi > Decimal(
+                                    expected_plan["estimated_net_roi_percent"])):
+                            raise ValueError("STRATEGY_NET_OVERSTATED")
                     parsed = {
-                        "role": role, "action": action, "reason": reason,
-                        "projected_net_profit_idr": str(_finite_decimal(
-                            raw.get("projected_net_profit_idr"), "NET_PROFIT")),
-                        "projected_net_roi_percent": str(_finite_decimal(
-                            raw.get("projected_net_roi_percent"), "NET_ROI")),
+                        "role": role, "action": action,
+                        "effective_action": (
+                            "WAIT" if action == "BUY" else action
+                        ),
+                        "reason": reason,
+                        "projected_net_profit_idr": str(model_net),
+                        "projected_net_roi_percent": str(model_roi),
+                        "strategy_source_plan": deepcopy(expected_plan),
                     }
             except Exception:
                 return _reject("M04_ROLE_INVALID_OR_UNAVAILABLE", digest=digest,
