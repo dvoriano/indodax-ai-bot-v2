@@ -24,7 +24,9 @@ from .telegram_owner import OfflineTelegramOwnerInterface
 
 BOT_API_HOST = "https://api.telegram.org"
 TOKEN_RE = re.compile(r"^[0-9]{5,20}:[A-Za-z0-9_-]{20,128}$")
-METHODS = frozenset(("getUpdates", "sendMessage", "answerCallbackQuery"))
+METHODS = frozenset(("getUpdates", "sendMessage", "answerCallbackQuery",
+                     "getMe", "getWebhookInfo"))
+READ_ONLY_METHODS = frozenset(("getMe", "getWebhookInfo"))
 Transport = Callable[[str, dict[str, Any], float], Any]
 
 
@@ -57,6 +59,8 @@ class TelegramBotApiClient:
     def call(self, method: str, payload: dict[str, Any]) -> Any:
         if method not in METHODS or not isinstance(payload, dict):
             raise TelegramTransportError("M05_TELEGRAM_METHOD_DENIED")
+        if method in READ_ONLY_METHODS and payload:
+            raise TelegramTransportError("M05_TELEGRAM_READONLY_ARGUMENTS_DENIED")
         if self._transport is None and not self._allow_network:
             raise TelegramTransportError("M05_TELEGRAM_NETWORK_DISABLED")
         if self._transport is not None:

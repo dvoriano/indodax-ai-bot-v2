@@ -15,6 +15,7 @@ from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
+from .telegram_readonly_preflight import inspect_telegram_readonly
 from .public_ws_health import public_ws_health
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
@@ -51,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Read-only systemd user UNIT state; never installs or starts any service")
     group.add_argument("--m05-telegram-poll-once", action="store_true",
                        help="One bounded Telegram OWNER command poll ONLY with explicit network GO, no trade")
+    group.add_argument("--m05-telegram-readonly-preflight-once", action="store_true",
+                       help="One getMe + getWebhookInfo identity and webhook status check ONLY; separate GO, no polling or messages")
     parser.add_argument("--stream-seconds", type=int, default=12, help="Bounded public WS probe duration: 3..30 seconds")
     parser.add_argument("--collector-sessions", type=int, default=2,
                         help="PUBLIC WS collector: 2..10 sessions per bounded invocation")
@@ -88,9 +91,12 @@ def main(argv: list[str] | None = None) -> int:
         if (args.m05_shadow_db is None) != (args.m05_shadow_owner_id is None):
             raise ConfigurationError("M05_REQUIRES_BOTH_SHADOW_OWNER_AND_DB")
         if args.m05_shadow_db is not None and not (
-                args.once or args.bulk_deep_once or args.m05_telegram_poll_once):
+                args.once or args.bulk_deep_once or args.m05_telegram_poll_once
+                or args.m05_telegram_readonly_preflight_once):
             raise ConfigurationError("M05_SHADOW_ONLY_ON_MAINPATH")
-        if args.m05_telegram_poll_once and args.m05_shadow_db is None:
+        if ((args.m05_telegram_poll_once
+             or args.m05_telegram_readonly_preflight_once)
+                and args.m05_shadow_db is None):
             raise ConfigurationError("M05_TELEGRAM_OWNER_DB_REQUIRED")
         if args.m05_shadow_db is not None and (
                 Path(args.m05_shadow_db).resolve() == Path(args.db).resolve()
@@ -147,6 +153,38 @@ def main(argv: list[str] | None = None) -> int:
             raise ConfigurationError("SUMOPOD_SHADOW_REQUIRES_BULK_DEEP_ONCE")
         if args.deep_pair is not None and not args.deep_once:
             raise ConfigurationError("DEEP_PAIR_REQUIRES_DEEP_ONCE")
+        if args.m05_telegram_readonly_preflight_once:
+            # This branch may ONLY request getMe and getWebhookInfo. It
+            # never obtains update_id, authenticates an owner or sends chat.
+            settings.require_m01_safety()
+            if environ.get("M05_TELEGRAM_PREFLIGHT_GO") != "YES":
+                raise ConfigurationError("M05_TELEGRAM_PREFLIGHT_GO_REQUIRED")
+            expected_text = environ.get("M05_TELEGRAM_EXPECTED_BOT_ID")
+            if expected_text is not None and (
+                    not expected_text.isascii()
+                    or not expected_text.isdecimal()
+                    or len(expected_text) > 19
+                    or int(expected_text) <= 0):
+                raise ConfigurationError("M05_PREFLIGHT_INVALID_EXPECTED_BOT_ID")
+            expected = int(expected_text) if expected_text is not None else None
+            api = TelegramBotApiClient(
+                token=environ.get("M05_TELEGRAM_BOT_TOKEN", ""),
+                allow_network=True, timeout_seconds=6,
+            )
+            report = inspect_telegram_readonly(
+                api, expected_bot_id=expected,
+            )
+            print(json.dumps({
+                "m05_telegram_readonly_preflight": report,
+                "final_decision": "REJECT",
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            # Discovery and webhook-conflict states are diagnostic only.
+            return 0 if (
+                report["bot_id_pinned_and_matched"] and
+                report["polling_compatible_with_webhook_state"]
+            ) else 3
         if args.m05_telegram_poll_once:
             # Never start Bot API requests accidentally: CLI flag, owner
             # ledger, token environment and one separate operator GO required.
