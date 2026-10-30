@@ -167,6 +167,109 @@ def _risk_source_report(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _strategy_source_plan(source: dict[str, Any]) -> dict[str, Any]:
+    """Source-bound diagnostic math, NEVER an exchange quote or executable plan.
+
+    Current M03 public snapshots contain no independently authenticated
+    entry price, free balance, fee/precision, or SELL ownership. Therefore no
+    real candidate may acquire a numerical price/sizing from this helper.
+    """
+    pair, epoch = source["pair"], source["closed_1m_epoch"]
+    baseline = {
+        "stage": "M04_STRATEGY_SOURCE_BOUND_DIAGNOSTIC",
+        "status": "UNAVAILABLE_NO_VERIFIED_ENTRY_AND_COSTS",
+        "pair": pair, "closed_1m_epoch": epoch,
+        "quote_origin": "UNAVAILABLE",
+        "entry_price_idr": None, "quantity": None,
+        "allocated_cost_idr": None, "estimated_net_exit_idr": None,
+        "estimated_net_profit_idr": None, "estimated_net_roi_percent": None,
+        "stop_loss_price_idr": None, "max_hold_minutes": None,
+        "cancel_if": None,
+        "net_exit_targets": [
+            {"net_roi_percent": percent, "required_exit_price_idr": None}
+            for percent in ("2", "8", "11")
+        ],
+        "fee_basis": "INDODAX_ALL_IN_EXECUTION_FEES_ONLY",
+        "authenticated_balance_verified": False,
+        "authenticated_quote_and_fees_verified": False,
+        "bot_owned_position_verified": False,
+        "execution_allowed": False,
+    }
+    claim = source.get("strategy_quote_claim")
+    if (not isinstance(claim, dict)
+            or claim.get("status") != "SYNTHETIC_SOURCE_BOUND_SCENARIO_ONLY"
+            or claim.get("pair") != pair
+            or type(claim.get("closed_1m_epoch")) is not int
+            or claim["closed_1m_epoch"] != epoch):
+        return baseline
+
+    def numeric(key: str, *, allow_zero: bool = False) -> Decimal:
+        value = claim.get(key)
+        if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
+            raise ValueError("INVALID_STRATEGY_NUMBER")
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation as exc:
+            raise ValueError("INVALID_STRATEGY_NUMBER") from exc
+        if not number.is_finite() or (number < 0 if allow_zero else number <= 0):
+            raise ValueError("INVALID_STRATEGY_NUMBER")
+        return number
+
+    try:
+        entry = numeric("entry_price_idr")
+        qty = numeric("quantity")
+        sell = numeric("scenario_sell_price_idr")
+        stop = numeric("stop_loss_price_idr")
+        buy_fee = numeric("buy_all_in_fee_rate", allow_zero=True)
+        sell_fee = numeric("sell_all_in_fee_rate", allow_zero=True)
+        buy_slip = numeric("buy_slippage_bps", allow_zero=True)
+        sell_slip = numeric("sell_slippage_bps", allow_zero=True)
+        hold = claim.get("max_hold_minutes")
+        cancel = claim.get("cancel_if")
+        if (not 0 < stop < entry
+                or any(rate > Decimal("0.05")
+                       for rate in (buy_fee, sell_fee))
+                or any(bps > Decimal("500") for bps in (buy_slip, sell_slip))
+                or type(hold) is not int or not 1 <= hold <= 90
+                or not isinstance(cancel, str) or not 1 <= len(cancel) <= 120
+                or entry * qty > Decimal("100000000000000")):
+            return baseline
+        gross_buy = entry * qty
+        allocated = gross_buy * (
+            Decimal("1") + buy_fee + buy_slip / Decimal("10000"))
+        gross_sell = sell * qty
+        factor = Decimal("1") - sell_fee - sell_slip / Decimal("10000")
+        if factor <= 0:
+            return baseline
+        net_exit = gross_sell * factor
+        net_profit = net_exit - allocated
+        roi = Decimal("100") * net_profit / allocated
+        targets = [
+            {
+                "net_roi_percent": level,
+                "required_exit_price_idr": str(
+                    allocated * (Decimal("1") + Decimal(level) / Decimal("100"))
+                    / (qty * factor)
+                ),
+            }
+            for level in ("2", "8", "11")
+        ]
+    except (TypeError, ValueError, InvalidOperation, OverflowError,
+            ZeroDivisionError, ArithmeticError):
+        return baseline
+    return {
+        **baseline, "status": "SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED",
+        "quote_origin": "SYNTHETIC_SOURCE_BOUND_SCENARIO_ONLY",
+        "entry_price_idr": str(entry), "quantity": str(qty),
+        "allocated_cost_idr": str(allocated),
+        "estimated_net_exit_idr": str(net_exit),
+        "estimated_net_profit_idr": str(net_profit),
+        "estimated_net_roi_percent": str(roi),
+        "stop_loss_price_idr": str(stop), "max_hold_minutes": hold,
+        "cancel_if": cancel, "net_exit_targets": targets,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class _FrozenCandidateSnapshot:
     """An immutable canonical byte commitment, NOT exchange attestation."""
@@ -201,6 +304,7 @@ class _FrozenCandidateSnapshot:
             "market_evidence": deepcopy(source["market_evidence"]),
             "market_fact_catalog": _market_fact_catalog(source),
             "risk_source_report": _risk_source_report(source),
+            "strategy_source_plan": _strategy_source_plan(source),
             "evidence_digest_sha256": self.digest,
             "snapshot_contract": {
                 "schema_version": 1,
@@ -407,6 +511,11 @@ class ThreeRoleShadow:
             "risk_source_claims": deepcopy(
                 (bulk.get("risk_source_claims_by_pair") or {}).get(preview[0])
                 if isinstance(bulk.get("risk_source_claims_by_pair"), dict)
+                else None
+            ),
+            "strategy_quote_claim": deepcopy(
+                (bulk.get("strategy_quote_claims_by_pair") or {}).get(preview[0])
+                if isinstance(bulk.get("strategy_quote_claims_by_pair"), dict)
                 else None
             ),
         }
