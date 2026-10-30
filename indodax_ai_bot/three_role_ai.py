@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
@@ -18,6 +19,51 @@ from .contracts import FinalDecision
 from .g1_receipt import G1ReceiptVerifier
 
 ROLES = ("MARKET", "RISK", "STRATEGY")
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenCandidateSnapshot:
+    """An immutable canonical byte commitment, NOT exchange attestation."""
+
+    source_bytes: bytes
+    digest: str
+    pair: str
+    closed_1m_epoch: int
+
+    @classmethod
+    def capture(cls, source: dict[str, Any]) -> "_FrozenCandidateSnapshot":
+        # Canonical bytes are captured ONCE. No later mutable bulk/role input
+        # can modify the signed source digest for an in-flight candidate.
+        raw = json.dumps(
+            source, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False,
+        ).encode("utf-8")
+        return cls(
+            raw, sha256(raw).hexdigest(),
+            source["pair"], source["closed_1m_epoch"],
+        )
+
+    def new_role_input(self, prior_role_results: list[dict[str, Any]]) -> dict[str, Any]:
+        """Rehydrate an isolated copy for each role from the SAME frozen bytes."""
+        source = json.loads(self.source_bytes)
+        if (source.get("pair") != self.pair
+                or source.get("closed_1m_epoch") != self.closed_1m_epoch
+                or sha256(self.source_bytes).hexdigest() != self.digest):
+            raise ValueError("SOURCE_SNAPSHOT_INTEGRITY_FAILED")
+        return {
+            "source": source,
+            "market_evidence": deepcopy(source["market_evidence"]),
+            "evidence_digest_sha256": self.digest,
+            "snapshot_contract": {
+                "schema_version": 1,
+                "pair": self.pair,
+                "closed_1m_epoch": self.closed_1m_epoch,
+                "evidence_digest_sha256": self.digest,
+            },
+            "role_order": list(ROLES),
+            "live_execution_enabled": False,
+            "prior_role_results": deepcopy(prior_role_results),
+        }
 
 
 def _reject(reason: str, *, digest: str | None = None, roles: list[str] | None = None,
@@ -238,11 +284,45 @@ class ThreeRoleShadow:
                 or pair_evidence.get("trade_authorized") is not False):
             return _reject("G1_MISSING_BOUND_MARKET_EVIDENCE",
                            candidate_pair=source["pair"])
-        # Bind the actual candle/microstructure snapshot to the commitment,
-        # rather than hashing only the scalar score.
-        source["market_evidence"] = json.loads(json.dumps(pair_evidence))
-        stable = json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        digest = sha256(stable.encode("utf-8")).hexdigest()
+        # Carry only factual PUBLIC timing evidence for THIS pair plus BTC;
+        # unknown/incomplete source fields remain explicitly absent. This is
+        # descriptive metadata, not a signed or complete exchange feed.
+        coverage = bulk.get("g1_source_admission")
+        if isinstance(coverage, dict) and isinstance(coverage.get("pair_coverage"), list):
+            coverage_rows = coverage["pair_coverage"]
+            selected_timing = {}
+            for bound_pair in dict.fromkeys((source["pair"], "btc_idr")):
+                rows = [row for row in coverage_rows
+                        if isinstance(row, dict) and row.get("pair") == bound_pair]
+                if len(rows) > 1:
+                    return _reject("G1_DUPLICATE_PUBLIC_SOURCE_TIMING",
+                                   candidate_pair=source["pair"])
+                if rows:
+                    row = rows[0]
+                    if (bound_pair == source["pair"] and
+                            row.get("closed_1m_epoch") != epoch):
+                        return _reject("G1_SOURCE_TIMING_EPOCH_MISMATCH",
+                                       candidate_pair=source["pair"])
+                    selected_timing[bound_pair] = {
+                        "closed_1m_epoch": row.get("closed_1m_epoch"),
+                        "timeframe_diagnostic": deepcopy(row.get("timeframe_diagnostic")),
+                        "can_prove_complete_trade_tape":
+                            row.get("can_prove_complete_trade_tape") is True,
+                    }
+            source["public_timeframe_evidence"] = selected_timing
+
+        # Capture the existing candidate candle/microstructure evidence and
+        # PUBLIC 1m/5m/15m timing in ONE canonical byte snapshot before issuer
+        # verification and before any MARKET/RISK/STRATEGY caller.
+        try:
+            source["market_evidence"] = json.loads(
+                json.dumps(pair_evidence, allow_nan=False)
+            )
+            frozen = _FrozenCandidateSnapshot.capture(source)
+        except (TypeError, ValueError, KeyError, OverflowError):
+            return _reject("G1_INVALID_SOURCE_SNAPSHOT",
+                           candidate_pair=source["pair"])
+        digest = frozen.digest
         # A local SHA digest never authenticates Indodax or a trusted issuer.
         if not all(source[k] for k in (
             "source_trust_verified", "g1_verified", "trade_history_complete",
@@ -265,25 +345,16 @@ class ThreeRoleShadow:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,
                            candidate_pair=source["pair"])
 
-        inputs = {
-            "source": source,
-            "market_evidence": json.loads(json.dumps(pair_evidence)),
-            "evidence_digest_sha256": digest,
-            "role_order": list(ROLES),
-            "live_execution_enabled": False,
-        }
         roles: list[str] = []
         validated: list[dict[str, Any]] = []
         for role in ROLES:
             if role == "STRATEGY" and validated[1]["decision"] != "ALLOW":
                 break
             try:
-                # Provider must never receive a mutable reference shared with
-                # the other roles; local source digest stays bound to each input.
-                role_input = json.loads(json.dumps({
-                    **inputs,
-                    "prior_role_results": validated,
-                }))
+                # Each model receives an isolated view reconstructed from
+                # the SAME once-captured candidate+BTC public source bytes.
+                # A caller cannot mutate the later RISK/STRATEGY snapshot.
+                role_input = frozen.new_role_input(validated)
                 raw = self._caller(role, role_input)
                 if not isinstance(raw, Mapping):
                     raise ValueError("MALFORMED_RESPONSE")
