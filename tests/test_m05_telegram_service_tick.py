@@ -6,6 +6,8 @@ from io import StringIO
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -235,13 +237,45 @@ class M05SystemdTickTests(unittest.TestCase):
         self.assertNotIn(str(OWNER), out.getvalue())
         self.assertEqual(err.getvalue(), "")
 
+    def test_isolated_systemd_entrypoint_imports_checkout_not_editable_site(self):
+        """Simulate exact -I unit ExecStart with unrelated working directory.
+
+        Intentionally omit token/GO. The correct result is a stable safety
+        denial from service_tick_once, NOT 'No module named ...'.
+        """
+        root = Path(__file__).resolve().parents[1]
+        entry = root / "scripts" / "m05_telegram_service_tick_entry.py"
+        self.assertTrue(entry.is_file())
+        env = {
+            "HOME": str(Path.home()),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "INDODAX_TRADING_ENABLED": "NO",
+            "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+            "INDODAX_EXECUTION_MODE": "DRY_RUN",
+            "M05_TELEGRAM_TICK_GO": "NO",
+            "M05_TELEGRAM_NETWORK_GO": "NO",
+            "M05_TELEGRAM_DEDICATED_GO": "NO",
+        }
+        run = subprocess.run(
+            [sys.executable, "-I", "-B", str(entry)],
+            cwd="/", env=env,
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn("M05_TICK_REQUIRED_M05_TELEGRAM_TICK_GO", run.stderr)
+        self.assertEqual(run.stdout, "")
+        self.assertNotIn("ModuleNotFoundError", run.stderr)
+        self.assertNotIn(TOKEN, run.stderr)
+
     def test_systemd_files_are_opt_in_and_no_token_embedded(self):
         base = Path(__file__).resolve().parents[1] / "systemd" / "user"
         unit = (base / "indodax-v2-m05-telegram.service").read_text()
         timer = (base / "indodax-v2-m05-telegram.timer").read_text()
         self.assertIn("Type=oneshot", unit)
         self.assertIn("Restart=no", unit)
-        self.assertIn("telegram_service_tick", unit)
+        self.assertIn("scripts/m05_telegram_service_tick_entry.py", unit)
+        self.assertIn("-I -B", unit)
+        self.assertNotIn("-m indodax_ai_bot.telegram_service_tick", unit)
         self.assertIn("OnUnitInactiveSec=30s", timer)
         self.assertIn("WantedBy=timers.target", timer)
         self.assertNotIn("M05_TELEGRAM_BOT_TOKEN=", unit)
