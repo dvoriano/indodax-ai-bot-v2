@@ -93,6 +93,17 @@ class OwnerDecisionLedger:
                     final_decision TEXT NOT NULL CHECK(final_decision='REJECT'),
                     execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
                 );
+                CREATE TABLE IF NOT EXISTS m05_telegram_cursor (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    next_offset INTEGER NOT NULL CHECK(next_offset>=0)
+                );
+                CREATE TABLE IF NOT EXISTS m05_telegram_updates (
+                    update_id INTEGER PRIMARY KEY,
+                    callback_query_id TEXT UNIQUE,
+                    status TEXT NOT NULL CHECK(status IN ('CLAIMED','DONE')),
+                    outcome TEXT,
+                    event_epoch INTEGER NOT NULL
+                );
             """
             # sqlite3.executescript() silently commits the surrounding BEGIN.
             # Execute DDL statements individually to preserve this transaction.
@@ -106,6 +117,9 @@ class OwnerDecisionLedger:
             ).fetchone()
             if row is None or row[0] != owner_user_id:
                 raise ValueError("M05_OWNER_IDENTITY_MISMATCH")
+            db.execute(
+                "INSERT OR IGNORE INTO m05_telegram_cursor VALUES (1,0)"
+            )
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
@@ -322,3 +336,98 @@ class OwnerDecisionLedger:
             ).fetchone()
         return ({"reason": row[0], "final_decision": row[1],
                  "execution_allowed": bool(row[2])} if row else None)
+
+    def telegram_next_offset(self) -> int:
+        """Bot API getUpdates cursor; only durable processed updates advance it."""
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT next_offset FROM m05_telegram_cursor WHERE singleton=1"
+            ).fetchone()
+        if row is None:
+            raise ValueError("M05_TELEGRAM_CURSOR_UNAVAILABLE")
+        return row[0]
+
+    def claim_telegram_update(self, *, update_id: int,
+                              callback_query_id: str | None,
+                              now_epoch: int) -> str:
+        """Atomically reserve one Telegram update, without storing credentials.
+
+        A crash after CLAIMED intentionally blocks future polls for operator
+        review rather than rerunning potentially side-effectful owner commands.
+        """
+        if (type(update_id) is not int or update_id < 0
+                or type(now_epoch) is not int or now_epoch <= 0
+                or (callback_query_id is not None and (
+                    not isinstance(callback_query_id, str)
+                    or not 1 <= len(callback_query_id) <= 128
+                    or not callback_query_id.isascii()))):
+            raise ValueError("INVALID_TELEGRAM_UPDATE_ID")
+        with self._tx() as db:
+            cursor = db.execute(
+                "SELECT next_offset FROM m05_telegram_cursor WHERE singleton=1"
+            ).fetchone()[0]
+            if update_id < cursor:
+                return "ALREADY_ACKNOWLEDGED"
+            previous = db.execute(
+                "SELECT status FROM m05_telegram_updates WHERE update_id=?",
+                (update_id,),
+            ).fetchone()
+            if previous:
+                return ("ALREADY_ACKNOWLEDGED" if previous[0] == "DONE"
+                        else "INCOMPLETE_REVIEW_REQUIRED")
+            if db.execute(
+                "SELECT 1 FROM m05_telegram_updates WHERE status='CLAIMED' LIMIT 1"
+            ).fetchone():
+                return "INCOMPLETE_REVIEW_REQUIRED"
+            if callback_query_id is not None and db.execute(
+                "SELECT 1 FROM m05_telegram_updates WHERE callback_query_id=?",
+                (callback_query_id,),
+            ).fetchone():
+                db.execute(
+                    """INSERT INTO m05_telegram_updates
+                       VALUES (?,NULL,'DONE','DUPLICATE_CALLBACK',?)""",
+                    (update_id, now_epoch),
+                )
+                db.execute(
+                    """UPDATE m05_telegram_cursor SET next_offset=?
+                       WHERE singleton=1 AND next_offset<?""",
+                    (update_id + 1, update_id + 1),
+                )
+                return "DUPLICATE_CALLBACK"
+            db.execute(
+                """INSERT INTO m05_telegram_updates
+                   VALUES (?,?,'CLAIMED',NULL,?)""",
+                (update_id, callback_query_id, now_epoch),
+            )
+            return "CLAIMED"
+
+    def complete_telegram_update(self, *, update_id: int,
+                                 outcome: str) -> None:
+        """Mark a safely handled update before acknowledging it to Telegram."""
+        if (type(update_id) is not int or update_id < 0
+                or not isinstance(outcome, str)
+                or not 1 <= len(outcome) <= 100
+                or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+                       for ch in outcome)):
+            raise ValueError("INVALID_TELEGRAM_UPDATE_COMPLETION")
+        with self._tx() as db:
+            changed = db.execute(
+                """UPDATE m05_telegram_updates SET status='DONE',outcome=?
+                   WHERE update_id=? AND status='CLAIMED'""",
+                (outcome, update_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("TELEGRAM_UPDATE_NOT_CLAIMED")
+            db.execute(
+                """UPDATE m05_telegram_cursor SET next_offset=?
+                   WHERE singleton=1 AND next_offset<?""",
+                (update_id + 1, update_id + 1),
+            )
+
+    def telegram_update_status(self, update_id: int) -> str | None:
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT status FROM m05_telegram_updates WHERE update_id=?",
+                (update_id,),
+            ).fetchone()
+        return row[0] if row else None
