@@ -112,6 +112,7 @@ class RoleCaller:
                 "action": self.strategy,
                 "projected_net_profit_idr": "15000",
                 "projected_net_roi_percent": "2.50",
+                "strategy_source_plan": deepcopy(evidence["strategy_source_plan"]),
             })
         return payload
 
