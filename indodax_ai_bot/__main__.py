@@ -17,6 +17,9 @@ from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
 from .telegram_readonly_preflight import inspect_telegram_readonly
 from .telegram_owner_outbound import send_owner_safe_status_once
+from .telegram_dedicated_inbound import (
+    LEGACY_CAIPITI_BOT_ID, dedicated_owner_poll_once,
+)
 from .public_ws_health import public_ws_health
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
@@ -51,8 +54,10 @@ def main(argv: list[str] | None = None) -> int:
                        help="READ-ONLY last-batch public WS SQLite/status diagnostic; no journal writes")
     group.add_argument("--public-ws-unit-status", action="store_true",
                        help="Read-only systemd user UNIT state; never installs or starts any service")
-    group.add_argument("--m05-telegram-poll-once", action="store_true",
-                       help="One bounded Telegram OWNER command poll ONLY with explicit network GO, no trade")
+    group.add_argument("--m05-telegram-poll-once",
+                       "--m05-telegram-dedicated-poll-once",
+                       action="store_true",
+                       help="One bounded inbound OWNER poll from a NEW dedicated V2 Telegram bot only; strict identity/webhook/lock and two GO gates; no trade")
     group.add_argument("--m05-telegram-readonly-preflight-once", action="store_true",
                        help="One getMe + getWebhookInfo identity and webhook status check ONLY; separate GO, no polling or messages")
     group.add_argument("--m05-telegram-owner-safe-status-once", action="store_true",
@@ -217,21 +222,36 @@ def main(argv: list[str] | None = None) -> int:
                 report["polling_compatible_with_webhook_state"]
             ) else 3
         if args.m05_telegram_poll_once:
-            # Never start Bot API requests accidentally: CLI flag, owner
-            # ledger, token environment and one separate operator GO required.
-            # NO Indodax private API or execution permissions are created.
+            # The old Caipiti bot serves the legacy gateway: NEVER poll it.
+            # A fresh dedicated V2 bot, pinned to its true token prefix, has
+            # separate operator GO and local file lock protecting its cursor.
             settings.require_m01_safety()
             if environ.get("M05_TELEGRAM_NETWORK_GO") != "YES":
                 raise ConfigurationError("M05_TELEGRAM_NETWORK_GO_REQUIRED")
+            if environ.get("M05_TELEGRAM_DEDICATED_GO") != "YES":
+                raise ConfigurationError("M05_TELEGRAM_DEDICATED_GO_REQUIRED")
+            raw_bot_id = environ.get("M05_TELEGRAM_DEDICATED_BOT_ID", "")
+            if (not raw_bot_id.isascii() or not raw_bot_id.isdecimal()
+                    or not 1 <= len(raw_bot_id) <= 19
+                    or int(raw_bot_id) <= 0):
+                raise ConfigurationError("M05_DEDICATED_BOT_ID_REQUIRED")
+            bot_id = int(raw_bot_id)
+            if bot_id == LEGACY_CAIPITI_BOT_ID:
+                raise ConfigurationError("M05_DEDICATED_EXISTING_CAIPITI_DENIED")
             token = environ.get("M05_TELEGRAM_BOT_TOKEN", "")
+            if token.split(":", 1)[0] != raw_bot_id:
+                raise ConfigurationError("M05_DEDICATED_TOKEN_ID_MISMATCH")
             api = TelegramBotApiClient(
                 token=token, allow_network=True, timeout_seconds=6,
             )
-            summary = TelegramOwnerPoller(
-                api=api, ledger=owner_control,
-            ).poll_once(limit=10)
+            summary = dedicated_owner_poll_once(
+                api=api, ledger=owner_control, expected_bot_id=bot_id,
+                lock_path=str(Path(args.m05_shadow_db).absolute()) +
+                          ".dedicated-poller.lock",
+                limit=10,
+            )
             print(json.dumps({
-                "m05_telegram_poll": summary,
+                "m05_telegram_dedicated_poll": summary,
                 "final_decision": "REJECT",
                 "execution_allowed": False,
                 "live_trading_authorized": False,
