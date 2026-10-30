@@ -23,6 +23,7 @@ from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.public_market import Candle, IndodaxPublicMarket
 from indodax_ai_bot.source_coverage import public_coverage_report
 from test_m03a_scanner import FakeIndodaxAll
+from test_m03_egress_original_mainpath import policy as admission_policy, save_private
 from test_m03b_deep import observation
 
 NOW = 1800000130
@@ -140,6 +141,110 @@ class M04SourceConsistencyOriginalTests(unittest.TestCase):
                     con.execute("SELECT final_decision FROM decisions WHERE trace_id=?",
                                 (result["trace_id"],)).fetchone(),
                     ("REJECT",),
+                )
+
+    def test_scheduled_deep20_preserves_real_m03_egress_and_m04_g1_reject(self):
+        # Exact scheduled production entrypoint, not a second scanner.
+        # A synthetic private admission declaration is only test input, never
+        # evidence that external V1/Hermes traffic on the VPS was measured.
+        tick = 1800000010
+        assert (tick // 60) % 5 == 0 and tick % 60 == 10
+        last1 = (tick // 60) * 60 - 60
+        last15 = (tick // 900) * 900 - 900
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            file = root / "owner-only-egress.json"
+            policy = admission_policy(0)
+            policy["issued_at_epoch"] = tick - 10
+            policy["expires_at_epoch"] = tick + 60
+            save_private(file, policy)
+            ws = root / "existing-btc-ws.sqlite3"
+            ws.write_bytes(b"SYNTHETIC_PREEXISTING_WS_DB_UNUSED_DURING_BULK")
+            quota = root / "public-rest-quota.sqlite3"
+            db = root / "decisions.sqlite3"
+            fake = FakeIndodaxAll()
+            fake.now = tick
+            for ticker in fake.tickers.values():
+                ticker["server_time"] = tick - 1
+                ticker["vol_idr"] = "300000000"
+            called = []
+            def http_boundary(_client, path):
+                called.append(path)
+                if path.startswith("/tradingview/history_v2?"):
+                    tf = parse_qs(urlsplit(path).query).get("tf", [""])[0]
+                    if tf == "1":
+                        return [ohlc_row(last1 - n * 60)
+                                for n in reversed(range(34))]
+                    if tf == "15":
+                        return [{**ohlc_row(last15 - n * 900), "Volume": "150"}
+                                for n in (1, 0)]
+                    raise AssertionError("UNEXPECTED_TIMEFRAME")
+                if path.startswith("/api/trades/"):
+                    return [{"date": tick - 70, "price": "100",
+                             "amount": "1", "type": "buy"}]
+                if path.startswith("/api/depth/"):
+                    return {"buy": [["100", "5"], ["99", "4"]],
+                            "sell": [["101", "5"], ["102", "4"]]}
+                return fake.fetch(path)
+
+            original_init = IndodaxPublicMarket.__init__
+            def fixed_clock(client, *args, **kwargs):
+                kwargs.setdefault("clock", lambda: tick)
+                return original_init(client, *args, **kwargs)
+            safe_env = {
+                "INDODAX_TRADING_ENABLED": "NO",
+                "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+                "INDODAX_EXECUTION_MODE": "DRY_RUN",
+                "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
+                "INDODAX_M03_EGRESS_ADMISSION_FILE": str(file),
+                "INDODAX_PUBLIC_REST_RATE_DB": str(quota),
+            }
+            stdout, stderr = StringIO(), StringIO()
+            with (
+                patch.dict(os.environ, safe_env),
+                patch("indodax_ai_bot.__main__.time.time", return_value=tick),
+                patch.object(IndodaxPublicMarket, "__init__", new=fixed_clock),
+                patch.object(IndodaxPublicMarket, "_http_json", autospec=True,
+                             side_effect=http_boundary),
+                redirect_stdout(stdout), redirect_stderr(stderr),
+            ):
+                rc = main([
+                    "--scheduled-public-scanner-once",
+                    "--ws-db", str(ws),
+                    "--db", str(db),
+                    "--bulk-deep-limit", "20",
+                    "--bulk-min-volume-idr", "150000000",
+                ])
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(called), 83)
+            body = json.loads(stdout.getvalue())
+            self.assertEqual(body["scheduled_m03_lane"],
+                             "DEEP20_EVERY_FIVE_MINUTES")
+            self.assertEqual(body["final_decision"], "REJECT")
+            self.assertFalse(body["execution_allowed"])
+            self.assertFalse(body["paid_network_allowed"])
+            admission = body["public_bulk"]["g1_source_admission"]
+            self.assertEqual(admission["pairs_observed"], 20)
+            diag = admission["pair_coverage"][0]["timeframe_diagnostic"]
+            self.assertEqual(diag["closed_5m_ohlc_consistency"],
+                             "MATCHED_CLOSED_OHLC_UNATTESTED")
+            self.assertEqual(diag["closed_15m_ohlc_consistency"],
+                             "MATCHED_CLOSED_OHLC_UNATTESTED")
+            self.assertEqual(diag["exchange_to_local_clock_skew_seconds"], 0)
+            self.assertFalse(admission["g1_receipt_issuance_allowed"])
+            self.assertFalse(admission["g2_provider_call_allowed"])
+            self.assertEqual(body["ai_shadow"]["completed_roles"], [])
+            with sqlite3.connect(f"file:{quota}?mode=ro", uri=True) as con:
+                self.assertEqual(
+                    con.execute("SELECT COUNT(*) FROM rest_get_reservations")
+                    .fetchone(), (83,)
+                )
+            with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
+                self.assertEqual(
+                    con.execute("SELECT final_decision FROM decisions "
+                                "WHERE trace_id=?", (body["trace_id"],))
+                    .fetchone(), ("REJECT",)
                 )
 
     def diagnostics(self, obs):
