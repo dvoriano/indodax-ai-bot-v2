@@ -21,6 +21,87 @@ from .g1_receipt import G1ReceiptVerifier
 ROLES = ("MARKET", "RISK", "STRATEGY")
 
 
+def _market_fact_catalog(source: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Build a source-only MARKET schema from one signed candidate snapshot.
+
+    The refs and values are derived from the frozen source, never from model
+    prose, other REST requests or estimated complete trade-tape coverage.
+    """
+    pair = source["pair"]
+    market = source.get("market_evidence")
+    market = market if isinstance(market, dict) else {}
+    timing = source.get("public_timeframe_evidence")
+    pair_timing = timing.get(pair) if isinstance(timing, dict) else None
+    diag = (pair_timing.get("timeframe_diagnostic")
+            if isinstance(pair_timing, dict) else None)
+    diag = (diag if isinstance(diag, dict)
+            and diag.get("status") == "ALIGNED_PUBLIC_TIMESTAMPS_UNATTESTED"
+            else {})
+
+    def row(value: Any, ref: str, *, partial: bool = False) -> dict[str, Any]:
+        if value is None or isinstance(value, bool):
+            return {"status": "UNAVAILABLE", "source_ref": None, "value": None}
+        if not isinstance(value, (str, int, list)):
+            return {"status": "UNAVAILABLE", "source_ref": None, "value": None}
+        if isinstance(value, str) and (not value or len(value) > 160):
+            return {"status": "UNAVAILABLE", "source_ref": None, "value": None}
+        if isinstance(value, list) and (
+                len(value) > 20 or any(
+                    not isinstance(item, str) or len(item) > 160
+                    for item in value
+                )):
+            return {"status": "UNAVAILABLE", "source_ref": None, "value": None}
+        return {
+            "status": "PARTIAL_PUBLIC_SAMPLE" if partial else "PUBLIC_DIAGNOSTIC",
+            "source_ref": ref,
+            "value": deepcopy(value),
+        }
+
+    def numeric_row(value: Any, ref: str, *, partial: bool = False) -> dict[str, Any]:
+        try:
+            if isinstance(value, bool) or value is None:
+                raise ValueError("NOT_A_FACT")
+            num = Decimal(str(value))
+            if not num.is_finite():
+                raise ValueError("NONFINITE_FACT")
+        except (InvalidOperation, TypeError, ValueError):
+            return row(None, ref)
+        return row(value, ref, partial=partial)
+
+    prefix = "source.public_timeframe_evidence." + pair + ".timeframe_diagnostic."
+    return {
+        "btc_regime": row(source.get("btc_regime"), "source.btc_regime"),
+        "pair_ema8": numeric_row(market.get("ema8"), "source.market_evidence.ema8"),
+        "pair_ema21": numeric_row(market.get("ema21"), "source.market_evidence.ema21"),
+        "closed_1m": row(diag.get("closed_1m_end_epoch"),
+                         prefix + "closed_1m_end_epoch"),
+        "closed_5m": row(diag.get("closed_5m_end_epoch"),
+                         prefix + "closed_5m_end_epoch"),
+        "closed_15m": row(diag.get("closed_15m_end_epoch"),
+                          prefix + "closed_15m_end_epoch"),
+        "volume_ratio": numeric_row(market.get("volume_ratio"),
+                            "source.market_evidence.volume_ratio"),
+        "spread_bps": numeric_row(market.get("spread_bps"),
+                          "source.market_evidence.spread_bps"),
+        "book_imbalance": numeric_row(market.get("book_imbalance"),
+                              "source.market_evidence.book_imbalance"),
+        "buy_notional_sample_idr": numeric_row(
+            market.get("visible_buy_idr"),
+            "source.market_evidence.visible_buy_idr", partial=True),
+        "sell_notional_sample_idr": numeric_row(
+            market.get("visible_sell_idr"),
+            "source.market_evidence.visible_sell_idr", partial=True),
+        "setup_stage": row(
+            (market.get("scalp_setup_stage") or {}).get("stage")
+            if isinstance(market.get("scalp_setup_stage"), dict) else None,
+            "source.market_evidence.scalp_setup_stage.stage"),
+        "anomalies": row(market.get("anomaly_flags"),
+                         "source.market_evidence.anomaly_flags"),
+        # PUBLIC ticker/depth observations do not establish listing status.
+        "listing_status": row(None, "source.market_evidence.listing_status"),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class _FrozenCandidateSnapshot:
     """An immutable canonical byte commitment, NOT exchange attestation."""
@@ -53,6 +134,7 @@ class _FrozenCandidateSnapshot:
         return {
             "source": source,
             "market_evidence": deepcopy(source["market_evidence"]),
+            "market_fact_catalog": _market_fact_catalog(source),
             "evidence_digest_sha256": self.digest,
             "snapshot_contract": {
                 "schema_version": 1,
@@ -367,7 +449,41 @@ class ThreeRoleShadow:
                     bias = raw.get("bias")
                     if bias not in ("BULLISH", "BEARISH", "MIXED"):
                         raise ValueError("INVALID_MARKET_BIAS")
-                    parsed = {"role": role, "bias": bias, "reason": reason}
+                    if set(raw) != {
+                            "role", "pair", "evidence_digest_sha256",
+                            "reason", "bias", "evidence_status"}:
+                        raise ValueError("INVALID_MARKET_OUTPUT_FIELDS")
+                    # An LLM cannot invent prices, candle windows, buyer
+                    # pressure or listing status by merely naming them.
+                    # Every output field must exactly mirror the signed
+                    # snapshot's public/partial/unavailable fact catalog.
+                    claimed = raw.get("evidence_status")
+                    # Never compare against the caller's mutable input: an
+                    # injected model may change both its input catalog and
+                    # answer before returning. Reconstruct the authority
+                    # from the immutable bytes captured before any role call.
+                    catalog = _market_fact_catalog(
+                        json.loads(frozen.source_bytes)
+                    )
+                    # Canonical JSON comparison also rejects booleans
+                    # posing as integers and non-finite numeric claims.
+                    try:
+                        exact = (
+                            json.dumps(claimed, sort_keys=True,
+                                       separators=(",", ":"), allow_nan=False)
+                            == json.dumps(catalog, sort_keys=True,
+                                          separators=(",", ":"), allow_nan=False)
+                        )
+                    except (TypeError, ValueError):
+                        exact = False
+                    if (not isinstance(claimed, dict)
+                            or set(claimed) != set(catalog)
+                            or not exact):
+                        raise ValueError("MARKET_EVIDENCE_NOT_SOURCE_BOUND")
+                    parsed = {
+                        "role": role, "bias": bias, "reason": reason,
+                        "evidence_status": deepcopy(catalog),
+                    }
                 elif role == "RISK":
                     decision = raw.get("decision")
                     if decision not in ("ALLOW", "NO_TRADE", "EXIT_REVIEW"):
