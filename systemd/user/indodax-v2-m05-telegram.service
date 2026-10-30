@@ -20,6 +20,6 @@ Environment=M05_TELEGRAM_NETWORK_GO=YES
 Environment=M05_TELEGRAM_DEDICATED_GO=YES
 # Only ID/path metadata here. Token VALUE must NEVER be in env or unit.
 EnvironmentFile=%h/.config/indodax-ai-bot-v2/m05/service.env
-ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -I -B -m indodax_ai_bot.telegram_service_tick
+ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -I -B %h/indodax-ai-bot-v2/scripts/m05_telegram_service_tick_entry.py
 StandardOutput=journal
 StandardError=journal
