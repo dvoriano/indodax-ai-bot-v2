@@ -85,6 +85,15 @@ class OriginalM03EgressMainpathTests(unittest.TestCase):
             "INDODAX_PUBLIC_REST_RATE_DB": str(quota),
         }
         out, err = StringIO(), StringIO()
+        # The production adapter's clock default is bound at function
+        # definition time, so patching module.time alone is insufficient.
+        # Inject ONLY the clock argument; original constructor and every
+        # caller below remain real.
+        original_init = IndodaxPublicMarket.__init__
+        def constructor_with_fixed_clock(client, *args, **kwargs):
+            kwargs.setdefault("clock", lambda: TICK)
+            return original_init(client, *args, **kwargs)
+
         argv = [
             "--scheduled-public-scanner-once",
             "--ws-db", str(ws_db),
@@ -97,8 +106,8 @@ class OriginalM03EgressMainpathTests(unittest.TestCase):
         with (
             patch.dict(os.environ, safe_env),
             patch("indodax_ai_bot.__main__.time.time", return_value=TICK),
-            patch("indodax_ai_bot.public_market.time", return_value=TICK),
-            patch("indodax_ai_bot.m03_egress_admission.time.time", return_value=TICK),
+            patch.object(IndodaxPublicMarket, "__init__",
+                         new=constructor_with_fixed_clock),
             patch.object(IndodaxPublicMarket, "_http_json",
                          autospec=True, side_effect=http_boundary),
             redirect_stdout(out),
