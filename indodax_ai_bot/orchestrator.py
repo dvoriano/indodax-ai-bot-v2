@@ -17,6 +17,7 @@ from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_bac
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
+from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
 
@@ -129,7 +130,8 @@ class CycleResult:
 class DailyScalpingOrchestrator:
     def __init__(self, settings: Settings, journal: DecisionJournal, *,
                  ai_role_caller=None,
-                 source_verifier: G1ReceiptVerifier | None = None) -> None:
+                 source_verifier: G1ReceiptVerifier | None = None,
+                 owner_control: OwnerDecisionLedger | None = None) -> None:
         settings.require_m01_safety()
         self.settings = settings
         self.journal = journal
@@ -140,6 +142,22 @@ class DailyScalpingOrchestrator:
             raise TypeError("INVALID_G1_SOURCE_VERIFIER")
         self._ai_role_caller = ai_role_caller
         self._source_verifier = source_verifier
+        if owner_control is not None and not isinstance(
+                owner_control, OwnerDecisionLedger):
+            raise TypeError("INVALID_M05_OWNER_CONTROL")
+        self._owner_control = owner_control
+
+    def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
+        """One original orchestrator result, NO Telegram/order-side effects."""
+        if self._owner_control is not None:
+            if (cycle.final_decision is not FinalDecision.REJECT
+                    or cycle.execution_allowed is not False):
+                raise ValueError("M05_CANNOT_PROMOTE_MAINPATH_AUTHORITY")
+            self._owner_control.record_orchestrator_reject(
+                trace_id=cycle.trace_id, reason=cycle.reason,
+                now_epoch=int(time.time()),
+            )
+        return cycle
 
     def _scan_with_early_momentum(self, client: IndodaxPublicMarket):
         """One existing scanner. Persist first minute ticker quotes across cycles.
@@ -179,7 +197,9 @@ class DailyScalpingOrchestrator:
             if not ws_db_path:
                 reason = "M03_MAINPATH_REQUIRES_BTC_WS_SOURCE"
                 self.journal.record_reject(trace_id, reason)
-                return CycleResult(trace_id, FinalDecision.REJECT, reason)
+                return self._record_m05_reject(
+                    CycleResult(trace_id, FinalDecision.REJECT, reason)
+                )
             return self.run_bulk_deep_cycle(
                 trace_id, ws_db_path=ws_db_path,
                 min_volume_idr=min_volume_idr, deep_limit=deep_limit,
@@ -188,7 +208,9 @@ class DailyScalpingOrchestrator:
         # Even a configured AUTO policy cannot authorize M01 trade intents.
         reason = "G1_SOURCE_NOT_CONNECTED"
         self.journal.record_reject(trace_id, reason)
-        return CycleResult(trace_id, FinalDecision.REJECT, reason)
+        return self._record_m05_reject(
+            CycleResult(trace_id, FinalDecision.REJECT, reason)
+        )
 
     def run_public_cycle(self, trace_id: str, *, pair: str = "btc_idr",
                          market: IndodaxPublicMarket | None = None) -> CycleResult:
@@ -516,10 +538,10 @@ class DailyScalpingOrchestrator:
             source_verifier=self._source_verifier,
         ).run(trace_id, result)
         self.journal.record_reject(trace_id, reason)
-        return CycleResult(
+        return self._record_m05_reject(CycleResult(
             trace_id, FinalDecision.REJECT, reason, False,
             None, None, None, None, result, ai_shadow,
-        )
+        ))
 
     def run_public_ws_cycle(self, trace_id: str, *, db_path: str,
                             pair: str = "btc_idr",
