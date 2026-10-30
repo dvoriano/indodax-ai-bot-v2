@@ -15,7 +15,7 @@
 | **Kode dan VPS** | GitHub repo `dvoriano/indodax-ai-bot-v2`; scanner Python isolated `~/indodax-ai-bot-v2-m03-runtime` pada SHA `d93cf2aa5ac2d70c8cc2b59af04a68f0b515b9a8`. Diagnostic systemd unit dari [DRAFT PR #18](https://github.com/dvoriano/indodax-ai-bot-v2/pull/18) SHA `49f304efd9a624f93a792e00c2ef6ba63f743dd5` terpasang di VPS, belum merged. Source original collector checkout jangan diganti demi M03. |
 | **Layanan terakhir diverifikasi** | BTC public WS collector **active**, Telegram V2 M05 timer **active**, M03 scanner timer **disabled/inactive**; V1/Hermes harus tetap dipisahkan dan tidak dimodifikasi. BTC recovery sempat membuktikan **satu batch sukses**, bukan jaminan uptime 24/7. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | Buktikan fail-closed **source M03 PR#19 yang sudah terpasang di VPS** lewat test CLI read-only terhadap file admission yang pasti tidak ada, patch batas HTTP, dan DB sementara; timer/service M03 tetap tidak dijalankan. Setelah itu baru lakukan inventory/anggaran nyata seluruh pemakai REST pada egress-IP sebelum ada izin timer. |
+| **ONE NEXT ACTION** | **Lakukan satu inventory READ-ONLY pada proses V1/Hermes dan proses lain di VPS yang mungkin mengakses Indodax REST dan berbagi IP keluar**. Tujuan: daftar konsumen nyata, cara koneksi/port, batas pemanggilan atau peak GET/rolling60s (jika tersedia) dan ketidakpastian NAT/shared gateway. Jangan menciptakan angka untuk policy admission. M03 PR#19 source/runtime staged dan missing-policy CLI test telah PASS; timer tetap disabled, trading NO/NO/DRY_RUN. |
 
 ## 2. Status milestone M00–M12
 
@@ -44,7 +44,7 @@
 | M00 | 4 | 0 |
 | M01 | 4 | 0 |
 | M02 | 3 | 1 |
-| M03 | 12 | 6 |
+| M03 | 13 | 5 |
 | M04 | 7 | 6 |
 | M05 | 5 | 4 |
 | M06 | 0 | 5 |
@@ -54,7 +54,7 @@
 | M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **38** | **52** |
+| **TOTAL** | **39** | **51** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -88,7 +88,7 @@
 - [ ] Implementasi fail-closed REST admission untuk semua proses dengan egress-IP sama (V1/Hermes/peers), bukan hanya V2 168/60s. PR#19 22/22 scoped offline PASS tetapi bukan bukti seluruh peer/IP terkoordinasi.
 - [x] **Wiring PR#19 OFFLINE mainpath PASS (25/25)**: owner VPS pinned `eff8c8d944d9b875c0d0a4b34e6d731416d68d45`, 3/3 positive+negative integration tests `CLI scheduled M03 → original orchestrator → DailyPairScanner → IndodaxPublicMarket._get → egress admission → atomic SharedPublicRestBudget SQLite → DecisionJournal Final REJECT`; ditambah 9/9 admission + 7/7 quota + 6/6 cadence. Original unit template `systemd-analyze --user verify` PASS. **Tidak mencakup instalasi source baru atau IP-wide 24/7.**
 - [x] **Staging nonaktif PR#19 pada ORIGINAL runtime M03 VPS PASS (2026-10-30)**: owner pin `eff8c8d944d9b875c0d0a4b34e6d731416d68d45`; `~/indodax-ai-bot-v2-m03-runtime` HEAD tepat SHA itu, installed user unit sama dengan `deploy/indodax-v2-m03-mainpath.service` dari commit PR#19; `systemd-analyze --user verify` PASS, `NeedDaemonReload=no`, timer M03 disabled, service inactive, BTC collector + Telegram V2 preserved, tidak ada scanner/order yang dieksekusi. Staging **bukan** izin online/24x7.
-- [ ] **Pemeriksaan fail-closed di exact source terpasang**: tanpa menyalakan unit/timer atau memanggil public REST, buktikan `M03_EGRESS_POLICY_UNAVAILABLE` untuk file admission sengaja tidak ada; DB scanner tidak dibuat dan transport HTTP tidak terjangkau. Tidak mengklaim pengecekan instance systemd sungguhan sampai ada otorisasi terpisah.
+- [x] **Pemeriksaan fail-closed installed M03 source PASS (2026-10-30 WIB)**: pinned runtime `eff8c8d944d9b875c0d0a4b34e6d731416d68d45` dan installed user unit byte-exact cocok; CLI `--scheduled-public-scanner-once` dengan `INDODAX_M03_REQUIRE_EGRESS_ADMISSION=YES` serta file policy sengaja tidak ada menolak `M03_EGRESS_POLICY_UNAVAILABLE`, `HTTP_CALLS=0`, scanner DB tidak dibuat, `FINAL_EXECUTION=BLOCKED`; M03 timer/service inactive, BTC+Telegram active. **Tes CLI installed source, BUKAN service start atau verifikasi permintaan dari V1/peers.**
 - [ ] Ringkas telemetry/output deep20 agar journal tidak bergantung pada penggabungan fragmen stdout.
 - [ ] Kalibrasi setup momentum/pullback OOS, estimasi fee+slippage, edge net dan eligibility max2.
 - [ ] Buktikan source G1 provenance/complete trade tape lewat M04 sebelum proposal AI/BUY.
@@ -191,7 +191,9 @@
 | **M03 real cadence acceptance** | Owner VPS 2026-10-30, Python `d93cf2aa`, installed diagnostic unit `49f304ef` | **4 LIGHT ticks + 1 DEEP20 tick accepted**. DEEP20 exactly 20 attempted/20 analyzed, `PARTIAL_INVALID_PAIR_EVIDENCE`, `Final=REJECT`, `execution_allowed=false`; systemd PRE=1/POST=1, exit0. Oversize journal JSON had two `line-max` splits: `journalctl --all` and stream reassembly recovered one intact result. `screening=None` expected for bulk mode. BTC/M05 active; M03 timer disabled. |
 | **M03 PR#19 original mainpath wiring OFFLINE ACCEPTED (2026-10-30 WIB)** | [DRAFT PR #19](https://github.com/dvoriano/indodax-ai-bot-v2/pull/19), head `eff8c8d944d9b875c0d0a4b34e6d731416d68d45`, stacked on DRAFT PR#18. Same `--scheduled-public-scanner-once` CLI → real `DailyScalpingOrchestrator.run_scan_cycle` → real `DailyPairScanner.scan` → real `IndodaxPublicMarket._get` → `M03SharedEgressAdmission` and existing `SharedPublicRestBudget.reserve` atomic SQLite → actual `DecisionJournal` / JSON Final REJECT. | Owner pinned detached VPS worktree `eff8c8d`: **3/3 original mainpath tests** (3 GET positive, 1 GET quota exhaustion, 1 GET policy expiry), **9/9 peer admission tests, 7/7 shared quota regressions, 6/6 original cadence = 25/25 PASS**, `systemd-analyze --user verify` PASS. Real SQLite recorded quota reservations and rejection, all HTTP responses synthetic at `_http_json` only; no public Indodax GET, no private/paid API/order. BTC/M05 observed active, M03 timer disabled, trading not enabled. **OFFLINE mainpath wiring CHECKED; subsequent VPS staging VERIFIED but no runtime scanner start. Real shared-egress external peer demand/IP unknown, 24/7 operation and trading NOT accepted.** |
 
-| **M03 PR#19 original user-service staging nonaktif ACCEPTED (2026-10-30 WIB)** | Branch PR#19 pinned `eff8c8d944d9b875c0d0a4b34e6d731416d68d45`; installed `~/.config/systemd/user/indodax-v2-m03-mainpath.service` bytes match pinned source. | Owner VPS: `M03_PRECHECK_PASS`, `M03_PR19_SYSTEMD_VERIFY_PASS`, `M03_PR19_STAGED_DISABLED_PASS`, exact runtime SHA `eff8c8d`, `NeedDaemonReload=no`, M03 timer disabled, BTC+Telegram preserved, no scanner/trade executed. **No actual service start or policy-missing smoke test yet; shared-IP peer demand unverified.** |
+| **M03 PR#19 original user-service staging nonaktif ACCEPTED (2026-10-30 WIB)** | Branch PR#19 pinned `eff8c8d944d9b875c0d0a4b34e6d731416d68d45`; installed `~/.config/systemd/user/indodax-v2-m03-mainpath.service` bytes match pinned source. | Owner VPS: `M03_PRECHECK_PASS`, `M03_PR19_SYSTEMD_VERIFY_PASS`, `M03_PR19_STAGED_DISABLED_PASS`, exact runtime SHA `eff8c8d`, `NeedDaemonReload=no`, M03 timer disabled, BTC+Telegram preserved, no scanner/trade executed. **No actual service start yet; later installed-source missing-policy smoke passed. Shared-IP peer demand still unverified.** |
+
+| **M03 PR#19 installed-code missing-policy guard ACCEPTED (2026-10-30 WIB)** | Same original M03 runtime and systemd unit source SHA`eff8c8d944d9b875c0d0a4b34e6d731416d68d45` (no source changes). | Owner VPS output `M03_PINNED_INSTALLED_SOURCE_PASS`, `M03_INSTALLED_SOURCE_FAIL_CLOSED_PASS`, `M03_POLICY_MISSING_REJECT_PASS`, `HTTP_CALLS=0`, `SCANNER_DB_CREATED=NO`, `FINAL_EXECUTION=BLOCKED`, `M03_POLICY_FAILCLOSED_ACCEPTANCE_COMPLETE`. CLI injected missing file and mocked HTTP boundary; actual installed Python imported from pinned runtime; no scanner service started. BTC/M05 active, timer inactive/disabled. **Admission of other IP consumers and real IP-wide capacity still OPEN.** |
 
 ### M04 | Source guards, public WS dan tiga-role contract
 
@@ -230,4 +232,4 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** offline smoke-test policy-missing fail-closed against **already-installed exact PR#19 runtime** without starting systemd scanner, public REST, paid AI, private API or orders. Full peer-IP admission and timer GO remain separately OPEN.
+**NEXT (satu):** READ-ONLY egress/Indodax REST peer inventory di VPS V1/Hermes/V2 dan service lain, tanpa kredensial, tanpa memanggil public/private Indodax API, tanpa restart/enable unit. Setelah itu pilih implementasi penghitungan/koordinasi request seluruh egress-IP sebelum meminta owner GO timer.
