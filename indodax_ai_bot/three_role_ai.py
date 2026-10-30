@@ -211,7 +211,10 @@ def _strategy_source_plan(source: dict[str, Any]) -> dict[str, Any]:
             number = Decimal(str(value))
         except InvalidOperation as exc:
             raise ValueError("INVALID_STRATEGY_NUMBER") from exc
-        if not number.is_finite() or (number < 0 if allow_zero else number <= 0):
+        if (not number.is_finite()
+                or (number < 0 if allow_zero else number <= 0)
+                or (number != 0 and
+                    (number.adjusted() > 15 or number.adjusted() < -18))):
             raise ValueError("INVALID_STRATEGY_NUMBER")
         return number
 
