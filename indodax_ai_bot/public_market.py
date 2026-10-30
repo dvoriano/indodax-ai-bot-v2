@@ -100,6 +100,10 @@ class PublicObservation:
     # First 10 per side are not exchange-attested and may be canceled.
     bid_book_levels: tuple[tuple[Decimal, Decimal], ...] = ()
     ask_book_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    # Public server/ticker times are observations, not independent provenance.
+    # This does not alter M03 shared-egress reservations on every HTTP GET.
+    exchange_server_epoch: int | None = None
+    ticker_observed_epoch: int | None = None
 
     def summary(self) -> dict[str, str | int | bool]:
         return {
@@ -412,6 +416,7 @@ class IndodaxPublicMarket:
             bid_depth5, ask_depth5,
             visible_buy_count, visible_sell_count,
             ladders["buy"], ladders["sell"],
+            exchange_now, ticker_sec,
         )
 
     def closed_1m_research_history(self, pair: str = "btc_idr", *,
