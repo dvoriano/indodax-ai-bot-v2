@@ -3,6 +3,8 @@
 > **Satu-satunya tracker dan handover proyek.** Aturan normatif tetap di [PROJECT_GUIDELINE.md](PROJECT_GUIDELINE.md) bagian 0/0A/B/E/F serta [AGENTS.md](../AGENTS.md). Terakhir diperbarui: **30 Oktober 2026 (WIB)**.
 >
 > **Aturan pencatatan owner:** hanya catat pekerjaan/tes yang **sudah PASS dan diterima**, beserta SHA, cakupan, dan batas klaim. Jangan menyalin percobaan FAIL, error sementara, log mentah, audit berulang, atau status yang sudah digantikan. Satu penerimaan cukup satu entri ringkas. Riwayat lengkap tetap tersedia melalui Git history, bukan daftar kegagalan di tracker.
+>
+> **ATURAN BESI `[x]` = MAINPATH TERBUKTI (BERLAKU UNTUK CHECKLIST LAMA DAN BARU):** Setiap fitur kode/runtime hanya boleh dicentang setelah bukti menunjukkan caller resmi `systemd/Telegram/CLI → DailyScalpingOrchestrator → modul produksi yang SAMA → persistensi/output/Final REJECT atau PASS sesuai gate`, source SHA yang diuji, dan targeted integration test yang MELINTASI caller aslinya. Unit-test modul terisolasi, source file ada, PR merge, fixture/mock caller, atau laporan audit saja **tidak cukup**. Untuk klaim ONLINE harus dibuktikan pula exact installed source/unit dan eksekusi VPS real; OFFLINE tetap OFFLINE. Jika modul belum dipanggil jalur utama, **jangan `[x]` untuk integrasi**; simpan PASS tersendiri di register dan biarkan `[ ]` sampai tersambung. Tidak boleh menduplikasi scanner/AI/executor/position manager/ledger demi centang. M00 dokumen dan file CI sebagai *file* adalah pengecualian yang sifatnya non-runtime; kesiapan runner CI berada di M10. Centang historis tidak boleh otomatis dianggap bukti seluruh jalur end-to-end atau LIVE.
 
 ## 1. START HERE | Handover saat pindah chat
 
@@ -13,7 +15,7 @@
 | **Kode dan VPS** | GitHub repo `dvoriano/indodax-ai-bot-v2`; scanner Python isolated `~/indodax-ai-bot-v2-m03-runtime` pada SHA `d93cf2aa5ac2d70c8cc2b59af04a68f0b515b9a8`. Diagnostic systemd unit dari [DRAFT PR #18](https://github.com/dvoriano/indodax-ai-bot-v2/pull/18) SHA `49f304efd9a624f93a792e00c2ef6ba63f743dd5` terpasang di VPS, belum merged. Source original collector checkout jangan diganti demi M03. |
 | **Layanan terakhir diverifikasi** | BTC public WS collector **active**, Telegram V2 M05 timer **active**, M03 scanner timer **disabled/inactive**; V1/Hermes harus tetap dipisahkan dan tidak dimodifikasi. BTC recovery sempat membuktikan **satu batch sukses**, bukan jaminan uptime 24/7. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | **Implementasikan gerbang admission REST untuk IP keluar bersama sebelum meminta izin owner mengaktifkan timer M03 permanen.** Guard SQLite V2 `168 request/rolling 60s` hanya mengoordinasikan klien V2; permintaan REST dari V1/Hermes/proses/IP lain belum tercakup. Jangan ulang bukti M03 LIGHT/DEEP20 yang sudah PASS. |
+| **ONE NEXT ACTION** | Bukti mainpath PR#19: satu targeted positive+negative offline integration test `CLI M03 → original orchestrator/scanner → REST _get → SQLite quota → REJECT/journal` dengan exact SHA branch. Owner sudah membuktikan 22/22 scoped OFFLINE PASS, tetapi belum ada positive full wiring, belum ada deploy/source baru, belum ada bukti seluruh peer shared IP. M03 timer tetap disabled. |
 
 ## 2. Status milestone M00–M12
 
@@ -27,7 +29,7 @@
 | **M05** Telegram Final | **PARTIAL / REAL OWNER COMMAND VERIFIED** | SQLite owner ledger dan dedicated V2 `@pitidenbot` polling 30s serta real `/status` owner ditangani. **OPEN:** proposal sah, callback PASS/REJECT, full owner-facing features & production state. |
 | **M06** Account & capital | **NOT ACCEPTED** | Private account readonly, MAIN free IDR, FLOKI/PEPE reserve dan ownership butuh izin/sumber terverifikasi. |
 | **M07** Executor | **NOT ACCEPTED** | Actual order/fill/preflight/idempotency/precision/reconciliation belum diterima; LIVE OFF. |
-| **M08** Position/SELL | **PARTIAL / POLICY TESTED_OFFLINE** | Kalkulator ROI net cost-basis dan waktu posisi 12/12 PASS; actual owned fills, protective SELL, restart/IDR settlement belum tersambung. |
+| **M08** Position/SELL | **PARTIAL / POLICY TESTED_OFFLINE, UNWIRED** | Fungsi ROI cost-basis dan waktu posisi 12/12 offline PASS, tetapi belum terhubung ke bot-owned Position Manager dalam mainpath. Karena itu, centang integrasi masih `[ ]`; actual fills, SELL, restart/IDR settlement belum terbukti. |
 | **M09** End-to-end PAPER | **NOT ACCEPTED** | Full real-module shadow/PAPER pipeline tanpa real order masih terbuka. |
 | **M10** VPS/CI release | **PARTIAL** | Public BTC collector + Telegram terpasang; CI Actions runner belum menghasilkan bukti green run, unified release/observability belum selesai. |
 | **M11** LIVE readiness | **NOT ACCEPTED** | Independent issuer, account, order safety, lintas-bot guard dan izin owner terpisah mutlak. |
@@ -35,24 +37,24 @@
 
 ## 3. CHECKLIST PEKERJAAN M00–M12
 
-**`[x]` = lulus dan sudah diterima; `[ ]` = belum selesai atau belum dibuktikan.** Hitungan ini adalah butir pekerjaan, **bukan persentase siap LIVE**. Rincian SHA/tes ada di register bukti Bagian 4. Jangan catat tes gagal sebagai butir PASS.
+**`[x]` = cakupan diterima; untuk fitur kode/runtime HARUS ada bukti terhubung ke mainpath asli. `[ ]` = belum selesai, belum dibuktikan, atau modul masih berdiri sendiri.** Angka bukan persentase kesiapan LIVE. Unit test-only PASS tetap di register bukti Bagian 4 tanpa mencentang integrasi. Jangan catat tes gagal.
 
 | Milestone | Selesai `[x]` | Belum `[ ]` |
 | --- | ---: | ---: |
 | M00 | 4 | 0 |
 | M01 | 4 | 0 |
 | M02 | 3 | 1 |
-| M03 | 10 | 5 |
+| M03 | 10 | 6 |
 | M04 | 7 | 6 |
 | M05 | 5 | 4 |
 | M06 | 0 | 5 |
 | M07 | 0 | 5 |
-| M08 | 2 | 5 |
+| M08 | 0 | 7 |
 | M09 | 0 | 4 |
 | M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **38** | **49** |
+| **TOTAL** | **36** | **52** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -83,7 +85,8 @@
 - [x] Timer M03 disabled, source runtime dipisah dari BTC collector/V1 dan trading NO/NO/DRY_RUN.
 - [x] **4 LIGHT + 1 DEEP20** real ticks accepted; DEEP20 20 attempted/20 analyzed, partial invalid, Final REJECT/execution false.
 - [x] PR#18 diagnostic unit source PASS + terpasang nonaktif; PRE/POST systemd teramati dan JSON besar berhasil direkonstruksi.
-- [ ] Implementasi fail-closed REST admission untuk semua proses dengan egress-IP sama (V1/Hermes/peers), bukan hanya V2 168/60s.
+- [ ] Implementasi fail-closed REST admission untuk semua proses dengan egress-IP sama (V1/Hermes/peers), bukan hanya V2 168/60s. PR#19 22/22 scoped offline PASS tetapi bukan bukti seluruh peer/IP terkoordinasi.
+- [ ] **Wiring PR#19**: bukti positive+negative di `CLI M03 → orchestrator → original IndodaxPublicMarket._get → atomic SQLite quota → output/Final`, serta exact pinned service/checkout sebelum staging. Tidak ada izin public API/trading.
 - [ ] Ringkas telemetry/output deep20 agar journal tidak bergantung pada penggabungan fragmen stdout.
 - [ ] Kalibrasi setup momentum/pullback OOS, estimasi fee+slippage, edge net dan eligibility max2.
 - [ ] Buktikan source G1 provenance/complete trade tape lewat M04 sebelum proposal AI/BUY.
@@ -130,8 +133,8 @@
 - [ ] Never SELL over bot-owned verified quantity; scoped fault tests before authorization.
 
 ### M08: Position, SELL dan settled IDR
-- [x] Net cost-basis T1/T2/T3 2%/8%/11% policy with buy/sell fee+slippage arithmetic, offline scoped 12/12 PASS.
-- [x] Position age fast scalp <30m; exit priority30–60m; time-stop review≥60m and elevated risk≥90m, offline PASS.
+- [ ] Hubungkan policy net cost-basis T1/T2/T3 2/8/11% ke bot-owned Position Manager yang dipanggil mainpath; 12/12 scoped policy-only OFFLINE PASS tetap disimpan sebagai bukti modul.
+- [ ] Hubungkan policy waktu posisi <30m/30–60m/≥60m/≥90m ke Position Manager asli dengan input actual bot-owned fills; offline policy-only PASS tetap tersimpan.
 - [ ] Attach real exchange-confirmed BUY fills, owned lots, cost basis and fees to Position Manager.
 - [ ] Implement protective SELL stop/trailing/time-stop, allowing loss when protection demands it.
 - [ ] Implement tier SELL and ownership-limited partial fills/cancel/UNKNOWN/restart recovery.
@@ -184,6 +187,7 @@
 | M03 real 40-pair and volume filter | Main SHA `fc6db759`, PR#2 merged `164cc59e7ff646074895c3bea21e64498256ed8f`; PR#4 merged `c53d0efc0e52862a8013d407d64378cec66db459` | Original real 40/40 attempted/analyzed, 159 GET, hanya 5 valid diagnostic/35 rejected; volume floor 24h Rp150m, same scanner. 403/403 scoped full offline PR#4 PASS. |
 | M03 cadence source/unit | [PR#6 merged SHA `d93cf2aa`](https://github.com/dvoriano/indodax-ai-bot-v2/commit/d93cf2aa5ac2d70c8cc2b59af04a68f0b515b9a8), [DRAFT PR#18](https://github.com/dvoriano/indodax-ai-bot-v2/pull/18) diagnostic unit `49f304ef` | Staged isolated M03 original service, NO/NO/DRY_RUN, unit `systemd-analyze --user verify` PASS, no second scanner; original M03 timer disabled. |
 | **M03 real cadence acceptance** | Owner VPS 2026-10-30, Python `d93cf2aa`, installed diagnostic unit `49f304ef` | **4 LIGHT ticks + 1 DEEP20 tick accepted**. DEEP20 exactly 20 attempted/20 analyzed, `PARTIAL_INVALID_PAIR_EVIDENCE`, `Final=REJECT`, `execution_allowed=false`; systemd PRE=1/POST=1, exit0. Oversize journal JSON had two `line-max` splits: `journalctl --all` and stream reassembly recovered one intact result. `screening=None` expected for bulk mode. BTC/M05 active; M03 timer disabled. |
+| M03 PR#19 accepted offline scope, **mainpath runtime integration still OPEN** | [DRAFT PR #19](https://github.com/dvoriano/indodax-ai-bot-v2/pull/19) head `bc5dfd85e711eb23631a69ee12eaa10d15065184`, stacked on draft PR#18. Original planned chain `__main__.py` scheduled CLI preflight → original `IndodaxPublicMarket._get` → `SharedPublicRestBudget.reserve` → no-trade; source paths wired on branch. | Owner VPS isolated exact SHA: 9 new + 7 budget + 6 cadence = **22/22 OFFLINE tests PASS**; systemd verify PASS, timer disabled and no public GET/private API/trade. **Do not check complete admission or runtime integration yet:** CLI fail-closed tested, but positive integrated entrypoint→real scanner test, installed new code, verified all shared-egress peer demand/IP and permanent timer GO not proven. |
 
 ### M04 | Source guards, public WS dan tiga-role contract
 
@@ -216,10 +220,10 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 
 ## 6. Cara memperbarui tracker ini
 
-1. **Saat tes gagal:** perbaiki di branch/PR dan bahas di chat/issue seperlunya; **jangan menambah baris FAIL** ke roadmap dan biarkan kotak `[ ]` belum dicentang sampai PASS.
-2. **Saat bukti akhir PASS:** perbarui satu entri di Bagian 4 dengan path/commit SHA, caller→callee, angka hasil aktual, tipe bukti (OFFLINE/PUBLIC/PRIVATE/PAPER/LIVE), dan batas klaim. Jika mengubah checkpoint aktif, perbarui Bagian 1.
-3. **Saat milestone belum selesai:** cukup tampilkan status PARTIAL/NOT ACCEPTED dan satu gerbang yang masih perlu ditutup di Bagian 2/3/5, tanpa mengulang 10 diagnosis atau menyalin log.
+1. **Saat tes gagal:** perbaiki di branch/PR; jangan menambah FAIL ke roadmap. Unit-test PASS tetapi tidak ada caller mainpath = tetap `[ ]` integrasi.
+2. **Sebelum setiap centang `[x]` fitur runtime:** WAJIB tampilkan path & pinned SHA yang dipakai, **caller resmi → orchestrator → modul produksi → Final/ledger/output**, bukti targeted positive/negative integration test yang benar-benar mengeksekusi caller itu, dan untuk klaim ONLINE bukti installed unit serta runtime real. Bila satu mata rantai tidak terbukti, **jangan dicentang**, walaupun semua unit tests PASS. Pengecualian hanya checklist dokumentasi/berkas non-runtime yang memang sudah didefinisikan demikian.
+3. **Setelah integration PASS:** simpan **satu** entri ringkas Bagian 4 berisi SHA, jalur mainpath, jenis OFFLINE/PUBLIC/PRIVATE/PAPER/LIVE, hasil aktual, batas klaim; perbarui checklist Bagian 3 dan checkpoint Bagian 1 jika diterima. Milestone PARTIAL tetap PARTIAL sampai acceptance lengkap, bukan menumpuk audit.
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** implementasi koordinasi/gerbang REST shared-egress untuk M03 tanpa mengaktifkan timer, mengubah BTC collector/V1/Hermes, memanggil paid AI/private Indodax atau mengizinkan order.
+**NEXT (satu):** uji wiring PR#19 positif dan negatif lewat satu original mainpath M03 di pinned VPS worktree secara OFFLINE saja; no external API, no timer enable, no private/paid AI, no orders. Bukti peer IP seluruh host dan permanent timer adalah gerbang terpisah.
