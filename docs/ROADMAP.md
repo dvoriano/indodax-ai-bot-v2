@@ -13,9 +13,9 @@
 | **Misi** | DAILY spot scalping IDR: closed 1m + konteks 5m/15m/BTC → scanner top 20–40 → max 1–2 → MARKET → RISK veto → STRATEGY → Final MANUAL/AUTO PASS/REJECT → preflight → bot-owned BUY/SELL → IDR settled. Tidak ada kewajiban trade/hari; laba Rp100.000 net realized/hari adalah target, bukan jaminan. |
 | **Current checkpoint** | **M03 ORIGINAL LIGHT+DEEP20 PUBLIC EXECUTION ACCEPTED, 30 Oktober 2026.** Empat tick LIGHT nyata dan satu DEEP20 nyata `attempted=20/analyzed=20`, `PARTIAL_INVALID_PAIR_EVIDENCE`, Final REJECT, `execution_allowed=false`. DEEP20 menggunakan mainpath/orchestrator asli, bukan scanner kedua. **Tidak berarti 20 pair valid atau G1 qualified.** |
 | **Kode dan VPS** | GitHub `dvoriano/indodax-ai-bot-v2`. Original egress-protected M03 + M04 G1 diagnostic + compact DEEP20 SQLite now STAGED DISABLED in `~/indodax-ai-bot-v2-m03-runtime` SHA `ccb029a63a6fe82ab2c90ed5fd1a19b0dfe8fb8d` (PR#25), installed original systemd unit byte-exact, installed missing-peer-policy fail-closed HTTP=0. M05 Telegram V2 `~/indodax-ai-bot-v2-m05-release` pinned `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4` active and previously witnessed real `/health` + `/scanner`. Original BTC WS collector separate checkout, currently FAILED. Three-role `glm-5.3-flash` PR#21 source/27 offline tests only; no paid AI. |
-| **Layanan terakhir diverifikasi** | **BTC public WS service last observed FAILED** (exit3 after old 5/10-session batch, session6 WS receive closed/lost), but owner then ran ONE directly bounded 2×10s PUBLIC probe via same root existing DB: **EXIT0, 2/2 safe sessions, status `PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`**, original failure sidecar preserved, **publications 9963→9963 (ZERO new)**, **unrecoverable gap rebaselines 3→4 (fresh discontinuity)**, stream final `DISCONNECTED` as expected. This establishes short control/heartbeat success only; **does NOT establish live trade publication flow, continuity, G1, or systemd service recovery**. M03 timer remains disabled, M05 Telegram active. V1/Hermes unchanged. |
+| **Layanan terakhir diverifikasi** | BTC PUBLIC WS original **direct bounded recovery 6×30s PASS**, 6/6 safe, `EXIT0`, 9 new publications (existing 9963→9972), **0 additional gap markers** (4→4), clean `PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`; final SQLite stream `DISCONNECTED` expected after each bounded batch, original failed sidecar unchanged. **Systemd BTC service has NOT restarted**, last service state `failed` / exit3 (5/10 then session6 receive-close) until checked anew. M03 scanner timer disabled, M05 Telegram active, V1/Hermes untouched. Historical and bounded public data is NOT authenticated G1/full tape. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | **BTC WS public-trade-flow evidence, NOT another scanner/AI audit:** prior owner-controlled 2×10s direct probe returned status `PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`, 2/2, exit0, preserved original failed sidecar, but **0 new publications and recorded gap increased 3→4**. Next one bounded original supervised collector **6×30s** (cover prior fail-at-session6), same persisted BTC SQLite, separate sidecar, service must remain failed/inactive and no concurrent writer; verify actual new trade publications >0 and 6/6 clean, check original gap log monotonic. If zero publications or failure, record precise safe code and stop; never promote `g1_verified` or start auto-restarting systemd. M03 timer/private API/paid AI/trading remain OFF. |
+| **ONE NEXT ACTION** | **Operational recovery of original BTC WS user service, without runaway auto-restart**: the user proved 6/6 real bounded 30-second PUBLIC WS sessions, +9 publications, +0 gaps in same existing SQLite, but the original systemd unit remains last-observed failed and is configured `Restart=on-success` (would keep running batches). Before any systemd start/enable: one read-only deployment/DB/service snapshot; then only with explicit operator GO use a **single-batch systemd canary with `Restart=no`**, preserving original full 10×30s CLI, service instance and SQLite gap ledger. Do not replace/delete DB, reset offsets, blindly `systemctl restart`, or claim ongoing uptime without test. M03 timer/trading/paid AI PRIVATE OFF. |
 
 ## 2. Status milestone M00–M12
 
@@ -47,7 +47,7 @@
 | M01 | 4 | 0 |
 | M02 | 3 | 1 |
 | M03 | 15 | 4 |
-| M04 | 11 | 5 |
+| M04 | 12 | 5 |
 | M05 | 8 | 4 |
 | M06 | 0 | 5 |
 | M07 | 0 | 5 |
@@ -56,7 +56,7 @@
 | M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **48** | **49** |
+| **TOTAL** | **49** | **49** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -101,6 +101,7 @@
 - [x] **A–D:** role contract, strict Risk veto, internal receipt verifier dan public source coverage gate; scoped PASS.
 - [x] **E–L:** BTC public WS offset/replay/gap/SQLite source dan bounded supervisor/health; scoped + PUBLIC PASS.
 - [x] **M–R:** user-systemd collector public, real supervised batch 10/10, minute REST/WS join, safe gap-aware source rejection.
+- [x] **BTC WS original bounded 6×30-second recovery observed PUBLIC PASS (2026-10-30 WIB)**: after original service fail at session6, one owner-approved original CLI `--public-ws-supervised-once --collector-sessions 6 --stream-seconds 30` on SAME persistent BTC SQLite, separate temporary status sidecar, `EXIT0`, **6/6 safe sessions**, `status=PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`, `collector_failure_code=None`, **9 new persisted publications**, **0 new gap markers**, final stream `DISCONNECTED` as intended, original failed status sidecar preserved, **no systemd restart**, M03 timer disabled, Trading OFF. This proves limited 6-session public feed recovery, **NOT collector daemon restored**, no full upstream trade-tape history/source issuer/G1.
 - [x] **S/T:** test-only issuer injection dan immutable same-source role contexts untuk maks 2 candidates; offline PASS.
 - [x] **U:** MARKET facts, RISK source-bound veto, STRATEGY net plan BUY Rp10k dan 2%+; offline PASS.
 - [x] **V:** optional Sumopod provider adapter, 6-call limit, daily SQLite USD budget reservations; paid network OFF.
@@ -230,6 +231,8 @@
 
 | **BTC WS direct bounded recovery PROBE 2×10s SUCCESS, PUBLICATION FLOW NOT RESTORED (2026-10-30)** | Original `~/indodax-ai-bot-v2` public collector CLI against existing `runtime/public_ws_btc.sqlite3`; separate temporary probe sidecar, original failed batch sidecar SHA preserved. | Owner result: original DB quick_check OK, **9963→9963 trade publications**, **3→4 unrecoverable rebaseline markers**, 2/2 supervised safe sessions, exit0, `PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`, `collector_failure_code=None`, `restart_only_after_clean_batch=True`, final `DISCONNECTED`. **Safe two-session handshake/heartbeat only**, no newly seen trades, no source trust, no systemd restart. Next 6×30s actual feed test, never truncate DB/rebaseline. |
 
+| **BTC WS ORIGINAL recovery PUBLIC 6×30s feed FLOW ACCEPTED (2026-10-30 WIB)** | Existing BTC public supervisor original CLI (no new scanner), same `runtime/public_ws_btc.sqlite3`; status written to distinct temporary file, systemd unit not started. | Owner: `BTC_WS_6_SESSION_PUBLICATIONS_PASS`, exit0, `PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`, `attempted_sessions=6` / `completed_safe_sessions=6`, 9 new SQLite publications (9963→9972), 0 new gap markers (4→4), final `DISCONNECTED` post-batch expected, original failure sidecar SHA preserved, `NO_SYSTEMD_RESTART`. **Only bounded public feed recovery; no 24×7 service or G1 qualified tape.** |
+
 ### M05/M08 | Owner control dan position policy
 
 | Scope | SHA / wiring | Bukti PASS yang dipertahankan |
@@ -259,4 +262,4 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** one longer bounded real PUBLIC WebSocket collection 6×30s via original direct `--public-ws-supervised-once` while original user systemd BTC collector is inactive, using same persistent SQLite with an alternative temporary status JSON and verified backup-free read-before/after counts. Demand BOTH 6/6 and strictly increased publications before any operational recovery claim. Preserve all 4 recorded gap markers and failed original status. No automatic service restart and no G1 issuance/AI/trade.
+**NEXT (satu):** read-only original BTC WS systemd unit, manager environment and DB+status safety preflight for one operator-approved 10×30s `Restart=no` supervised canary through original service. No immediate `systemctl start`: `Restart=on-success` would launch endless successful 10-session batches. Owner permission and reversible transient/supervised guard first; preserve 9972 publications, 4 gap markers, old failed sidecar, M03 disabled, M05 active.
