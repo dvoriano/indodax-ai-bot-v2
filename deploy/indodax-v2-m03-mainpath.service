@@ -23,6 +23,11 @@ WorkingDirectory=%h/indodax-ai-bot-v2-m03-runtime
 # Do not start/enable timer without owner IP-budget approval.
 ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --scheduled-public-scanner-once --bulk-deep-limit 20 --bulk-min-volume-idr 150000000 --ws-db %h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3 --db %h/indodax-ai-bot-v2/runtime/decisions.sqlite3
 ExecStartPost=/usr/bin/echo M03_ORIGINAL_SERVICE_POST_EXEC
+# No M03 public request without a fresh owner-only declaration of ALL
+# shared-IP REST consumers and conservative reserved non-V2 peak capacity.
+# No policy file is committed or installed by this template. FAIL CLOSED.
+Environment=INDODAX_M03_REQUIRE_EGRESS_ADMISSION=YES
+Environment=INDODAX_M03_EGRESS_ADMISSION_FILE=%h/.config/indodax-ai-bot-v2/m03-egress-admission.json
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN

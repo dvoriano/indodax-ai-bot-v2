@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from os import environ
@@ -11,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config import ConfigurationError, Settings
+from .m03_egress_admission import M03SharedEgressAdmission
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
 from .owner_control import OwnerDecisionLedger
@@ -148,6 +150,13 @@ def main(argv: list[str] | None = None) -> int:
             if not Path(args.ws_db).is_file():
                 raise ConfigurationError("M03_MAINPATH_WS_DB_NOT_FOUND")
         if args.scheduled_public_scanner_once:
+            # A unit opt-in MUST be admitted before journal creation, public
+            # source discovery, or calls into the scanner. Rechecked per GET.
+            admission_mode = os.environ.get("INDODAX_M03_REQUIRE_EGRESS_ADMISSION", "NO")
+            if admission_mode not in ("NO", "YES"):
+                raise ConfigurationError("M03_EGRESS_ADMISSION_MODE_INVALID")
+            if admission_mode == "YES":
+                M03SharedEgressAdmission().allowed_local_limit()
             # Require BTC source even on light minutes so the same service
             # cannot silently run without its planned M04 read-only join.
             if not args.ws_db:
