@@ -404,7 +404,11 @@ class ThreeRoleShadow:
             "root_source_trust_verified": bulk.get("source_trust_verified") is True,
             # Claims are digest-bound so tampering after issuer signing
             # invalidates the receipt, but they are NOT M06/M07 proof.
-            "risk_source_claims": deepcopy(bulk.get("risk_source_claims")),
+            "risk_source_claims": deepcopy(
+                (bulk.get("risk_source_claims_by_pair") or {}).get(preview[0])
+                if isinstance(bulk.get("risk_source_claims_by_pair"), dict)
+                else None
+            ),
         }
         # M03 final max-2 preview is quality/stage ranked, so its candidate
         # may sit below scalar-score top10. Prefer the SAME-cycle selected
