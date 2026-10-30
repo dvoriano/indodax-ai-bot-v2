@@ -15,7 +15,7 @@
 | **Kode dan VPS** | GitHub `dvoriano/indodax-ai-bot-v2`; installed original M03 `~/indodax-ai-bot-v2-m03-runtime` SHA `eff8c8d944d9b875c0d0a4b34e6d731416d68d45` with PR#19 admission fail-closed and timer disabled. Installed original Telegram V2 `~/indodax-ai-bot-v2-m05-release` SHA `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4` with timer enabled and scoped fail-closed startup PASS. Public BTC WS collector retains its separate checkout. New model default PR#21 and compact M03 telemetry PR#22 are draft/source only; not installed. |
 | **Layanan terakhir diverifikasi** | BTC public WS collector **active**, Telegram V2 M05 timer **active**, M03 scanner timer **disabled/inactive**; V1/Hermes harus tetap dipisahkan dan tidak dimodifikasi. BTC recovery sempat membuktikan **satu batch sukses**, bukan jaminan uptime 24/7. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | **Dependency-first M04**: M05 PR#20 original Telegram owner `/health`+`/scanner` **real private replies ACCEPTED**; do NOT re-audit M05 or V1. Owner-selected `glm-5.3-flash` for MARKET/RISK/STRATEGY awaits scoped pinned VPS test of DRAFT PR#21 (`1a0860af69047e6bde9d3a8aea38bd222b88980d`) through existing Sumopod adapter + original CLI/orchestrator safe source rejection. Paid AI/real issuer and M06/M07 remain prerequisites before proposal/execution; PR#22 compact M03 telemetry still DRAFT/pending scoped tests, M03 timer disabled. |
+| **ONE NEXT ACTION** | **M04 PR#21 owner 3x `glm-5.3-flash` default OFFLINE 27/27 accepted**. Next: implement and prove *earliest M04 prerequisite* from existing scanner/collector: reproducible per-pair real CLOSED 1m/5m/15m + bid/ask/depth trade coverage/skew validation feeding the ORIGINAL G1 admission, strictly no trust promotion. Do NOT start M03 timer until shared-IP egress admission and separate GO. Then tackle independent complete 15m/1h trade tape issuer, M06/M07 safety, and return M05 real AI proposals. PR#22 compact telemetry remains separate draft; no V1 modifications. |
 
 ## 2. Status milestone M00–M12
 
@@ -25,7 +25,7 @@
 | **M01** Python foundation | **DONE / TESTED_OFFLINE** | CLI → satu orchestrator → SQLite DecisionJournal, kontrak data, fail-closed dan policy. Bukan bukti order/CI. |
 | **M02** Market public | **ADAPTER DONE / VERIFIED_PUBLIC_ONLINE** | REST Indodax publik closed 1m/5m/15m, ticker/trades/depth; bukan trade tape lengkap atau issuer G1. |
 | **M03** Scanner & ranking | **PARTIAL / PUBLIC EXECUTION VERIFIED** | Scanner bulk 20 dan 40 pair diuji di publik; cadence LIGHT4 + DEEP20 satu-shot teruji. **OPEN:** 24/7 admission REST bersama, true valid candidate quality, calibrated net edge. |
-| **M04** 3 role AI | **PARTIAL / OFFLINE CONTRACT + PUBLIC WS + OWNER MODEL SELECTED** | MARKET/RISK/STRATEGY typed/shadow, frozen source, provider adapter/budget, public WS + G1 safe rejection. **Owner 2026-10-30 memilih default `glm-5.3-flash` untuk semua tiga role**; source change pada [DRAFT PR#21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21) belum diuji owner VPS. **OPEN:** independently qualified source issuer+complete 15m/1h, model availability/prices on Sumopod account, paid GO and full three-role handoff. |
+| **M04** 3 role AI | **PARTIAL / GLM OWNER DEFAULT 27/27 OFFLINE PASS** | [DRAFT PR#21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21) `1a0860af69047e6bde9d3a8aea38bd222b88980d` original CLI + three roles scoped 27/27 PASS, selected `glm-5.3-flash` for MARKET/RISK/STRATEGY but not installed or actually called. **OPEN:** independently qualified G1 issuer and complete 15m/1h trade tape, provider account/pricing, owner paid GO, actual model responses and M05 handoff. |
 | **M05** Telegram Final | **PARTIAL / PR#20 ORIGINAL TELEGRAM REAL `/health` + `/scanner` PASS** | Owner VPS staged M05 release SHA `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4`, 30s timer enabled; 2026-10-30 19:39 WIB owner screenshot shows genuine dedicated `@pitidenbot` private replies to separate `/health` and `/scanner`, both Final REJECT/Trading OFF and explicitly unauthenticated public observation. G1-qualified proposal, real PASS/REJECT buttons, and last-moment account/Risk/execution gates remain OPEN. |
 | **M06** Account & capital | **NOT ACCEPTED** | Private account readonly, MAIN free IDR, FLOKI/PEPE reserve dan ownership butuh izin/sumber terverifikasi. |
 | **M07** Executor | **NOT ACCEPTED** | Actual order/fill/preflight/idempotency/precision/reconciliation belum diterima; LIVE OFF. |
@@ -47,7 +47,7 @@
 | M01 | 4 | 0 |
 | M02 | 3 | 1 |
 | M03 | 13 | 5 |
-| M04 | 7 | 6 |
+| M04 | 8 | 6 |
 | M05 | 8 | 4 |
 | M06 | 0 | 5 |
 | M07 | 0 | 5 |
@@ -56,7 +56,7 @@
 | M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **42** | **51** |
+| **TOTAL** | **43** | **51** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -107,7 +107,8 @@
 - [ ] Real BTC/altcoin source closed 1m/5m/15m valid with quote/depth/coverage/skew and consistent candle.
 - [ ] Qualify independently verifiable issuer + **complete 15m/1h trade tape** and replay/gap coverage (owner Option A).
 - [ ] Connect production G1 issuer/verifier with one original orchestrator and admit max2 genuine source-eligible candidates.
-- [ ] **Model selected but not provider-confirmed**: owner chose `glm-5.3-flash` as default for MARKET/RISK/STRATEGY via Sumopod ([DRAFT PR#21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21)). Pending pinned owner VPS tests + Sumopod account-specific model availability/current pricing and source-bound three-role provider response; selected model ID alone is NOT paid GO.
+- [x] **Owner model defaults `glm-5.3-flash` for all 3 ROLES OFFLINE PASS (2026-10-30)**: [DRAFT PR#21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21), pinned VPS SHA `1a0860af69047e6bde9d3a8aea38bd222b88980d`; original public bulk CLI → orchestrator → ThreeRoleShadow safe source REJECT, one Sumopod adapter with 3 independently scoped MARKET/RISK/STRATEGY messages each selecting `glm-5.3-flash`. 12/12 adapter + 5/5 original CLI wiring + 10/10 role safety = **27/27 PASS**. Real network/paid adapter not invoked, actual model availability and output unverified.
+- [ ] **Provider availability/pricing + real source-bound role responses**: confirm actual Sumopod account supports `glm-5.3-flash`, model identity/context/current prices and independent three responses only after qualified G1 + separate owner GO; safe default config does NOT establish provider connectivity or payable budget.
 - [ ] Obtain separate owner authorization for paid AI, daily cost bound and secure credentials.
 - [ ] Prove one real qualified source → 3 models → Risk veto/Strategy output → M05 handoff without BUY.
 
@@ -212,6 +213,8 @@
 
 | **M05 PR#20 original Telegram V2 release STAGED (owner VPS 2026-10-30)** | Release worktree `~/indodax-ai-bot-v2-m05-release` SHA `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4`; same originally installed `systemd/user/indodax-v2-m05-telegram.service` entrypoint. | Owner output `M05_SOURCE_INSTALLED`, `M05_OFFLINE_STARTUP_PASS`, `M05_TIMER_STATE=active`, `M05_TIMER_ENABLED=enabled`, `M05_PR20_ORIGINAL_RUNTIME_STAGED_PASS`, trading OFF and M03 timer disabled. **No real new /scanner or /health reply yet.** |
 
+| **M04 PR#21 owner model `glm-5.3-flash` 3 roles OFFLINE ACCEPTED (2026-10-30 WIB)** | [DRAFT PR #21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21) pinned `1a0860af69047e6bde9d3a8aea38bd222b88980d`; 3 separate role prompts+responses in ORIGINAL Sumopod adapter and original CLI→orchestrator→source-only role safety. | Owner VPS **12/12 adapter + 5/5 CLI wiring + 10/10 three-role shadow = 27/27 PASS**, `M04_THREE_GLM53_FLASH_SCOPED_TESTS_PASS`, `THREE_ROLES_CONFIGURED`, `PAID_AI_NOT_ENABLED`, `TRADING_NOT_ENABLED`. Both fake transport and source rejection tested, no actual model account availability/pricing/paid request, no V2 runtime staging. |
+
 ### M05/M08 | Owner control dan position policy
 
 | Scope | SHA / wiring | Bukti PASS yang dipertahankan |
@@ -241,4 +244,4 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** scoped owner VPS tests for model-default [DRAFT PR#21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21) on exact SHA `1a0860af69047e6bde9d3a8aea38bd222b88980d`: CLI/public bulk → original orchestrator → ThreeRoleShadow source rejection, adapter with three role payloads all `glm-5.3-flash` in fake transport; no Sumopod network, private Indodax API or live trading. PR#22 and source G1 prerequisites remain subsequent tasks.
+**NEXT (satu):** M04 strict existing G1 boundary: extend the ORIGINAL scanner→orchestrator/collector source diagnostic to verify real closed 1m/5m/15m timing, bid/ask/depth coverage and measured skew with explicit UNKNOWN when not independently observable. Include scoped synthetic tests without exchange network; do not promote PUBLIC market to qualified G1. Real issuer/complete 15m+1h tape and paid AI remain separate prerequisites.
