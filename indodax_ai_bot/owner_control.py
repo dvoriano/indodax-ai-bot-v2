@@ -54,7 +54,7 @@ class OwnerDecisionLedger:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._tx() as db:
-            db.executescript("""
+            schema = """
                 CREATE TABLE IF NOT EXISTS m05_config (
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                     owner_user_id INTEGER NOT NULL,
@@ -93,7 +93,12 @@ class OwnerDecisionLedger:
                     final_decision TEXT NOT NULL CHECK(final_decision='REJECT'),
                     execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
                 );
-            """)
+            """
+            # sqlite3.executescript() silently commits the surrounding BEGIN.
+            # Execute DDL statements individually to preserve this transaction.
+            for statement in schema.split(";"):
+                if statement.strip():
+                    db.execute(statement)
             db.execute("INSERT OR IGNORE INTO m05_config VALUES (1, ?, 'MANUAL')",
                        (owner_user_id,))
             row = db.execute(
