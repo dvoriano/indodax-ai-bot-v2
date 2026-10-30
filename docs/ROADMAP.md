@@ -15,7 +15,7 @@
 | **Kode dan VPS** | GitHub repo `dvoriano/indodax-ai-bot-v2`; scanner Python isolated `~/indodax-ai-bot-v2-m03-runtime` pada SHA `d93cf2aa5ac2d70c8cc2b59af04a68f0b515b9a8`. Diagnostic systemd unit dari [DRAFT PR #18](https://github.com/dvoriano/indodax-ai-bot-v2/pull/18) SHA `49f304efd9a624f93a792e00c2ef6ba63f743dd5` terpasang di VPS, belum merged. Source original collector checkout jangan diganti demi M03. |
 | **Layanan terakhir diverifikasi** | BTC public WS collector **active**, Telegram V2 M05 timer **active**, M03 scanner timer **disabled/inactive**; V1/Hermes harus tetap dipisahkan dan tidak dimodifikasi. BTC recovery sempat membuktikan **satu batch sukses**, bukan jaminan uptime 24/7. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | **Lakukan satu inventory READ-ONLY pada proses V1/Hermes dan proses lain di VPS yang mungkin mengakses Indodax REST dan berbagi IP keluar**. Tujuan: daftar konsumen nyata, cara koneksi/port, batas pemanggilan atau peak GET/rolling60s (jika tersedia) dan ketidakpastian NAT/shared gateway. Jangan menciptakan angka untuk policy admission. M03 PR#19 source/runtime staged dan missing-policy CLI test telah PASS; timer tetap disabled, trading NO/NO/DRY_RUN. |
+| **ONE NEXT ACTION** | **M05 Telegram V2 owner-visible read-only `/scanner` dan `/health` lewat service tick/poller/owner handler ASLI**. [DRAFT PR #20](https://github.com/dvoriano/indodax-ai-bot-v2/pull/20) sudah berisi kode dan 8 tes integration yang **belum dites VPS**. Berikutnya owner menjalankan scoped offline pinned SHA, baru staging M05 terpisah. M03 sisa checkbox disusuri kembali pada tahap penutupan; M03 timer tetap disabled dan tidak ada GO paid AI/private API/order. |
 
 ## 2. Status milestone M00–M12
 
@@ -26,7 +26,7 @@
 | **M02** Market public | **ADAPTER DONE / VERIFIED_PUBLIC_ONLINE** | REST Indodax publik closed 1m/5m/15m, ticker/trades/depth; bukan trade tape lengkap atau issuer G1. |
 | **M03** Scanner & ranking | **PARTIAL / PUBLIC EXECUTION VERIFIED** | Scanner bulk 20 dan 40 pair diuji di publik; cadence LIGHT4 + DEEP20 satu-shot teruji. **OPEN:** 24/7 admission REST bersama, true valid candidate quality, calibrated net edge. |
 | **M04** 3 role AI | **PARTIAL / OFFLINE CONTRACT + PUBLIC WS** | MARKET/RISK/STRATEGY typed/shadow, frozen source, provider adapter/budget, public WS + G1 safe rejection. **OPEN:** source issuer+complete 15m/1h, paid real models dan full three-role handoff. |
-| **M05** Telegram Final | **PARTIAL / REAL OWNER COMMAND VERIFIED** | SQLite owner ledger dan dedicated V2 `@pitidenbot` polling 30s serta real `/status` owner ditangani. **OPEN:** proposal sah, callback PASS/REJECT, full owner-facing features & production state. |
+| **M05** Telegram Final | **PARTIAL / REAL OWNER COMMAND VERIFIED, ACTIVE WORK** | Ledger MANUAL/AUTO + dedicated V2 `@pitidenbot` 30s and real `/status` accepted. Current PR#20 adds true V2-only read-only `/scanner`/`/health` mainpath **pending VPS scope**. Source-qualified proposal/callback and trading gates remain OPEN. |
 | **M06** Account & capital | **NOT ACCEPTED** | Private account readonly, MAIN free IDR, FLOKI/PEPE reserve dan ownership butuh izin/sumber terverifikasi. |
 | **M07** Executor | **NOT ACCEPTED** | Actual order/fill/preflight/idempotency/precision/reconciliation belum diterima; LIVE OFF. |
 | **M08** Position/SELL | **PARTIAL / POLICY TESTED_OFFLINE, UNWIRED** | Fungsi ROI cost-basis dan waktu posisi 12/12 offline PASS, tetapi belum terhubung ke bot-owned Position Manager dalam mainpath. Karena itu, centang integrasi masih `[ ]`; actual fills, SELL, restart/IDR settlement belum terbukti. |
@@ -34,6 +34,8 @@
 | **M10** VPS/CI release | **PARTIAL** | Public BTC collector + Telegram terpasang; CI Actions runner belum menghasilkan bukti green run, unified release/observability belum selesai. |
 | **M11** LIVE readiness | **NOT ACCEPTED** | Independent issuer, account, order safety, lintas-bot guard dan izin owner terpisah mutlak. |
 | **M12** Real pilot | **NOT ACCEPTED** | Belum ada V2 exchange-confirmed real BUY → SELL fills → settled IDR. |
+
+**URUTAN KERJA OWNER (2026-10-30):** Prioritas sekarang **M05 → M06–M10** yang dapat dibangun aman; setelah itu audit kembali semua kotak `[ ]` M00–M04. Modul V2 wajib independen; jangan mengembangkan, menggabungkan, atau memindahkan fitur dari V1 selama milestone V2 belum selesai. Inventaris/migrasi/penghentian V1 ditempatkan pada pemeriksaan transisi akhir dan memerlukan persetujuan owner. Pengecualian keselamatan: **M03 timer tetap disabled** sampai ada pengamanan REST egress-IP dan owner GO; menunda pemeriksaan V1 bukan izin melompati guard atau menjalankan scanner 24/7.
 
 ## 3. CHECKLIST PEKERJAAN M00–M12
 
@@ -118,7 +120,7 @@
 - [ ] Complete actual G1+AI proposal → owner PASS/REJECT inline buttons, max90s expiry/source binding.
 - [ ] Prove callback single-use, replay guard, ownership and concurrent mode switching on real messages.
 - [ ] Connect MANUAL/AUTO to same last-moment Risk/account/preflight gates, never bypass veto.
-- [ ] Wire remaining `/scanner`, `/market`, `/ai`, `/buy`, `/positions`, `/sell`, `/balance`, `/profit`, `/history`, `/risk`, `/kontrol`, `/health` to verified real state or explicit unavailable.
+- [ ] Wire remaining `/scanner`, `/market`, `/ai`, `/buy`, `/positions`, `/sell`, `/balance`, `/profit`, `/history`, `/risk`, `/kontrol`, `/health` to verified real state or explicit unavailable. **Implementasi M05 berikut: `/health`/`/scanner` read-only memakai collector/servis V2 yang sudah ada, PR#20 kode saja (perlu pinned VPS integration PASS serta actual M05 runtime staging sebelum `[x]`).**
 
 ### M06: Account and protected capital
 - [ ] Authenticated Indodax **private read-only** balance/orders/fills under explicit scoped GO.
@@ -232,4 +234,4 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** READ-ONLY egress/Indodax REST peer inventory di VPS V1/Hermes/V2 dan service lain, tanpa kredensial, tanpa memanggil public/private Indodax API, tanpa restart/enable unit. Setelah itu pilih implementasi penghitungan/koordinasi request seluruh egress-IP sebelum meminta owner GO timer.
+**NEXT (satu):** M05 owner-visible `/health` dan `/scanner` integrated mainpath: jalankan scoped OFFLINE VPS pada SHA DRAFT PR#20, cocokkan original Telegram service tick→poller→owner handler→V2 source reader→safe reply; **jangan** ubah token/service aktif sebelum pinned tests PASS. M03 yang belum `[x]` disusuri setelah M05, tetapi timer M03 tetap disabled sampai seluruh syarat REST/owner terpenuhi.
