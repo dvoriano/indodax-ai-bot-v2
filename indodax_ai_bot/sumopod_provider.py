@@ -59,8 +59,13 @@ ROLE_PROMPTS = {
         "information is absent choose WAIT, do not invent quantitative profits. "
         "Return ONLY JSON with role='STRATEGY', pair, evidence_digest_sha256, "
         "action one of BUY/WAIT/EXIT_REVIEW, reason, projected_net_profit_idr "
-        "and projected_net_roi_percent as finite nonnegative decimal strings. "
-        "These estimates are diagnostic and never an order authorization."
+        "and projected_net_roi_percent as finite nonnegative decimal strings, "
+        "and strategy_source_plan copied EXACTLY from the supplied "
+        "strategy_source_plan. If entry/capital/fees are unavailable choose "
+        "WAIT; never invent prices, size, ownership or profit. Synthetic quote "
+        "scenarios are unverified diagnostics, not account/exchange proof. "
+        "BUY requires BOTH >=10000 IDR net and >=2% net ROI; the 2/8/11 percent "
+        "cumulative net exit target prices are diagnostics, not orders."
     ),
 }
 
