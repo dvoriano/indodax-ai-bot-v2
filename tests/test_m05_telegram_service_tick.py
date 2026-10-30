@@ -201,9 +201,13 @@ class M05SystemdTickTests(unittest.TestCase):
         def api(method, payload):
             self.calls.append((method, dict(payload)))
             if method == "getMe":
-                return {"id": BOT_ID, "is_bot": True}
+                # getMe must first pass the real preflight identity schema.
+                return {"id": BOT_ID, "is_bot": True,
+                        "username": "pitidenbot"}
             if method == "getWebhookInfo":
-                return {"url": "https://private.example/token"}
+                # Only a well-formed webhook envelope may test the block.
+                return {"url": "https://private.example/token",
+                        "pending_update_count": 0}
             raise AssertionError("getUpdates MUST NOT HAPPEN")
         with self.assertRaisesRegex(
                 TelegramTransportError, "WEBHOOK_PRESENT"):
