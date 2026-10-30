@@ -449,6 +449,10 @@ class ThreeRoleShadow:
                     bias = raw.get("bias")
                     if bias not in ("BULLISH", "BEARISH", "MIXED"):
                         raise ValueError("INVALID_MARKET_BIAS")
+                    if set(raw) != {
+                            "role", "pair", "evidence_digest_sha256",
+                            "reason", "bias", "evidence_status"}:
+                        raise ValueError("INVALID_MARKET_OUTPUT_FIELDS")
                     # An LLM cannot invent prices, candle windows, buyer
                     # pressure or listing status by merely naming them.
                     # Every output field must exactly mirror the signed
