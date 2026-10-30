@@ -33,7 +33,13 @@ ROLE_PROMPTS = {
         "Analyze ONLY the attached source-bound market evidence and BTC context. "
         "Do not manufacture prices, trades, complete trade coverage, news or fills. "
         "Return ONLY a JSON object with role='MARKET', pair, "
-        "evidence_digest_sha256, bias one of BULLISH/BEARISH/MIXED, and reason."
+        "evidence_digest_sha256, bias one of BULLISH/BEARISH/MIXED, reason, "
+        "and evidence_status. evidence_status MUST exactly copy every "
+        "status/source_ref/value from the supplied market_fact_catalog "
+        "without additional, missing, upgraded or invented fields. "
+        "UNAVAILABLE is unknown, PARTIAL_PUBLIC_SAMPLE is NOT complete "
+        "buyer/seller flow, PUBLIC_DIAGNOSTIC is NOT source attestation. "
+        "Never infer unobserved news, listing, candles, trades or profits."
     ),
     "RISK": (
         "You are RISK with non-overridable veto authority. Inspect the same "
