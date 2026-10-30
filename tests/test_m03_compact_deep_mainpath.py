@@ -107,6 +107,16 @@ class M03CompactOriginalMainpathTests(unittest.TestCase):
             self.assertEqual(body["public_bulk"]["attempted_count"],
                              summary["attempted_count"])
             self.assertEqual(body["ai_shadow"]["completed_roles"], [])
+            scanner = body["public_scanner"]
+            self.assertIsInstance(scanner, dict)
+            self.assertEqual(set(scanner), {
+                "all_idr_pairs", "shortlist_count",
+                "g1_issuer_verified", "trade_authorized",
+            })
+            self.assertFalse(scanner["g1_issuer_verified"])
+            self.assertFalse(scanner["trade_authorized"])
+            self.assertNotIn("shortlist_top10", scanner)
+            self.assertNotIn("surge_experience", scanner)
             self.assertGreaterEqual(len(calls), 3)
             self.assertLessEqual(len(calls), 168)
 
