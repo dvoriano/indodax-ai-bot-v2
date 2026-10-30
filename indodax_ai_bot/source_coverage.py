@@ -89,12 +89,15 @@ def _public_timeframe_diagnostic(obs: Any, screening_epoch: int) -> dict[str, An
         def valid_levels(levels: tuple, *, bid_side: bool) -> bool:
             if len(levels) > 10:
                 return False
-            for p, q in levels:
+            for row in levels:
+                if not isinstance(row, tuple) or len(row) != 2:
+                    return False
+                p, q = row
                 if (not isinstance(p, Decimal) or not isinstance(q, Decimal)
                         or not p.is_finite() or not q.is_finite()
                         or p <= 0 or q <= 0):
                     return False
-            prices = [p for p, _ in levels]
+            prices = [row[0] for row in levels]
             return all((a > b if bid_side else a < b)
                        for a, b in zip(prices, prices[1:]))
         if (valid_levels(bid_book, bid_side=True)
@@ -171,9 +174,9 @@ def public_coverage_report(
               or receipt.observed_epoch - screening_epoch > 30
               or receipt.observed_epoch < screening_epoch):
             reason = "PUBLIC_SOURCE_CLOCK_MISMATCH"
+        # Preserve existing primary source-trust reason for downstream
+        # contracts. Per-field operational faults belong in diagnostic.
         diagnostic = _public_timeframe_diagnostic(obs, screening_epoch)
-        if diagnostic["status"] != "ALIGNED_PUBLIC_TIMESTAMPS_UNATTESTED":
-            reason = "PUBLIC_CANDLE_QUOTE_DEPTH_OR_CLOCK_INCONSISTENT"
         details.append({
             "pair": pair, "observation_present": True,
             "recent_trade_rows_visible": obs.trade_count_visible,
