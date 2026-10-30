@@ -15,7 +15,7 @@
 | **Kode dan VPS** | GitHub `dvoriano/indodax-ai-bot-v2`; installed original M03 `~/indodax-ai-bot-v2-m03-runtime` SHA `eff8c8d944d9b875c0d0a4b34e6d731416d68d45` with PR#19 admission fail-closed and timer disabled. Installed original Telegram V2 `~/indodax-ai-bot-v2-m05-release` SHA `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4` with timer enabled and scoped fail-closed startup PASS. Public BTC WS collector retains its separate checkout. New model default PR#21 and compact M03 telemetry PR#22 are draft/source only; not installed. |
 | **Layanan terakhir diverifikasi** | BTC public WS collector **active**, Telegram V2 M05 timer **active**, M03 scanner timer **disabled/inactive**; V1/Hermes harus tetap dipisahkan dan tidak dimodifikasi. BTC recovery sempat membuktikan **satu batch sukses**, bukan jaminan uptime 24/7. |
 | **Hardlocks** | `INDODAX_TRADING_ENABLED=NO`, `INDODAX_ALLOW_LIVE_EXECUTION=NO`, `INDODAX_EXECUTION_MODE=DRY_RUN`, Final REJECT; G1 public-unattested, **tidak ada izin paid AI, Indodax private API, BUY/SELL, maupun GO LIVE**. |
-| **ONE NEXT ACTION** | **Test stacked [DRAFT PR#24](https://github.com/dvoriano/indodax-ai-bot-v2/pull/24) pinned `b7187ff16920e5e2f043610048b7cf1d4c3e1e04` on VPS in isolated offline worktree**: 6 M04 source-consistency tests including NEW original scheduled M03 DEEP20+egress admission+SQLite (83 GET mock HTTP), 3 existing original M03 egress mainpath, 9 egress admission, 6 cadence regressions, all HTTP mocked. Accept only if scoped PASS. After that stage original protected M03 source with timer still disabled and owner authorization. Real source issuer and 15m/1h tape still OPEN; no paid AI or trade GO. |
+| **ONE NEXT ACTION** | [DRAFT PR#24](https://github.com/dvoriano/indodax-ai-bot-v2/pull/24) **24/24 original protected M03/M04 mainpath OFFLINE PASS** pinned `b7187ff16920e5e2f043610048b7cf1d4c3e1e04`. Next: safely stage *only original protected M03 runtime source* replacing `eff8c8d...` with pinned PR#24, timer disabled, exact unit unchanged, then prove missing-admission policy FAIL-CLOSED on installed source without public/private HTTP. Owner approval and rollback required. No G1 issuer, real complete tape, shared-egress all-peer accounting, paid AI, or live trading accepted. |
 
 ## 2. Status milestone M00–M12
 
@@ -47,7 +47,7 @@
 | M01 | 4 | 0 |
 | M02 | 3 | 1 |
 | M03 | 13 | 5 |
-| M04 | 9 | 6 |
+| M04 | 10 | 6 |
 | M05 | 8 | 4 |
 | M06 | 0 | 5 |
 | M07 | 0 | 5 |
@@ -56,7 +56,7 @@
 | M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **44** | **51** |
+| **TOTAL** | **45** | **51** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -105,7 +105,8 @@
 - [x] **V:** optional Sumopod provider adapter, 6-call limit, daily SQLite USD budget reservations; paid network OFF.
 - [x] PR#7–#11 merged: freshness, frozen snapshot, MARKET facts, RISK and STRATEGY source-binding; scoped VPS PASS.
 - [x] **M04 PR#23 source-consistency OFFLINE mainpath ACCEPTED (2026-10-30)**: pinned VPS `af3a0088de0fd63aeaa3c3756e00461fcea14d2f`, owner ran **5/5 new** original CLI→scanner→PublicMarket→bulk G1 admission→ThreeRoleShadow REJECT→actual SQLite Journal REJECT, **8/8 M04-D**, **11/11 M02 public adapter**, **9/9 M03-G** = **33/33 PASS**. Source-only [DRAFT PR#23](https://github.com/dvoriano/indodax-ai-bot-v2/pull/23); test mocks only public HTTP and clock; validates 1m/5m/15m OHLC consistency, ticker/server time skew, book ladder, UNKNOWN missing data. **No actual M03 runtime staging or real exchange observation/complete 15m+1h tape/issuer approval claimed.**
-- [ ] **M04/M03 combined protected original runtime**: [DRAFT PR#24](https://github.com/dvoriano/indodax-ai-bot-v2/pull/24) pinned `b7187ff16920e5e2f043610048b7cf1d4c3e1e04`, branched ON original PR#19 so REST admission and quota `_get` are unchanged. Includes new exact scheduled DEEP20 mainpath test with synthetic private peer admission + 83 atomic SQLite reservations + per-pair closed OHLC/depth/clock G1 rejection + original Final REJECT. **Not VPS tested or installed.** Do not replace installed PR#19 with bare main-based PR#23. Original service/timer remains disabled. Actual real exchange observations and independent full 15m/1h trade tape/G1 issuer remain separately OPEN.
+- [x] **M04/M03 combined PR#24 ORIGINAL MAINPATH OFFLINE ACCEPTED (2026-10-30)**: VPS pinned `b7187ff16920e5e2f043610048b7cf1d4c3e1e04`, 6/6 M04 + original scheduled DEEP20 with synthetic fresh per-peer policy and **83 real atomic SQLite budget reservations** to original G1 source rejection and `DecisionJournal`; 3/3 original REST egress mainpath, 9/9 peer guard, 6/6 cadence = **24/24 PASS**. Every HTTP response synthetic at transport boundary, time synthetic; owner output `M04_M03_EGRESS_G1_COMBINED_24_TESTS_PASS`, `M03_TIMER_DISABLED`, `PAID_AI_NOT_ENABLED`, `TRADING_NOT_ENABLED`. Original PR#19 `_get` guard unchanged, PR#24 [DRAFT](https://github.com/dvoriano/indodax-ai-bot-v2/pull/24), no runtime installation or actual exchange-source qualification claimed.
+- [ ] **M04/M03 combined installed original M03 runtime (pending staging)**: install only PR#24 pinned source `b7187ff16920e5e2f043610048b7cf1d4c3e1e04` over currently installed M03 PR#19 `eff8c8d944d9b875c0d0a4b34e6d731416d68d45` in dedicated M03 checkout with disabled timer, unchanged installed unit and rollback. Verify missing-policy fail-closed on installed code, no network, no scanner start. Independently verifiable issuer/complete 15m+1h tape, real egress-IP peer accounting, and 24/7 timer GO remain separate OPEN prerequisites.
 - [ ] Qualify independently verifiable issuer + **complete 15m/1h trade tape** and replay/gap coverage (owner Option A).
 - [ ] Connect production G1 issuer/verifier with one original orchestrator and admit max2 genuine source-eligible candidates.
 - [x] **Owner model defaults `glm-5.3-flash` for all 3 ROLES OFFLINE PASS (2026-10-30)**: [DRAFT PR#21](https://github.com/dvoriano/indodax-ai-bot-v2/pull/21), pinned VPS SHA `1a0860af69047e6bde9d3a8aea38bd222b88980d`; original public bulk CLI → orchestrator → ThreeRoleShadow safe source REJECT, one Sumopod adapter with 3 independently scoped MARKET/RISK/STRATEGY messages each selecting `glm-5.3-flash`. 12/12 adapter + 5/5 original CLI wiring + 10/10 role safety = **27/27 PASS**. Real network/paid adapter not invoked, actual model availability and output unverified.
@@ -218,6 +219,8 @@
 
 | **M04 PR#23 original public source diagnostic mainpath OFFLINE ACCEPTED (2026-10-30 WIB)** | [DRAFT PR#23](https://github.com/dvoriano/indodax-ai-bot-v2/pull/23), pinned `af3a0088de0fd63aeaa3c3756e00461fcea14d2f`. Original CLI→scanner→PublicMarket observed server+ticker timing→M04-D G1 source admission→ThreeRoleShadow REJECT→SQLite DecisionJournal. | Owner VPS **5/5 new + 8/8 source coverage + 11/11 public adapter + 9/9 bulk = 33/33 PASS**; marker `M04_SOURCE_CONSISTENCY_MAINPATH_TESTS_PASS`, `NO_REAL_EXCHANGE_REQUEST`, `PAID_AI_NOT_ENABLED`, `TRADING_NOT_ENABLED`. Verified in detached isolated worktree only; NOT installed in M03 PR#19 protected runtime. Actual G1 source/issuer and trade tape not proven. |
 
+| **M04+M03 PR#24 protected original DEEP20 OFFLINE ACCEPTED (2026-10-30 WIB)** | [DRAFT PR#24](https://github.com/dvoriano/indodax-ai-bot-v2/pull/24), pinned VPS SHA `b7187ff16920e5e2f043610048b7cf1d4c3e1e04`, stacked on PR#19 original systemd M03 path with unchanged egress `_get`. | Owner **6/6 M04 G1 source timing/OHLC/depth + original DEEP20 admission (83 mocked HTTP→real SQLite reservations) + 3/3 original egress mainpath + 9/9 peer guard + 6/6 cadence = 24/24 PASS**. Verified on detached VPS worktree; HTTP synthetic, original DecisionJournal Final REJECT. Source not yet installed, no real exchange tape/issuer, timer disabled and trading/paid AI OFF. |
+
 ### M05/M08 | Owner control dan position policy
 
 | Scope | SHA / wiring | Bukti PASS yang dipertahankan |
@@ -247,4 +250,4 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
-**NEXT (satu):** offline combined PR#24 pinned original protected M03 `--scheduled-public-scanner-once` CLI→scanner→G1 OHLC/depth/clock diagnostic→quota SQLite→DecisionJournal REJECT (6+3+9+6 scoped tests) before any runtime staging; preserve existing M03 timer disabled, M05 active, paid AI/private API/trading OFF. PR#23 diagnostics alone previously accepted 33/33 OFFLINE.
+**NEXT (satu):** stage previously-tested PR#24 source to original `~/indodax-ai-bot-v2-m03-runtime` only after exact old/new SHA and installed user unit diff guards; preserve BTC collector, M05 Telegram timer, shared-egress policy and M03 timer disabled. Test absence of admission policy with synthetic offline CLI afterwards. PR#24 offline **24/24** accepted; actual source trust and 15m/1h exhaustive trade tape still OPEN.
