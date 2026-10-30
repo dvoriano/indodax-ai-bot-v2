@@ -148,22 +148,22 @@ class M03SharedEgressAdmissionTests(unittest.TestCase):
             quota = SharedPublicRestBudget(
                 Path(td) / "rate.sqlite3", clock=lambda: NOW
             )
-            with patch.dict(os.environ, {
-                "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
-                "INDODAX_M03_EGRESS_ADMISSION_FILE": str(path),
-            }):
+            with (patch.dict(os.environ, {
+                    "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
+                    "INDODAX_M03_EGRESS_ADMISSION_FILE": str(path),
+                }),
+                patch("indodax_ai_bot.m03_egress_admission.time.time",
+                      return_value=NOW) as fake_clock):
+                # Constructor captures the clock; advance that SAME clock.
                 market = IndodaxPublicMarket(
                     fetch=lambda _: calls.append("GET") or {}, rest_budget=quota
                 )
-                with patch("indodax_ai_bot.m03_egress_admission.time.time",
-                           return_value=NOW):
+                market._get("/api/pairs")
+                fake_clock.return_value = NOW + 2
+                with self.assertRaisesRegex(
+                    PublicDataError, "M03_EGRESS_ATTESTATION_EXPIRED"
+                ):
                     market._get("/api/pairs")
-                with patch("indodax_ai_bot.m03_egress_admission.time.time",
-                           return_value=NOW + 2):
-                    with self.assertRaisesRegex(
-                        PublicDataError, "M03_EGRESS_ATTESTATION_EXPIRED"
-                    ):
-                        market._get("/api/pairs")
             self.assertEqual(calls, ["GET"])
 
     def test_policy_cannot_bypass_v2_atomic_reservation(self):
