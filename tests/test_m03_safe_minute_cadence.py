@@ -17,6 +17,7 @@ import unittest
 
 from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.contracts import FinalDecision
+from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import CycleResult, DailyScalpingOrchestrator
 
 
@@ -52,6 +53,11 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                              return_value=scan) as light,
                 patch.object(DailyScalpingOrchestrator, "run_cycle",
                              return_value=deep) as scheduled,
+                # The cadence fixture mocks the orchestrator and therefore
+                # intentionally does not create its original journal decision.
+                # Actual compact SQLite persistence is covered in the new
+                # end-to-end CLI/HTTP-boundary test, not by this stub.
+                patch.object(DecisionJournal, "record_m03_compact_tick"),
                 patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket",
                       side_effect=AssertionError("NO_EXCHANGE_GET")),
                 redirect_stdout(out),
