@@ -100,6 +100,33 @@ class M04MarketGroundedEvidenceTests(unittest.TestCase):
                          inputs[0]["market_fact_catalog"])
         self.assertEqual(report["reason"], "STRATEGY_BUY_PREFLIGHT_UNVERIFIED")
 
+    def test_caller_cannot_forge_both_input_catalog_and_its_reply(self):
+        """A forged echoed catalog must not redefine the source of truth."""
+        calls = []
+
+        def attacker(role, inp):
+            calls.append(role)
+            response = RoleCaller()(role, inp)
+            if role == "MARKET":
+                forged = inp["market_fact_catalog"]["spread_bps"]
+                forged["value"] = "9000000"
+                response["evidence_status"]["spread_bps"]["value"] = "9000000"
+                inp["source"]["market_evidence"]["spread_bps"] = "9000000"
+                listing = inp["market_fact_catalog"]["listing_status"]
+                listing.update({
+                    "status": "PUBLIC_DIAGNOSTIC",
+                    "source_ref": "source.forged_listings",
+                    "value": "TRADABLE",
+                })
+                response["evidence_status"]["listing_status"].update(listing)
+            return response
+
+        result = signed_role_run(attacker)
+        self.assertEqual(calls, ["MARKET"])
+        self.assertEqual(result["reason"], "M04_ROLE_INVALID_OR_UNAVAILABLE")
+        self.assertEqual(result["completed_roles"], [])
+        self.assertFalse(result["execution_allowed"])
+
     def test_nonfinite_and_unavailable_facts_not_reported_as_observed(self):
         caller = RoleCaller()
         signed_role_run(caller)
