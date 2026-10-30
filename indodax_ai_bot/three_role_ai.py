@@ -458,7 +458,13 @@ class ThreeRoleShadow:
                     # Every output field must exactly mirror the signed
                     # snapshot's public/partial/unavailable fact catalog.
                     claimed = raw.get("evidence_status")
-                    catalog = role_input["market_fact_catalog"]
+                    # Never compare against the caller's mutable input: an
+                    # injected model may change both its input catalog and
+                    # answer before returning. Reconstruct the authority
+                    # from the immutable bytes captured before any role call.
+                    catalog = _market_fact_catalog(
+                        json.loads(frozen.source_bytes)
+                    )
                     # Canonical JSON comparison also rejects booleans
                     # posing as integers and non-finite numeric claims.
                     try:
