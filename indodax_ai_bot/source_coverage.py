@@ -10,6 +10,59 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+def _public_timeframe_diagnostic(obs: Any, screening_epoch: int) -> dict[str, Any]:
+    """Describe real PUBLIC 1m/5m/15m observation timing without trust promotion.
+
+    SourceReceipt.closed_1m_epoch is the END of the completed 1m candle.
+    This is per-pair diagnostic metadata only, never G1 issuer verification.
+    Exchange-to-local clock skew is intentionally unknown from this receipt.
+    """
+    receipt = obs.snapshot.source
+    one, five, fifteen = obs.candle_1m, obs.candle_5m, obs.candle_15m
+    end = receipt.closed_1m_epoch
+    observed = receipt.observed_epoch
+    age = observed - end
+    screening_lag = observed - screening_epoch
+    aligned = (
+        type(screening_epoch) is int
+        and type(end) is int and end > 0
+        and type(observed) is int
+        and type(one.start) is int and one.interval == 60
+        and type(five.start) is int and five.interval == 300
+        and type(fifteen.start) is int and fifteen.interval == 900
+        and one.start % 60 == 0 and one.start + 60 == end
+        and five.start % 300 == 0
+        and fifteen.start % 900 == 0
+        and 0 <= age <= 120
+        and 0 <= screening_lag <= 30
+        and 0 <= end - (five.start + 300) <= 300
+        and 0 <= end - (fifteen.start + 900) <= 900
+        and receipt.pair == obs.pair
+    )
+    return {
+        "status": ("ALIGNED_PUBLIC_TIMESTAMPS_UNATTESTED"
+                   if aligned else "REJECT_PUBLIC_TIMEFRAME_OR_AGE"),
+        "closed_1m_start_epoch": one.start,
+        "closed_1m_end_epoch": end,
+        "closed_5m_start_epoch": five.start,
+        "closed_5m_end_epoch": five.start + five.interval,
+        "closed_15m_start_epoch": fifteen.start,
+        "closed_15m_end_epoch": fifteen.start + fifteen.interval,
+        "snapshot_observed_epoch": observed,
+        "screening_epoch": screening_epoch,
+        "snapshot_age_after_1m_close_seconds": age,
+        "screen_to_observation_seconds": screening_lag,
+        "exchange_to_local_clock_skew_seconds": None,
+        "best_bid_ask_visible": True,  # MarketSnapshot validates prices.
+        "orderbook_depth_levels_visible": obs.depth_levels_visible,
+        "closed_1m_volume_observed": str(one.volume),
+        "recent_trade_rows_visible": obs.trade_count_visible,
+        "independent_source_origin_verified": False,
+        "full_trade_tape_proven": False,
+        "g1_issuer_connected": False,
+    }
+
+
 def public_coverage_report(
     selected_pairs: tuple[str, ...],
     observations: Mapping[str, Any],
@@ -27,6 +80,7 @@ def public_coverage_report(
                 "recent_trade_rows_visible": 0, "closed_1m_trades_visible": 0,
                 "closed_1m_epoch": None, "source_label": None,
                 "can_prove_complete_trade_tape": False,
+                "timeframe_diagnostic": None,
                 "reason": "NO_PUBLIC_OBSERVATION",
             })
             continue
@@ -45,15 +99,23 @@ def public_coverage_report(
             "closed_1m_epoch": receipt.closed_1m_epoch,
             "source_label": receipt.provenance,
             "can_prove_complete_trade_tape": False,
+            "timeframe_diagnostic": _public_timeframe_diagnostic(obs, screening_epoch),
             "reason": reason,
         })
     observed = sum(item["observation_present"] for item in details)
+    timing_aligned = sum(
+        item["timeframe_diagnostic"] is not None
+        and item["timeframe_diagnostic"]["status"] == "ALIGNED_PUBLIC_TIMESTAMPS_UNATTESTED"
+        for item in details
+    )
     return {
         "stage": "M04D_PUBLIC_SOURCE_COVERAGE",
         "status": "REJECT_SOURCE_NOT_QUALIFIED",
         "reason": "PUBLIC_TRADE_TAPE_COMPLETENESS_AND_ORIGIN_NOT_PROVEN",
         "pairs_requested": len(selected_pairs),
         "pairs_observed": observed,
+        "pairs_with_aligned_public_timestamps": timing_aligned,
+        "pairs_with_missing_or_invalid_public_timestamps": len(selected_pairs) - timing_aligned,
         "batch_complete": complete_batch,
         "batch_window_expired": window_expired,
         "public_trades_are_recent_sample": True,
