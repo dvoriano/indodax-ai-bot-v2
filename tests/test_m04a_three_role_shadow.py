@@ -35,13 +35,15 @@ def source(*, trusted=False, preview=True):
         # Test-only SOURCE-BOUND claims exercise role sequencing. They are
         # not private exchange/issuer attestations or production readiness.
         epoch = result["eligible_cohort"]["closed_1m_epoch"]
-        result["risk_source_claims"] = {
-            name: {
-                "pair": "btc_idr", "closed_1m_epoch": epoch,
-                "status": "SOURCE_BOUND_CLAIM_ONLY",
+        result["risk_source_claims_by_pair"] = {
+            "btc_idr": {
+                name: {
+                    "pair": "btc_idr", "closed_1m_epoch": epoch,
+                    "status": "SOURCE_BOUND_CLAIM_ONLY",
+                }
+                for name in ("listing", "spendable_balance", "fee_slippage",
+                             "owned_position", "market_liquidity")
             }
-            for name in ("listing", "spendable_balance", "fee_slippage",
-                         "owned_position", "market_liquidity")
         }
     return result
 
