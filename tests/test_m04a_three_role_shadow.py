@@ -32,6 +32,19 @@ def source(*, trusted=False, preview=True):
         for key in ("g1_verified", "source_trust_verified", "trade_history_complete"):
             result[key] = True
             result["eligible_cohort"][key] = True
+        # Test-only SOURCE-BOUND claims exercise role sequencing. They are
+        # not private exchange/issuer attestations or production readiness.
+        epoch = result["eligible_cohort"]["closed_1m_epoch"]
+        result["risk_source_claims_by_pair"] = {
+            "btc_idr": {
+                name: {
+                    "pair": "btc_idr", "closed_1m_epoch": epoch,
+                    "status": "SOURCE_BOUND_CLAIM_ONLY",
+                }
+                for name in ("listing", "spendable_balance", "fee_slippage",
+                             "owned_position", "market_liquidity")
+            }
+        }
     return result
 
 
@@ -93,6 +106,7 @@ class RoleCaller:
             payload["evidence_status"] = deepcopy(evidence["market_fact_catalog"])
         elif role == "RISK":
             payload["decision"] = self.risk
+            payload["risk_source_report"] = deepcopy(evidence["risk_source_report"])
         else:
             payload.update({
                 "action": self.strategy,

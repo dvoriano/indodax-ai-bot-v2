@@ -102,6 +102,71 @@ def _market_fact_catalog(source: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+# RISK evidence below is source-bound shadow input, NEVER proof of
+# exchange listing, private balances, fees, or an executable trade.
+_RISK_CLAIM_FIELDS = ("listing", "spendable_balance", "fee_slippage",
+                      "owned_position", "market_liquidity")
+
+
+def _risk_source_report(source: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic RISK veto reasons from original frozen source bytes.
+
+    Claimed private/account readiness alone is not independently verified.
+    Production has no trusted G1 issuer or M06/M07 account receipts and
+    therefore cannot claim a real RISK clearance from this report.
+    """
+    market = source.get("market_evidence")
+    market = market if isinstance(market, dict) else {}
+    issues: list[str] = []
+    observed = source.get("screening_observed_epoch")
+    end = source.get("closed_1m_epoch")
+    if (type(observed) is not int or type(end) is not int
+            or not 0 <= observed - end <= 120):
+        issues.append("SOURCE_STALE_OR_MISALIGNED")
+    spread = market.get("spread_bps")
+    try:
+        if isinstance(spread, bool) or spread is None:
+            raise ValueError("SPREAD_UNKNOWN")
+        value = Decimal(str(spread))
+        if not value.is_finite() or not 0 <= value <= Decimal("80"):
+            raise ValueError("SPREAD_NOT_SUITABLE")
+    except (ValueError, TypeError, InvalidOperation):
+        issues.append("SPREAD_MISSING_OR_TOO_WIDE")
+    imbalance = market.get("book_imbalance")
+    try:
+        if isinstance(imbalance, bool) or imbalance is None:
+            raise ValueError("BOOK_UNKNOWN")
+        book = Decimal(str(imbalance))
+        if not book.is_finite() or not -1 <= book <= 1:
+            raise ValueError("BOOK_INVALID")
+    except (ValueError, TypeError, InvalidOperation):
+        issues.append("BOOK_LIQUIDITY_NOT_QUALIFIED")
+    flags = market.get("anomaly_flags")
+    if not isinstance(flags, list) or flags or market.get("public_maintenance_flag") is not False:
+        issues.append("ANOMALY_OR_MAINTENANCE_REVIEW")
+    # This namespace does NOT exist in the real public scanner output.
+    # Only an authenticated independent downstream source can later populate
+    # it; current tests use signed synthetic claims to exercise RISK->STRATEGY.
+    claims = source.get("risk_source_claims")
+    for field in _RISK_CLAIM_FIELDS:
+        x = claims.get(field) if isinstance(claims, dict) else None
+        if (not isinstance(x, dict)
+                or x.get("pair") != source.get("pair")
+                or type(x.get("closed_1m_epoch")) is not int
+                or x.get("closed_1m_epoch") != end
+                or x.get("status") != "SOURCE_BOUND_CLAIM_ONLY"):
+            issues.append("MISSING_" + field.upper() + "_EVIDENCE")
+    return {
+        "stage": "M04_RISK_SOURCE_BOUND_SHADOW_VETO",
+        "pair": source.get("pair"),
+        "closed_1m_epoch": end,
+        "blockers": issues,
+        "allow_shadow_analysis_only": not issues,
+        "independent_exchange_account_proof_verified": False,
+        "execution_allowed": False,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class _FrozenCandidateSnapshot:
     """An immutable canonical byte commitment, NOT exchange attestation."""
@@ -135,6 +200,7 @@ class _FrozenCandidateSnapshot:
             "source": source,
             "market_evidence": deepcopy(source["market_evidence"]),
             "market_fact_catalog": _market_fact_catalog(source),
+            "risk_source_report": _risk_source_report(source),
             "evidence_digest_sha256": self.digest,
             "snapshot_contract": {
                 "schema_version": 1,
@@ -336,6 +402,13 @@ class ThreeRoleShadow:
             "root_g1_verified": bulk.get("g1_verified") is True,
             "root_trade_history_complete": bulk.get("trade_history_complete") is True,
             "root_source_trust_verified": bulk.get("source_trust_verified") is True,
+            # Claims are digest-bound so tampering after issuer signing
+            # invalidates the receipt, but they are NOT M06/M07 proof.
+            "risk_source_claims": deepcopy(
+                (bulk.get("risk_source_claims_by_pair") or {}).get(preview[0])
+                if isinstance(bulk.get("risk_source_claims_by_pair"), dict)
+                else None
+            ),
         }
         # M03 final max-2 preview is quality/stage ranked, so its candidate
         # may sit below scalar-score top10. Prefer the SAME-cycle selected
@@ -488,7 +561,31 @@ class ThreeRoleShadow:
                     decision = raw.get("decision")
                     if decision not in ("ALLOW", "NO_TRADE", "EXIT_REVIEW"):
                         raise ValueError("INVALID_RISK_VETO")
-                    parsed = {"role": role, "decision": decision, "reason": reason}
+                    # Never trust mutable caller inputs or its own claimed
+                    # checks. Recompute from the same frozen source as MARKET.
+                    verified_report = _risk_source_report(
+                        json.loads(frozen.source_bytes)
+                    )
+                    claimed = raw.get("risk_source_report")
+                    try:
+                        exact = (
+                            json.dumps(claimed, sort_keys=True, allow_nan=False)
+                            == json.dumps(verified_report, sort_keys=True,
+                                          allow_nan=False)
+                        )
+                    except (TypeError, ValueError):
+                        exact = False
+                    if not exact:
+                        raise ValueError("RISK_SOURCE_REPORT_NOT_BOUND")
+                    # A model cannot use ALLOW to override a missing source,
+                    # listing, balance, fee, or position-ownership claim.
+                    effective = ("NO_TRADE" if decision == "ALLOW"
+                                 and verified_report["blockers"] else decision)
+                    parsed = {
+                        "role": role, "decision": effective, "reason": reason,
+                        "risk_source_report": deepcopy(verified_report),
+                        "model_decision": decision,
+                    }
                 else:
                     action = raw.get("action")
                     if action not in ("BUY", "WAIT", "EXIT_REVIEW"):

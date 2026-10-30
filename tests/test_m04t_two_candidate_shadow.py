@@ -24,6 +24,16 @@ def two_pair_source(*, trusted=True):
     bulk = source(trusted=trusted)
     cohort = bulk["eligible_cohort"]
     cohort["provisional_watchlist_preview"] = list(PAIRS)
+    if trusted:
+        epoch = cohort["closed_1m_epoch"]
+        bulk["risk_source_claims_by_pair"][PAIRS[1]] = {
+            name: {
+                "pair": PAIRS[1], "closed_1m_epoch": epoch,
+                "status": "SOURCE_BOUND_CLAIM_ONLY",
+            }
+            for name in ("listing", "spendable_balance", "fee_slippage",
+                         "owned_position", "market_liquidity")
+        }
     for item in cohort["provisional_quality_reviews"]:
         if item["pair"] in PAIRS:
             item["clear_of_provisional_cautions"] = True
