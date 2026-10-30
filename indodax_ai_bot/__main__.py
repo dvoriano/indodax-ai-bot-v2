@@ -507,27 +507,10 @@ def main(argv: list[str] | None = None) -> int:
             compact = _m03_deep_compact_from_original(outcome)
             journal.record_m03_compact_tick(outcome.trace_id, compact)
             result["m03_compact_telemetry"] = compact
-            # The original screening.summary() can contain top-10 lists and
-            # surge/casebook objects. Preserve only bounded observed counts
-            # in the scheduled DEEP20 stdout; original evidence is still
-            # evaluated inside the orchestrator, never reinterpreted here.
-            screen = outcome.screening if isinstance(outcome.screening, dict) else {}
-            result["public_scanner"] = (
-                None if outcome.screening is None else {
-                    "all_idr_pairs": (
-                        screen.get("all_idr_pairs")
-                        if type(screen.get("all_idr_pairs")) is int
-                        and 0 <= screen["all_idr_pairs"] <= 10_000 else None
-                    ),
-                    "shortlist_count": (
-                        screen.get("shortlist_count")
-                        if type(screen.get("shortlist_count")) is int
-                        and 0 <= screen["shortlist_count"] <= 40 else None
-                    ),
-                    "g1_issuer_verified": False,
-                    "trade_authorized": False,
-                }
-            )
+            # The original scheduled DEEP20 CycleResult intentionally
+            # leaves screening=None; its scanner already ran internally.
+            # Never fabricate a scanner summary from unrelated bulk fields.
+            # public_scanner retains its original None value.
             result["public_bulk"] = (
                 None if outcome.bulk is None else {
                     "coverage_status": compact["coverage_status"],
