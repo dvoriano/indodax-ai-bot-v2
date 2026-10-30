@@ -113,11 +113,16 @@ class TelegramOwnerPoller:
 
     def __init__(self, *, api: TelegramBotApiClient,
                  ledger: OwnerDecisionLedger,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 expected_bot_id: int | None = None):
         if not isinstance(api, TelegramBotApiClient):
             raise TypeError("M05_REQUIRES_TELEGRAM_API_CLIENT")
         if not isinstance(ledger, OwnerDecisionLedger):
             raise TypeError("M05_REQUIRES_OWNER_LEDGER")
+        if (expected_bot_id is not None and
+                (type(expected_bot_id) is not int or expected_bot_id <= 0)):
+            raise ValueError("M05_INVALID_CALLBACK_BOT_ID")
+        self._expected_bot_id = expected_bot_id
         self._api = api
         self._ledger = ledger
         self._owner = OfflineTelegramOwnerInterface(ledger)
@@ -179,7 +184,10 @@ class TelegramOwnerPoller:
                 or type(message.get("date")) is not int
                 or message["date"] <= 0
                 or not isinstance(origin, dict)
-                or origin.get("is_bot") is not True):
+                or origin.get("is_bot") is not True
+                or (self._expected_bot_id is not None and (
+                    type(origin.get("id")) is not int
+                    or origin["id"] != self._expected_bot_id))):
             return ("REJECT_CALLBACK_MESSAGE_NOT_VERIFIED", None, None)
         callback_id = callback.get("id")
         if (not isinstance(callback_id, str)
