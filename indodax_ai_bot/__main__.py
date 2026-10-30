@@ -27,6 +27,38 @@ from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
 
+def _m03_deep_compact_from_original(outcome) -> dict:
+    """Only the original orchestrator's DEEP20 outcome can feed this view."""
+    from .contracts import FinalDecision
+    if (outcome.final_decision != FinalDecision.REJECT
+            or outcome.execution_allowed is not False):
+        raise ConfigurationError("M03_DEEP_COMPACT_REQUIRES_FINAL_REJECT")
+    raw = outcome.bulk if isinstance(outcome.bulk, dict) else {}
+    if (raw.get("g1_verified") is True
+            or raw.get("execution_allowed") is True
+            or raw.get("trade_authorized") is True):
+        raise ConfigurationError("M03_DEEP_COMPACT_SOURCE_UNSAFE")
+    coverage = raw.get("coverage_status", "NO_BULK_EVIDENCE")
+    if (not isinstance(coverage, str) or not 1 <= len(coverage) <= 64
+            or not all(c.isascii() and (c.isupper() or c.isdigit() or c == "_")
+                       for c in coverage)):
+        coverage = "UNVERIFIED_COVERAGE"
+    counts = {}
+    for name in ("attempted_count", "analyzed_count"):
+        value = raw.get(name)
+        counts[name] = value if type(value) is int and 0 <= value <= 40 else None
+    return {
+        "schema_version": 1,
+        "lane": "DEEP20_EVERY_FIVE_MINUTES",
+        "coverage_status": coverage,
+        **counts,
+        "final_decision": "REJECT",
+        "execution_allowed": False,
+        "g1_issuer_connected": False,
+        "paid_network_allowed": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Indodax V2 daily spot scalping (M01 safe foundation)")
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
@@ -299,8 +331,9 @@ def main(argv: list[str] | None = None) -> int:
                 "live_trading_authorized": False,
             }, sort_keys=True))
             return 0 if report["last_batch_recent_and_consistent"] is True else 3
+        journal = DecisionJournal(args.db)
         app = DailyScalpingOrchestrator(
-            settings, DecisionJournal(args.db), ai_role_caller=provider,
+            settings, journal, ai_role_caller=provider,
             owner_control=owner_control,
         )
         if args.health:
@@ -466,6 +499,27 @@ def main(argv: list[str] | None = None) -> int:
             result["public_probe_status"] = "PUBLIC_OBSERVED_G1_UNATTESTED" if observed else "PUBLIC_SOURCE_ERROR"
             result["verified_public_payload_parsed"] = observed
             result["live_trading_authorized"] = False
+        if args.scheduled_public_scanner_once and (
+                schedule_lane == "DEEP20_EVERY_FIVE_MINUTES"):
+            # One original decision trace -> one durable bounded M03 record.
+            # The bulk evidence may be huge; never rely on journalctl stdout
+            # fragmentation/reassembly for operational counts or REJECT state.
+            compact = _m03_deep_compact_from_original(outcome)
+            journal.record_m03_compact_tick(outcome.trace_id, compact)
+            result["m03_compact_telemetry"] = compact
+            result["public_bulk"] = (
+                None if outcome.bulk is None else {
+                    "coverage_status": compact["coverage_status"],
+                    "attempted_count": compact["attempted_count"],
+                    "analyzed_count": compact["analyzed_count"],
+                    "g1_verified": False,
+                    "execution_allowed": False,
+                }
+            )
+            result["ai_shadow"] = {
+                "completed_roles": [],
+                "execution_allowed": False,
+            }
         print(json.dumps(result, sort_keys=True))
         if args.verify_public and not result["verified_public_payload_parsed"]:
             return 3
