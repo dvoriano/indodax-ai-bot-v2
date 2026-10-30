@@ -1,4 +1,4 @@
-# M05 — Dedicated Telegram V2 inbound gateway (draft, no live polling approval)
+# M05 — Dedicated Telegram V2 inbound gateway (safe service/timer staged, disabled)
 
 ## Reason for a separate bot
 
@@ -31,3 +31,32 @@ The lock serializes callers **on this VPS and this one DB/lock path**, not hosts
 ## Explicitly unproven
 
 Mocked Bot API tests do NOT authenticate a Telegram user or establish actual server delivery. There is no new bot token or live inbound request at PR authoring time. A single `getUpdates` batch is not continuous live monitoring; without a later approved scheduler, the bot answers only when explicitly polled. M05 remains PARTIAL, G1 independent full 15m+1h tape and M04 real 3-role AI plus M06/M07 fee/order prerequisites remain OPEN.
+
+## Latest acceptance: real @pitidenbot owner reply
+
+On 2026-10-30 the owner created **a different BotFather bot** `@pitidenbot` (bot ID `9241907991`) and tested existing PR#16 original V2 inbound route once. Actual `getMe` matched bot ID and webhook was absent. One official `getUpdates` batch completed (`handled=2`, `next_offset=837318623`), durable SQLite outcomes were `837318621:DONE/REJECT_STALE_COMMAND` and `837318622:DONE/OWNER_COMMAND_HANDLED`. Telegram owner screenshot shows a private `/status` request at 14:42 with an `Indodax V2 M05 OFFLINE SHADOW. Mode MANUAL...` reply at 14:42. Later `/status` 14:43 went unanswered because the bot was deliberately **one-shot**, not continuously running. The former Caipiti bot remains owned by a separate legacy service.
+
+## Draft service/timer (not auto deployed; separate opt-in)
+
+`systemd/user/indodax-v2-m05-telegram.service` and `.timer` are **staged templates only**. This PR must first be accepted in pinned owner VPS offline tests, and **neither unit is installed or enabled** by GitHub commit. The service invokes `python -I -B %h/indodax-ai-bot-v2/scripts/m05_telegram_service_tick_entry.py`, an isolated Python launcher that inserts only its own trusted checkout into `sys.path` and delegates to the ORIGINAL V2 `indodax_ai_bot.telegram_service_tick` package module. This avoids relying on an editable pip installation (which `python -I -m ...` might not find). It delegates to the existing dedicated bot poller, private owner ledger and local DB-derived `flock`; does not duplicate Telegram logic.
+
+Safety gates in the Python adapter:
+- Reads **existing** durable owner database at `~/.local/state/indodax-ai-bot-v2/m05-telegram/owner.sqlite3`, never creates a replacement when missing; checks exact owner ID, cursor and no outstanding `CLAIMED` update **before network**.
+- Requires state directory 0700 and DB 0600. Requires a distinct token file, **not in the Git repository** and **not in `EnvironmentFile`**, in a private 0700 directory with file 0600 and symlinks refused. Reads the BotFather token from that file at runtime without printing it or inserting it in `ExecStart`/shell arguments. Numeric token prefix and bot identity must match configured **new** bot ID; old Caipiti bot ID denied.
+- Existing `M05_TELEGRAM_NETWORK_GO=YES`, `M05_TELEGRAM_DEDICATED_GO=YES` plus new `M05_TELEGRAM_TICK_GO=YES`, all trading flags NO/NO/DRY_RUN, existing trusted `getMe`, webhook-empty `getWebhookInfo`, then one `getUpdates` batch limit10, one owner-only SQLite cursor, one on-disk local lock. No `getUpdates` concurrent with a separate V2 manual invocation.
+- `Type=oneshot`, `Restart=no`, bounded startup timeout. Owner-approved systemd timer uses `OnUnitInactiveSec=30s` and `Persistent=false`; no catch-up burst. Service logs only sanitized fixed status+error codes, no secret, incoming raw text or owner ID. A network or reply failure may leave the unit failed and trigger later timer ticks; no automatic resend of already completed updates. An incomplete CLAIMED update blocks further network polling for operator review.
+
+After offline acceptance, operator privately provisions:
+1. `~/.config/indodax-ai-bot-v2/m05/` owned by the user, mode0700; stores file `token` mode0600 using an interactive hidden prompt. **Do not use the old Caipiti token**, do not paste into ChatGPT or shell history, do not put token in `service.env` or Git.
+2. `service.env` mode0600, containing **non-secret metadata only**:
+   ```ini
+   M05_TELEGRAM_DEDICATED_BOT_ID=9241907991
+   M05_TELEGRAM_OWNER_ID=<owner-private-Telegram-numeric-ID>
+   M05_TELEGRAM_OWNER_DB=/home/ubuntu/.local/state/indodax-ai-bot-v2/m05-telegram/owner.sqlite3
+   M05_TELEGRAM_TOKEN_FILE=/home/ubuntu/.config/indodax-ai-bot-v2/m05/token
+   ```
+   (For the actual operator, use the previously verified exact private owner ID already stored in V2 owner SQLite, not the bot ID.)
+3. Inspect real unit files, current collector/timer state, and distinct `@pitidenbot` ownership before authorizing `systemctl --user daemon-reload` and installing/enabling **this M05 timer only**. No service in V1 or Hermes is stopped or restarted. Do not enable M03 scanner timer or live trading flags.
+4. Verify `systemctl --user is-enabled indodax-v2-m05-telegram.timer` and latest one-shot results without reading any raw journal lines containing secrets. Then send a **new** `/status` in `@pitidenbot` private chat (old 14:43 request is stale) and expect one reply within the next tick. If not returned, do not reset cursor; inspect the persistent SQLite outcome codes first.
+
+**Release order:** code review → pinned 19 new service adapter and isolated subprocess startup tests + only directly affected old owner/Telegram tests on owner VPS (offline) → merge → private token provisioning and local config → explicit operator permission for systemd timer activation → real short-window monitored delivery. No token/go-live action is performed by merely creating or merging this PR. Trading execution and paid AI remain OFF.

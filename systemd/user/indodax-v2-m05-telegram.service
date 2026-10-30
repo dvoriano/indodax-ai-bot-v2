@@ -1,0 +1,25 @@
+[Unit]
+Description=Indodax V2 M05 dedicated Telegram owner one-shot (NO TRADING)
+Documentation=https://github.com/dvoriano/indodax-ai-bot-v2/blob/main/docs/M05_DEDICATED_TELEGRAM_OPERATOR.md
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/indodax-ai-bot-v2
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=90s
+Restart=no
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=INDODAX_TRADING_ENABLED=NO
+Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
+Environment=INDODAX_EXECUTION_MODE=DRY_RUN
+Environment=M05_TELEGRAM_TICK_GO=YES
+Environment=M05_TELEGRAM_NETWORK_GO=YES
+Environment=M05_TELEGRAM_DEDICATED_GO=YES
+# Only ID/path metadata here. Token VALUE must NEVER be in env or unit.
+EnvironmentFile=%h/.config/indodax-ai-bot-v2/m05/service.env
+ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -I -B %h/indodax-ai-bot-v2/scripts/m05_telegram_service_tick_entry.py
+StandardOutput=journal
+StandardError=journal
