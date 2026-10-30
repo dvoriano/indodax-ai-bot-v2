@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from .owner_control import OwnerDecisionLedger, _blocked
+from .m05_operator_views import readonly_operator_view
 
 
 class OfflineTelegramOwnerInterface:
@@ -55,10 +56,14 @@ class OfflineTelegramOwnerInterface:
                     + " tersimpan. AUTO tidak mengaktifkan order."
                 ),
             }
+        if command in ("/health", "/scanner") and len(parts) == 1:
+            # Original real Telegram owner gate precedes this branch.
+            # Read local V2 collector/systemd evidence only, no HTTP/AI/order.
+            return readonly_operator_view(command, now_epoch=now_epoch)
         # Commands exist as a real UI contract, not fabricated account data.
         known = {
-            "/scanner", "/market", "/ai", "/buy", "/positions", "/sell",
-            "/balance", "/profit", "/history", "/risk", "/health",
+            "/market", "/ai", "/buy", "/positions", "/sell",
+            "/balance", "/profit", "/history", "/risk",
         }
         if command in known and len(parts) == 1:
             return {
