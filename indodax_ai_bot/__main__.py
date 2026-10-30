@@ -12,6 +12,7 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
+from .owner_control import OwnerDecisionLedger
 from .public_ws_health import public_ws_health
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
@@ -72,10 +73,29 @@ def main(argv: list[str] | None = None) -> int:
                         help="Existing BTC WS SQLite: required by --once --public-scanner-mainpath; optional for --bulk-deep-once, never G1 approval")
     parser.add_argument("--sumopod-shadow", action="store_true",
                         help="Connect configured Sumopod adapter to PUBLIC bulk shadow; paid network OFF, G1 still untrusted")
+    parser.add_argument("--m05-shadow-db", default=None,
+                        help="Opt-in OFFLINE owner REJECT audit DB (no Telegram transport or orders)")
+    parser.add_argument("--m05-shadow-owner-id", type=int, default=None,
+                        help="Opt-in numeric Telegram owner user ID, OFFLINE only")
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_env()
+        if (args.m05_shadow_db is None) != (args.m05_shadow_owner_id is None):
+            raise ConfigurationError("M05_REQUIRES_BOTH_SHADOW_OWNER_AND_DB")
+        if args.m05_shadow_db is not None and not (args.once or args.bulk_deep_once):
+            raise ConfigurationError("M05_SHADOW_ONLY_ON_MAINPATH")
+        if args.m05_shadow_db is not None and (
+                Path(args.m05_shadow_db).resolve() == Path(args.db).resolve()
+                or (args.ws_db is not None
+                    and Path(args.m05_shadow_db).resolve() == Path(args.ws_db).resolve())):
+            raise ConfigurationError("M05_SHADOW_DB_MUST_BE_SEPARATE")
+        owner_control = (
+            OwnerDecisionLedger(
+                args.m05_shadow_db, owner_user_id=args.m05_shadow_owner_id,
+            )
+            if args.m05_shadow_db is not None else None
+        )
         try:
             bulk_min_volume_idr = Decimal(args.bulk_min_volume_idr)
         except (InvalidOperation, ValueError, TypeError):
@@ -155,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if report["last_batch_recent_and_consistent"] is True else 3
         app = DailyScalpingOrchestrator(
             settings, DecisionJournal(args.db), ai_role_caller=provider,
+            owner_control=owner_control,
         )
         if args.health:
             result = app.health()
