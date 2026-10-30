@@ -167,6 +167,21 @@ class TelegramOwnerPoller:
         if not isinstance(chat, dict) or not self._ledger._is_owner(
                 from_user.get("id"), chat.get("id"), chat.get("type")):
             return ("REJECT_CALLBACK_NOT_OWNER", None, None)
+        origin = message.get("from")
+        # Inaccessible/anonymous/forwarded messages are never sufficient
+        # proof that this private callback belongs to a bot-sent message.
+        if (type(message.get("message_id")) is not int
+                or message["message_id"] <= 0
+                or type(message.get("date")) is not int
+                or message["date"] <= 0
+                or not isinstance(origin, dict)
+                or origin.get("is_bot") is not True):
+            return ("REJECT_CALLBACK_MESSAGE_NOT_VERIFIED", None, None)
+        callback_id = callback.get("id")
+        if (not isinstance(callback_id, str)
+                or not 1 <= len(callback_id) <= 128
+                or not callback_id.isascii()):
+            return ("REJECT_CALLBACK_ID_INVALID", None, None)
         data = callback.get("data")
         if not isinstance(data, str) or len(data.encode("utf-8")) > 64:
             return ("REJECT_CALLBACK_DATA", None, None)
