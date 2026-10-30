@@ -28,10 +28,14 @@ BOT = {"id": BOT_ID, "is_bot": True, "username": "TestScalpGateBot"}
 WEBHOOK_EMPTY = {"url": "", "pending_update_count": 2}
 
 
+_DEFAULT = object()
+
+
 class FakeReadonlyTransport:
-    def __init__(self, *, me=None, webhook=None, fail=None):
-        self.me = BOT.copy() if me is None else me
-        self.webhook = WEBHOOK_EMPTY.copy() if webhook is None else webhook
+    def __init__(self, *, me=_DEFAULT, webhook=_DEFAULT, fail=None):
+        # Explicit None must remain invalid, unlike an omitted fake reply.
+        self.me = BOT.copy() if me is _DEFAULT else me
+        self.webhook = WEBHOOK_EMPTY.copy() if webhook is _DEFAULT else webhook
         self.fail = fail
         self.calls = []
 
