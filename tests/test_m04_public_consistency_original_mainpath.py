@@ -199,9 +199,20 @@ class M04SourceConsistencyOriginalTests(unittest.TestCase):
                 "INDODAX_M03_EGRESS_ADMISSION_FILE": str(file),
                 "INDODAX_PUBLIC_REST_RATE_DB": str(quota),
             }
+            # Capture the REAL original G1 diagnostic before scheduled
+            # DEEP20 intentionally compacts stdout. No forged source report,
+            # no second scanner and no bypass of the admission function.
+            actual_source_reports = []
+            def observe_original_source_report(*args, **kwargs):
+                report = public_coverage_report(*args, **kwargs)
+                actual_source_reports.append(report)
+                return report
+
             stdout, stderr = StringIO(), StringIO()
             with (
                 patch.dict(os.environ, safe_env),
+                patch("indodax_ai_bot.deep_analysis.public_coverage_report",
+                      side_effect=observe_original_source_report) as source_gate,
                 patch("indodax_ai_bot.__main__.time.time", return_value=tick),
                 patch.object(IndodaxPublicMarket, "__init__", new=fixed_clock),
                 patch.object(IndodaxPublicMarket, "_http_json", autospec=True,
@@ -224,7 +235,16 @@ class M04SourceConsistencyOriginalTests(unittest.TestCase):
             self.assertEqual(body["final_decision"], "REJECT")
             self.assertFalse(body["execution_allowed"])
             self.assertFalse(body["paid_network_allowed"])
-            admission = body["public_bulk"]["g1_source_admission"]
+            # Source admission is evaluated by original deep_analysis and
+            # is not published as a huge nested stdout JSON anymore.
+            source_gate.assert_called_once()
+            self.assertEqual(len(actual_source_reports), 1)
+            self.assertNotIn("g1_source_admission", body["public_bulk"])
+            self.assertEqual(body["public_bulk"]["attempted_count"], 20)
+            self.assertEqual(body["public_bulk"]["analyzed_count"], 20)
+            self.assertFalse(body["public_bulk"]["g1_verified"])
+            self.assertLess(len(stdout.getvalue().encode()), 4096)
+            admission = actual_source_reports[0]
             self.assertEqual(admission["pairs_observed"], 20)
             diag = admission["pair_coverage"][0]["timeframe_diagnostic"]
             self.assertEqual(diag["closed_5m_ohlc_consistency"],
