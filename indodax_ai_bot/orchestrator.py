@@ -197,7 +197,9 @@ class DailyScalpingOrchestrator:
             if not ws_db_path:
                 reason = "M03_MAINPATH_REQUIRES_BTC_WS_SOURCE"
                 self.journal.record_reject(trace_id, reason)
-                return CycleResult(trace_id, FinalDecision.REJECT, reason)
+                return self._record_m05_reject(
+                    CycleResult(trace_id, FinalDecision.REJECT, reason)
+                )
             return self.run_bulk_deep_cycle(
                 trace_id, ws_db_path=ws_db_path,
                 min_volume_idr=min_volume_idr, deep_limit=deep_limit,
@@ -206,7 +208,9 @@ class DailyScalpingOrchestrator:
         # Even a configured AUTO policy cannot authorize M01 trade intents.
         reason = "G1_SOURCE_NOT_CONNECTED"
         self.journal.record_reject(trace_id, reason)
-        return CycleResult(trace_id, FinalDecision.REJECT, reason)
+        return self._record_m05_reject(
+            CycleResult(trace_id, FinalDecision.REJECT, reason)
+        )
 
     def run_public_cycle(self, trace_id: str, *, pair: str = "btc_idr",
                          market: IndodaxPublicMarket | None = None) -> CycleResult:
