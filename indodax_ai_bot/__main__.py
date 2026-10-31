@@ -15,6 +15,7 @@ from .config import ConfigurationError, Settings
 from .m03_egress_admission import M03SharedEgressAdmission
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
+from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
 from .telegram_readonly_preflight import inspect_telegram_readonly
@@ -66,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--health", action="store_true")
     group.add_argument("--m06-account-review-once", action="store_true",
                        help="Original V2 offline M06 account review, always REJECT; no private keys/requests")
+    group.add_argument("--m06-private-readonly-once", action="store_true",
+                       help="EXPLICIT scoped M06 GO: view-only four private HTTPS GETs only, never trade")
     group.add_argument("--once", action="store_true")
     parser.add_argument("--public-scanner-mainpath", action="store_true",
                         help="With --once only: opt-in same M03 bulk+G1+M04 no-trade pipeline using an existing BTC WS DB")
@@ -128,10 +131,52 @@ def main(argv: list[str] | None = None) -> int:
                         help="Opt-in OFFLINE owner REJECT audit DB (no Telegram transport or orders)")
     parser.add_argument("--m05-shadow-owner-id", type=int, default=None,
                         help="Opt-in numeric Telegram owner user ID, OFFLINE only")
+    parser.add_argument("--m06-go-file", default=None,
+                        help="Owner-created 0600 approval JSON, absolute path, <=15 min")
+    parser.add_argument("--m06-credentials-file", default=None,
+                        help="0600 view-only API key JSON, absolute path; never use trading key")
+    parser.add_argument("--m06-budget-db", default=None,
+                        help="Persistent budget SQLite in existing owner-private 0700 directory")
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_env()
+        if args.m06_private_readonly_once:
+            # No implicit GO from branch/owner PASS or presence of environment keys.
+            if not all((args.m06_go_file, args.m06_credentials_file,
+                        args.m06_budget_db)):
+                raise ConfigurationError("M06_EXPLICIT_GO_FILES_REQUIRED")
+            settings.require_m01_safety()
+            try:
+                approval = read_approval(args.m06_go_file)
+                api_key, secret_key = read_view_only_credentials(
+                    args.m06_credentials_file)
+                budget = M06RequestBudget(args.m06_budget_db)
+                journal = DecisionJournal(args.db)
+                orchestrator = DailyScalpingOrchestrator(settings, journal)
+                result = orchestrator.inspect_m06_private_readonly_once(
+                    approval=approval, budget=budget,
+                    api_key=api_key, secret_key=secret_key)
+                journal.record_reject("M06_PRIVATE_READONLY_" + uuid4().hex,
+                                      result.status)
+            except M06ScopeDenied as exc:
+                # Fixed error codes only; NEVER emit API response/keys/balance.
+                print(json.dumps({"status":"REJECT", "reason":str(exc),
+                    "execution_allowed":False}), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "status":result.status,
+                "view_only_permissions_verified":
+                    result.view_only_permissions_verified,
+                "open_orders_count":result.open_orders_count,
+                "order_history_count":result.order_history_count,
+                "fills_count":result.fills_count,
+                "history_complete":result.history_complete,
+                "bot_owned_fills_verified":result.bot_owned_fills_verified,
+                "cross_bot_ownership_verified":result.cross_bot_ownership_verified,
+                "execution_allowed":result.execution_allowed,
+            },sort_keys=True))
+            return 0
         if args.m06_account_review_once:
             settings.require_m01_safety()
             journal = DecisionJournal(args.db)
