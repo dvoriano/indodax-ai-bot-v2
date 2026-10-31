@@ -75,6 +75,8 @@ class M06PrivateProbeResult:
     local_ledger_account_bound: bool = False
     local_rebuy_hold_present: bool = False
     local_manual_floor_present: bool = False
+    local_shadow_reservations_present: bool = False
+    local_shadow_coverage_complete: bool = False
     history_complete: bool = False
     cross_bot_ownership_verified: bool = False
     bot_owned_fills_verified: bool = False
@@ -406,4 +408,6 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         local_ledger_account_bound=capital_review.local_ledger_account_bound,
         local_rebuy_hold_present=capital_review.local_rebuy_hold_present,
         local_manual_floor_present=capital_review.local_manual_floor_present,
+        local_shadow_reservations_present=capital_review.local_shadow_reservations_present,
+        local_shadow_coverage_complete=capital_review.local_shadow_coverage_complete,
     )
