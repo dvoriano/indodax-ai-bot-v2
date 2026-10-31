@@ -223,5 +223,18 @@ class M10BTCOriginalCollectorOperationsTests(unittest.TestCase):
         self.assertNotIn("crypto-bot-live", original + dropin + timer)
 
 
+    def test_source_staging_never_activates_collector_or_timer(self):
+        script = (DEPLOY / "stage_m10_btc_disabled.sh").read_text()
+        self.assertIn("M10_ORIGINAL_BTC_CAPPED_SOURCE_STAGED_DISABLED_PASS", script)
+        self.assertIn("STAGE_M10_NONACTIVE", script)
+        self.assertIn("git -C \"$ROOT\" worktree add --detach", script)
+        self.assertIn("grep -Fxq \"REQUIRED_PRIVATE_FILE_MISSING\"", script)
+        self.assertNotIn("systemctl --user start ", script)
+        self.assertNotIn("systemctl --user enable ", script)
+        self.assertNotIn("systemctl --user restart ", script)
+        self.assertNotIn("btc_public_ops.go.json\" > ", script)
+        self.assertNotIn("sqlite3.connect", script)
+
+
 if __name__ == "__main__":
     unittest.main()
