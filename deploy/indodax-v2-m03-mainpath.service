@@ -27,6 +27,9 @@ ExecStartPost=/usr/bin/echo M03_ORIGINAL_SERVICE_POST_EXEC
 # shared-IP REST consumers and conservative reserved non-V2 peak capacity.
 # No policy file is committed or installed by this template. FAIL CLOSED.
 Environment=INDODAX_M03_REQUIRE_EGRESS_ADMISSION=YES
+# Reject actual M03 GETs when any identified V1/Hermes peer is active or unknown.
+# This is isolation, not proof of whole-IP concurrent rate coordination.
+Environment=INDODAX_M03_REQUIRE_PEER_QUIET=YES
 Environment=INDODAX_M03_EGRESS_ADMISSION_FILE=%h/.config/indodax-ai-bot-v2/m03-egress-admission.json
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
