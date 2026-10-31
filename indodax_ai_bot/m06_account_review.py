@@ -64,6 +64,8 @@ class M06ReadOnlyReconciliation:
     local_ledger_account_bound: bool = False
     local_rebuy_hold_present: bool = False
     local_manual_floor_present: bool = False
+    local_shadow_reservations_present: bool = False
+    local_shadow_coverage_complete: bool = False
     protected_rebuy_ledger_verified: bool = False
     manual_asset_ownership_verified: bool = False
     account_wide_order_history_complete: bool = False
@@ -107,7 +109,8 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
                 local_rebuy.pepe_idr_local_protected,
                 local_rebuy.total_idr_local_protected,
                 local_rebuy.floki_manual_qty_local_floor,
-                local_rebuy.pepe_manual_qty_local_floor):
+                local_rebuy.pepe_manual_qty_local_floor,
+                local_rebuy.local_shadow_commitments_idr):
             _amount(number)
         if (local_rebuy.floki_idr_local_protected
                 + local_rebuy.pepe_idr_local_protected
@@ -125,7 +128,8 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
         rebuy_idr=(local_rebuy.total_idr_local_protected
                    if local_rebuy is not None else Decimal("0")),
         unlocked_commitments_idr=Decimal("0"),
-        local_shadow_idr=Decimal("0"),
+        local_shadow_idr=(local_rebuy.local_shadow_commitments_idr
+                          if local_rebuy is not None else Decimal("0")),
         all_pairs_open_orders_complete=False,
     )
     if calculated.calculated_available_idr != Decimal("0"):
@@ -150,4 +154,8 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
         local_manual_floor_present=(local_rebuy is not None
             and (local_rebuy.floki_manual_qty_local_floor > 0
                  or local_rebuy.pepe_manual_qty_local_floor > 0)),
+        local_shadow_reservations_present=(local_rebuy is not None
+            and local_rebuy.local_shadow_commitments_idr > 0),
+        local_shadow_coverage_complete=(local_rebuy is not None
+            and local_rebuy.local_shadow_coverage_complete is True),
     )
