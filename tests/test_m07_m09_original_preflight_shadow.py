@@ -107,5 +107,52 @@ class M07OriginalPreflightAndM09PaperSeparationTests(unittest.TestCase):
         self.assertFalse(paper.bot_ownership_verified)
 
 
+
+    def test_m06_budget_review_cannot_be_promoted_to_exchange_authority(self):
+        from indodax_ai_bot.policy import ScalpingPolicy, MainCapitalReview
+        review = ScalpingPolicy().review_main_capital(
+            free_idr=D("150000"), locked_idr=D("70000"),
+            floki_rebuy_idr=D("20000"), pepe_rebuy_idr=D("10000"),
+            commitments_not_locked_idr=D("10000"))
+        self.assertEqual(review.spendable_idr, D("110000"))
+        data = self.profitable_hypothesis()
+        data["spendable_idr"] = review.spendable_idr
+        data["capital_review"] = review
+        response = self.preflight.assess_buy(**data)
+        self.assertEqual(response.reason, "M07_EXCHANGE_BOUND_ORDER_ADAPTER_NOT_CONNECTED")
+        self.assertFalse(response.execution_allowed)
+        data["spendable_idr"] = D("150000")
+        mismatch = self.preflight.assess_buy(**data)
+        self.assertEqual(mismatch.reason, "M07_CAPITAL_SPENDABLE_MISMATCH")
+        forged = MainCapitalReview(
+            free_idr=review.free_idr,
+            locked_idr_observed=review.locked_idr_observed,
+            reserved_rebuy_idr=review.reserved_rebuy_idr,
+            commitments_not_locked_idr=review.commitments_not_locked_idr,
+            spendable_idr=review.spendable_idr,
+            overcommitted=False,
+            source_authenticated=True,
+        )
+        data["spendable_idr"] = review.spendable_idr
+        data["capital_review"] = forged
+        self.assertEqual(
+            self.preflight.assess_buy(**data).reason,
+            "M07_CAPITAL_REVIEW_AUTHORITY_INVALID")
+        self.assertFalse(self.preflight.assess_buy(**data).execution_allowed)
+
+    def test_m06_capital_budget_cannot_approve_overspend(self):
+        from indodax_ai_bot.policy import ScalpingPolicy
+        review = ScalpingPolicy().review_main_capital(
+            free_idr=D("150000"), locked_idr=D("0"),
+            floki_rebuy_idr=D("30000"), pepe_rebuy_idr=D("30000"),
+            commitments_not_locked_idr=D("10000"))
+        data = self.profitable_hypothesis()
+        data["spendable_idr"] = review.spendable_idr
+        data["capital_review"] = review
+        out = self.preflight.assess_buy(**data)
+        self.assertEqual(out.reason, "M07_INSUFFICIENT_FREE_IDR")
+        self.assertFalse(out.exchange_order_request_created)
+
+
 if __name__ == "__main__":
     unittest.main()
