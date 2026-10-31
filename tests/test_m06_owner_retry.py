@@ -34,7 +34,7 @@ class M06OwnerRetryTests(unittest.TestCase):
         fake_fd = 25
         term = [0, 0, 0, termios.ECHO | termios.ECHONL, 0, 0, [0] * 32]
         changed = []
-        sequence = iter((b"a", b"b", b"c", b"\\n"))
+        sequence = iter((bytes([97]), bytes([98]), bytes([99]), bytes([10])))
         def tcsetattr(fd, how, attributes):
             self.assertEqual(fd, fake_fd)
             changed.append(attributes[3])
