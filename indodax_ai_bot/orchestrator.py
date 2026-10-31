@@ -17,6 +17,8 @@ from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_bac
 from .three_role_ai import ThreeRoleShadow
 from .position_manager import PositionManager
 from .execution_preflight import ExecutionPreflight
+from .m06_account_review import review_unverified_account, M06AccountDecision
+from .m06_shadow_account import AccountObservation
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -154,6 +156,12 @@ class DailyScalpingOrchestrator:
         # Until verified owned fills are integrated, review() is fail-closed.
         self._position_manager = PositionManager()
         self._execution_preflight = ExecutionPreflight()
+
+    def review_m06_account(self, *, observation: AccountObservation | None = None,
+                           now_epoch: int) -> M06AccountDecision:
+        """One original orchestrator, local offline account diagnostic only."""
+        self.settings.require_m01_safety()
+        return review_unverified_account(observation, now_epoch=now_epoch)
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
         """One original orchestrator result, NO Telegram/order-side effects."""
