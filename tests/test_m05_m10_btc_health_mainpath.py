@@ -130,10 +130,14 @@ class M05OriginalTelegramToM10HealthTests(unittest.TestCase):
         self.assertNotIn(TOKEN, msg)
         self.assertEqual(self.ledger.telegram_next_offset(), 8)
 
-    def test_default_off_preserves_old_unavailable_health_and_never_reads_btc(self):
+    def test_default_off_preserves_original_pr20_owner_health_and_never_reads_m10(self):
+        # PR20 has a proven real owner /health view; the optional PR26
+        # provider must not shadow it when M05_BTC_PUBLIC_HEALTH_GO is OFF.
         _, sensor = self.tick()
         sensor.assert_not_called()
-        self.assertIn("Belum terhubung", self.calls[-1][1]["text"])
+        msg = self.calls[-1][1]["text"]
+        self.assertIn("V2 health | BTC WS last batch=", msg)
+        self.assertIn("Final REJECT. Trading OFF.", msg)
 
     def test_foreign_owner_or_group_get_no_reply_and_no_btc_read(self):
         self.from_user = OWNER + 1
