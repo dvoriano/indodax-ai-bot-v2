@@ -19,6 +19,14 @@ Owner authorized **M06_PRIVATE_READONLY_GO** for one Indodax V2 account, four GE
 - `openOrders` is requested without pair filter to avoid hiding other pair commitments. An unknown quote asset or 1000-row response blocks. Histories/fills are only for the approved symbol and may be incomplete; **never promote to whole-account order/fill completeness, ownership, spendability or LIVE**.
 - Operator output contains limited counts/status only. Do not publish raw account UID, balances, orders, fills, credentials, signed headers, or full HTTP responses.
 
+## Rekonsiliasi ID dan batas cakupan M06 (31 Oktober 2026)
+
+Rujukan: dokumentasi resmi Indodax Trade API V2 pada `INDODAX-TradeAPI-2.md`. `GET /api/v2/openOrders` mengembalikan `orderId` numerik serta `fullOrderId` berbentuk `symbol-type-id`. Sebaliknya, `GET /api/v2/order/histories` dan `GET /api/v2/myTrades` menggunakan **full order ID**. Rekonsiliasi harus join `openOrders.fullOrderId == history.orderId == myTrades.orderId`, bukan menyamakan ID numerik dengan ID lengkap atau mengandalkan awalan nama order. `clientOrderId`, `isBuyer`, serta kuantitas fill harus konsisten bila tersedia. ID yang hilang atau konflik menghasilkan REJECT; pengujian fixture tidak pernah menerbitkan `bot_owned_verified`.
+
+**Cakupan histori:** order histories dan myTrades secara default hanya menampilkan **24 jam terakhir**, dengan batas maksimum window permintaan 7 hari. Satu GET empat endpoint, sekalipun berhasil, tidak membuktikan histori lengkap, modal terlindungi dari seluruh order akun, atau pemisahan bot lain. Keempat endpoint M06 hanya melayani diagnostik read-only; `history_complete=False`, `bot_owned_fills_verified=False`, `cross_bot_ownership_verified=False`, dan `execution_allowed=False` tetap. Untuk closure M06-02 sampai M06-05 dibutuhkan penerimaan end-to-end lain dengan riwayat lintas-window, ownership account dan protected rebuy yang benar-benar teruji.
+
+**GO lama tidak dapat diperpanjang lewat percakapan atau file lokal.** Persetujuan awal maksimal 15 menit/20 request adalah jendela sekali pakai, bukan otorisasi permanen; apabila window terlewat, perlu izin baru yang eksplisit sebelum request privat apa pun. Tidak boleh membuat waktu awal baru sendiri lalu menyebutnya kelanjutan GO 31 Oktober.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
