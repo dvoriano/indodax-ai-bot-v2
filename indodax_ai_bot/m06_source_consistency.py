@@ -55,8 +55,6 @@ def inspect_cross_source_consistency(*, open_orders: tuple[OrderRecord, ...],
             # A time-drifting snapshot can show same order as OPEN and CLOSED.
             # Do not pick one version or infer it is settled.
             raise M06ConsistencyBlocked("M06_ORDER_SNAPSHOT_TIME_DRIFT")
-        if order.order_id in index:
-            raise M06ConsistencyBlocked("M06_ORDER_ID_COLLISION")
         index[order.order_id] = order
     seen: set[str] = set()
     per_order_qty: dict[str, Decimal] = {}
