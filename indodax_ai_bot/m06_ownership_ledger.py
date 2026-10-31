@@ -9,7 +9,7 @@ import sqlite3
 import os
 import stat
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -50,6 +50,9 @@ class ProtectedRebuyReview:
     main_capital_spending_allowed: bool = False
     execution_allowed: bool = False
     status: str = "LOCAL_SPECIAL_SELL_PROCEEDS_REBUY_HOLD_UNVERIFIED"
+    # Additional account-specific LOCAL SQLite observations, never wallet proof.
+    local_shadow_commitments_idr: Decimal = Decimal("0")
+    local_shadow_coverage_complete: bool = False
 
 
 class M06OwnershipLedger:
@@ -141,7 +144,36 @@ class M06OwnershipLedger:
                 )
                 if not bound:
                     raise OwnershipConflict("M06_LOCAL_ACCOUNT_UNBOUND")
-                return cls._read_rebuy_in_transaction(db, account_hash)
+                protected = cls._read_rebuy_in_transaction(db, account_hash)
+                # Read existing shadow holds in the SAME immutable SQLite
+                # snapshot. The table may be absent on older V2 installs.
+                # Absence means UNKNOWN, never an assumed zero liability.
+                has_shadow_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='m06_shadow_reserve'"
+                ).fetchone() is not None
+                if not has_shadow_table:
+                    return protected
+                rows = db.execute(
+                    "SELECT amount_idr FROM m06_shadow_reserve "
+                    "WHERE account_key_hash=? AND released=0 LIMIT 10001",
+                    (account_hash,),
+                ).fetchall()
+                if len(rows) > 10000:
+                    raise OwnershipConflict("M06_SHADOW_LEDGER_LIMIT_EXCEEDED")
+                try:
+                    pending = sum(
+                        (_amount(Decimal(raw)) for (raw,) in rows),
+                        Decimal("0"),
+                    )
+                    _amount(pending)
+                except (ValueError, ArithmeticError, TypeError):
+                    raise OwnershipConflict("M06_SHADOW_LEDGER_CORRUPT") from None
+                return replace(
+                    protected,
+                    local_shadow_commitments_idr=pending,
+                    local_shadow_coverage_complete=True,
+                )
         except OwnershipConflict:
             raise
         except (OSError, sqlite3.Error, ValueError):
