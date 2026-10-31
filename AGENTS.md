@@ -17,6 +17,10 @@ Berlaku untuk semua pekerjaan coding AI/agent dalam repository ini.
 
 **PENEGAKAN SETIAP GILIRAN:** sebelum memanggil tool atau membuat perubahan, pastikan **target repository persis `dvoriano/indodax-ai-bot-v2`**, target checklist asli V2, dan file V2 yang akan diubah. Bila permintaan mensyaratkan akses di luar allowlist, **STOP** pada batas itu dan minta izin owner untuk pengecualian spesifik. Jangan menganggap kata "lanjut" sebagai izin membuka V1. Jangan membuat migrasi ulang, jangan mengubah daftar `[x]/[ ]` tanpa acceptance baru.
 
+## DEFAULT CI HYBRID (OWNER 31 OKTOBER 2026)
+
+**GitHub Actions selama kuota gratis tersedia; ketika kuota habis/job runner terblokir, jalankan changed-scope tests offline di temporary worktree dari exact SHA GitHub V2 pada VPS V2 yang sama.** Jangan menghabiskan biaya Actions tambahan, memasang self-hosted runner pada VPS trading, mengubah proses aktif, atau mengakses secrets/private API saat tes offline. Semua tes fallback tetap `NO/NO/DRY_RUN`. Laporkan SHA, command, hasil dan batas bukti. **PASS VPS tidak setara CI GREEN/deploy/LIVE.** Gunakan CI gratis kembali saat siap; jangan ulang tes historis accepted tanpa perubahan relevan. Saat job gagal sebelum test steps, klasifikasikan `BLOCKED_CI_INFRA` sampai terbukti penyebabnya, bukan otomatis bug kode. Aturan kanonis ada di [docs/PROJECT_GUIDELINE.md](docs/PROJECT_GUIDELINE.md) Bagian A dan [docs/ROADMAP.md](docs/ROADMAP.md) Bagian 1. Seluruh 98 checklist dan 49 centang historis tetap utuh.
+
 ## SOP PENERIMAAN LIMA TAHAP (KEPUTUSAN OWNER 31 OKTOBER 2026)
 
 **Scope tetap 98 checklist asli** di [docs/ROADMAP.md](docs/ROADMAP.md). **49 butir historis [x] dibiarkan tetap selesai untuk saat ini; jangan audit ulang atau mengubahnya sebelum pemeriksaan kesiapan gabungan menjelang LIVE.** Kerjakan 49 butir yang masih [ ] melalui [docs/OPEN_CHECKLIST_STAGES.md](docs/OPEN_CHECKLIST_STAGES.md), yang merupakan **tampilan tahapan dari checklist asli, bukan roadmap kedua atau scope baru**. Rekonsiliasikan statusnya dengan ROADMAP saat setiap acceptance tuntas.
