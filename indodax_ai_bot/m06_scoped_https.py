@@ -24,6 +24,7 @@ from .m06_private_readonly import M06ReadOnlyBlocked, READ_ONLY_PATHS
 from .m06_signed_readonly import PreparedPrivateGET, prepare_signed_get
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .m06_source_consistency import inspect_cross_source_consistency
+from .m06_account_review import reconcile_readonly_private_snapshot
 
 _HOST = "api.indodax.com"
 _APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"
@@ -57,6 +58,12 @@ class M06PrivateProbeResult:
     order_history_count: int
     fills_count: int
     view_only_permissions_verified: bool
+    reconciliation_status: str = "REJECT"
+    capital_spendable_verified: bool = False
+    protected_rebuy_verified: bool = False
+    pending_buy_orders: int = 0
+    unmatched_fills_in_window: int = 0
+    special_asset_ownership_verified: bool = False
     history_complete: bool = False
     cross_bot_ownership_verified: bool = False
     bot_owned_fills_verified: bool = False
@@ -281,31 +288,51 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         )
         return _read_json_over_verified_tls(prepared)
 
-    account_raw = get("/api/v2/account")
-    enforce_view_only_permissions(account_raw)
-    parse_account(account_raw)
-    all_orders = _validate_all_pair_orders(get("/api/v2/openOrders"))
-    order_history = parse_orders(
-        get("/api/v2/order/histories", symbol=approval.symbol, limit=1000),
-        expected_symbol=approval.symbol,
-    )
-    fills = parse_fills(
-        get("/api/v2/myTrades", symbol=approval.symbol, limit=1000),
-        expected_symbol=approval.symbol,
-    )
-    if len(order_history) == 1000 or len(fills) == 1000:
-        raise M06ScopeDenied("M06_PRIVATE_HISTORY_POSSIBLY_TRUNCATED")
-    # Source cross-check is diagnostic only: the two histories are
-    # pair-scoped and default to the last 24h; never infer completeness.
-    inspect_cross_source_consistency(
-        open_orders=all_orders, closed_orders=order_history,
-        fills=fills, symbol=approval.symbol,
-    )
+    # The private API offers account observations, not unrestricted capital
+    # permission. All four reads join the original M06 capital/ownership
+    # diagnostics before one deliberately non-executable result is emitted.
+    from .m06_private_payloads import M06PayloadError
+    from .m06_source_consistency import M06ConsistencyBlocked
+    from .m06_capital_reconcile import M06ReconciliationBlocked
+    try:
+        account_raw = get("/api/v2/account")
+        enforce_view_only_permissions(account_raw)
+        account = parse_account(account_raw)
+        all_orders = _validate_all_pair_orders(get("/api/v2/openOrders"))
+        order_history = parse_orders(
+            get("/api/v2/order/histories", symbol=approval.symbol, limit=1000),
+            expected_symbol=approval.symbol,
+        )
+        fills = parse_fills(
+            get("/api/v2/myTrades", symbol=approval.symbol, limit=1000),
+            expected_symbol=approval.symbol,
+        )
+        if len(order_history) == 1000 or len(fills) == 1000:
+            raise M06ScopeDenied("M06_PRIVATE_HISTORY_POSSIBLY_TRUNCATED")
+        capital_review = reconcile_readonly_private_snapshot(
+            account=account, open_orders=all_orders,
+            order_history=order_history, fills=fills,
+            symbol=approval.symbol,
+        )
+    except (M06PayloadError, M06ConsistencyBlocked,
+            M06ReconciliationBlocked, ValueError):
+        # Do not print API response bodies, raw wallet amounts or identifiers.
+        raise M06ScopeDenied("M06_PRIVATE_DATA_RECONCILIATION_REJECT") from None
+    if (capital_review.status != "REJECT"
+            or capital_review.spendable_capital_verified
+            or capital_review.execution_allowed):
+        raise M06ScopeDenied("M06_CAPITAL_AUTHORITY_PROMOTION_DENIED")
     return M06PrivateProbeResult(
-        status="M06_VIEW_ONLY_OBSERVED_NOT_EXECUTABLE",
+        status="M06_VIEW_ONLY_RECONCILED_REJECT",
         request_count_this_run=4,
         open_orders_count=len(all_orders),
         order_history_count=len(order_history),
         fills_count=len(fills),
         view_only_permissions_verified=True,
+        reconciliation_status=capital_review.reason,
+        capital_spendable_verified=capital_review.spendable_capital_verified,
+        protected_rebuy_verified=capital_review.protected_rebuy_ledger_verified,
+        pending_buy_orders=capital_review.pending_buy_orders,
+        unmatched_fills_in_window=capital_review.unmatched_fills_in_window,
+        special_asset_ownership_verified=capital_review.manual_asset_ownership_verified,
     )
