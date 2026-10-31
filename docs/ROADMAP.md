@@ -2,6 +2,8 @@
 
 > **Satu-satunya tracker dan handover proyek.** Aturan normatif tetap di [PROJECT_GUIDELINE.md](PROJECT_GUIDELINE.md) bagian 0/0A/B/E/F serta [AGENTS.md](../AGENTS.md). Terakhir diperbarui: **30 Oktober 2026 (WIB)**.
 >
+> **Koreksi penghitung 2026-10-31:** milestone BTC M10 fail-closed/ExecCondition yang sudah PASS adalah **bukti pendukung** dari pekerjaan M10 yang lebih luas, bukan item checklist selesai baru. Entri `[x]` tambahan tersebut dipindahkan kembali ke register bukti Bagian 4 yang sudah memuatnya. Koreksi **50/49 → 49/49** adalah pembetulan pembukuan, bukan pembatalan bukti PASS dan bukan kemunduran implementasi.
+>
 > **Aturan pencatatan owner:** hanya catat pekerjaan/tes yang **sudah PASS dan diterima**, beserta SHA, cakupan, dan batas klaim. Jangan menyalin percobaan FAIL, error sementara, log mentah, audit berulang, atau status yang sudah digantikan. Satu penerimaan cukup satu entri ringkas. Riwayat lengkap tetap tersedia melalui Git history, bukan daftar kegagalan di tracker.
 >
 > **ATURAN BESI `[x]` = MAINPATH TERBUKTI (BERLAKU UNTUK CHECKLIST LAMA DAN BARU):** Setiap fitur kode/runtime hanya boleh dicentang setelah bukti menunjukkan caller resmi `systemd/Telegram/CLI → DailyScalpingOrchestrator → modul produksi yang SAMA → persistensi/output/Final REJECT atau PASS sesuai gate`, source SHA yang diuji, dan targeted integration test yang MELINTASI caller aslinya. Unit-test modul terisolasi, source file ada, PR merge, fixture/mock caller, atau laporan audit saja **tidak cukup**. Untuk klaim ONLINE harus dibuktikan pula exact installed source/unit dan eksekusi VPS real; OFFLINE tetap OFFLINE. Jika modul belum dipanggil jalur utama, **jangan `[x]` untuk integrasi**; simpan PASS tersendiri di register dan biarkan `[ ]` sampai tersambung. Tidak boleh menduplikasi scanner/AI/executor/position manager/ledger demi centang. M00 dokumen dan file CI sebagai *file* adalah pengecualian yang sifatnya non-runtime; kesiapan runner CI berada di M10. Centang historis tidak boleh otomatis dianggap bukti seluruh jalur end-to-end atau LIVE.
@@ -39,7 +41,7 @@
 
 ## 3. CHECKLIST PEKERJAAN M00–M12
 
-**`[x]` = cakupan diterima; untuk fitur kode/runtime HARUS ada bukti terhubung ke mainpath asli. `[ ]` = belum selesai, belum dibuktikan, atau modul masih berdiri sendiri.** Angka bukan persentase kesiapan LIVE. Unit test-only PASS tetap di register bukti Bagian 4 tanpa mencentang integrasi. Jangan catat tes gagal.
+**`[x]` = item pekerjaan yang sudah didefinisikan dan telah memenuhi acceptance; `[ ]` = item yang belum memenuhi acceptance.** Angka bukan persentase kesiapan LIVE. **Pengujian PASS, staging, hasil canary, atau sub-bukti dari sebuah item `[ ]` dicatat di register bukti Bagian 4, tidak menambah item `[x]` baru.** Konversi item lama dari `[ ]` menjadi `[x]` harus menurunkan jumlah terbuka tepat satu. Bila benar-benar ada kebutuhan baru, definisikan dahulu sebagai `[ ]` dengan cakupan dan persetujuan owner yang jelas, bukan langsung `[x]`. Unit test-only PASS tidak memenuhi checklist integrasi; jangan catat tes gagal.
 
 | Milestone | Selesai `[x]` | Belum `[ ]` |
 | --- | ---: | ---: |
@@ -53,10 +55,10 @@
 | M07 | 0 | 5 |
 | M08 | 0 | 7 |
 | M09 | 0 | 4 |
-| M10 | 4 | 4 |
+| M10 | 3 | 4 |
 | M11 | 0 | 5 |
 | M12 | 0 | 5 |
-| **TOTAL** | **50** | **49** |
+| **TOTAL** | **49** | **49** |
 
 ### M00: Guideline, keamanan, arsitektur
 - [x] Repo V2 independen, AGENTS/README, guideline kanonis dan satu roadmap.
@@ -163,7 +165,6 @@
 - [x] BTC public WS collector user-systemd active and real bounded batch success observed.
 - [x] Dedicated Telegram V2 user-systemd timer active with real owner command receipt.
 - [x] Original isolated M03 systemd service installed, source pinned and timer disabled.
-- [x] **M10 original BTC systemd fail-closed owner gate INSTALLED and REAL accepted (2026-10-31 WIB):** [DRAFT PR#26](https://github.com/dvoriano/indodax-ai-bot-v2/pull/26), pinned deployed source `cdbc29c7ebd13d55b52941b335cbb5a488aa6971` (M10 11/11, original M04J 12/12+M04L 13/13 previously). User ran one original `systemctl --user start` **with NO owner GO**: `ExecCondition` exited status=1, `Result=exec-condition`, service inactive/PID0, `Restart=no`, timer inactive/disabled; direct SQLite read-only verified 9982 publications, 5 gaps, unchanged old sidecar batch epoch `1793409419` and no GO/admission/hold. This checks **specific non-trading fail-closed runtime integration**, not 24/7 startup/uptime/alerts; that checklist stays `[ ]`.
 - [ ] Produce CI GitHub Actions green PASS or approved equivalent independent release check.
 - [ ] Complete shared egress IP REST rate admission and compact scanner journal telemetry.
 - [ ] Prove stable runtime startup/stop/restart/heartbeat and sanitized alerts with 24/7 observation.
@@ -279,7 +280,7 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 
 1. **Saat tes gagal:** perbaiki di branch/PR; jangan menambah FAIL ke roadmap. Unit-test PASS tetapi tidak ada caller mainpath = tetap `[ ]` integrasi.
 2. **Sebelum setiap centang `[x]` fitur runtime:** WAJIB tampilkan path & pinned SHA yang dipakai, **caller resmi → orchestrator → modul produksi → Final/ledger/output**, bukti targeted positive/negative integration test yang benar-benar mengeksekusi caller itu, dan untuk klaim ONLINE bukti installed unit serta runtime real. Bila satu mata rantai tidak terbukti, **jangan dicentang**, walaupun semua unit tests PASS. Pengecualian hanya checklist dokumentasi/berkas non-runtime yang memang sudah didefinisikan demikian.
-3. **Setelah integration PASS:** simpan **satu** entri ringkas Bagian 4 berisi SHA, jalur mainpath, jenis OFFLINE/PUBLIC/PRIVATE/PAPER/LIVE, hasil aktual, batas klaim; perbarui checklist Bagian 3 dan checkpoint Bagian 1 jika diterima. Milestone PARTIAL tetap PARTIAL sampai acceptance lengkap, bukan menumpuk audit.
+3. **Setelah integration PASS:** simpan **satu** entri ringkas Bagian 4 berisi SHA, jalur mainpath, jenis OFFLINE/PUBLIC/PRIVATE/PAPER/LIVE, hasil aktual, batas klaim. **Jangan membuat checklist `[x]` tambahan untuk bukti/tes sebuah target yang sudah ada;** bila seluruh acceptance item lama terpenuhi, ubah **item itu** dari `[ ]` ke `[x]` sehingga `selesai +1, terbuka -1` dan total scope tetap. Jika baru sub-bukti/partial, kedua hitungan tidak berubah. Kebutuhan scope baru hanya boleh ditambahkan sebagai `[ ]` dengan alasan yang jelas. Milestone PARTIAL tetap PARTIAL sampai acceptance lengkap, bukan menumpuk audit.
 4. **Jangan tandai DONE hanya karena unit test/simulasi lulus.** Model real, source verified, saldo, fills dan settled IDR harus benar-benar dibuktikan sesuai milestone.
 5. **Setelah satu tahap implementasi:** laporkan (a) kode, (b) wiring mainpath, (c) proof+SHA, (d) yang belum, (e) persis satu next action. Fokus bot daily scalping, bukan audit tanpa akhir.
 
