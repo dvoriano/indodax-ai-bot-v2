@@ -202,6 +202,15 @@ class DailyScalpingOrchestrator:
         return M06OwnershipLedger(db_path).observe(
             account_key=account_key, order=order, fills=fills)
 
+    def protect_m06_manual_holding_floor_offline(self, *, db_path: str,
+            account_key: str, asset: str,
+            minimum_qty: Decimal) -> ProtectedRebuyReview:
+        """Original V2 caller protects manual FLOKI/PEPE local floor."""
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger(db_path).protect_manual_asset_floor(
+            account_key=account_key, asset=asset, minimum_qty=minimum_qty,
+        )
+
     def review_m06_protected_rebuy_offline(self, *, db_path: str,
             account_key: str) -> ProtectedRebuyReview:
         """Same M06 ownership database; local gross SELL proceeds stay locked."""
