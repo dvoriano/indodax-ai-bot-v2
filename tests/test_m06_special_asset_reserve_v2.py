@@ -26,6 +26,12 @@ class SpecialAssetReservePolicyTests(unittest.TestCase):
         self.assertEqual(report.minimum_reserved_quantity, D("700.00"))
         self.assertFalse(report.execution_allowed)
 
+    def test_manual_half_must_remain_outside_bot_even_if_token_total_is_large(self):
+        with self.assertRaisesRegex(ValueError, "M06_MANUAL_HALF_NOT_RESERVED"):
+            self.policy.review_special_asset_pool(
+                asset="PEPE", total_quantity=D("1000"),
+                manual_quantity=D("400"), bot_owned_quantity=D("300"))
+
     def test_manual_and_bot_owned_cannot_overlap(self):
         with self.assertRaisesRegex(ValueError, "M06_SPECIAL_ASSET_OWNERSHIP_OVERLAP"):
             self.policy.review_special_asset_pool(
