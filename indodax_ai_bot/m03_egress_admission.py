@@ -12,9 +12,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import re
 import stat
-import subprocess
 import time
 from typing import Callable
 
@@ -28,7 +26,6 @@ _REQUIRED_PEERS = frozenset({
     "crypto-bot-telegram.service",
     "hermes-gateway.service",
 })
-_PEER_UNIT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,79}\.service$")
 _MAX_FILE_BYTES = 8192
 _MAX_POLICY_AGE = 900
 _REQUIRED_FIELDS = frozenset({
@@ -37,41 +34,6 @@ _REQUIRED_FIELDS = frozenset({
     "peer_service_names", "external_peak_requests_rolling_60s",
     "issued_at_epoch", "expires_at_epoch",
 })
-
-
-def _systemd_peer_quiet(unit: str) -> bool:
-    """Check a real peer unit, not the owner's self-declared traffic estimate.
-
-    Returns True only for a loaded but INACTIVE user service with no PID.
-    A missing unit is UNKNOWN, not proof that no process uses the shared IP.
-    No service is stopped/started/modified by this probe.
-    """
-    if not isinstance(unit, str) or not _PEER_UNIT_RE.fullmatch(unit):
-        raise M03EgressAdmissionError("M03_EGRESS_PEER_ID_INVALID")
-    try:
-        result = subprocess.run(
-            ["systemctl", "--user", "show", unit,
-             "--property=LoadState,ActiveState,MainPID", "--no-pager"],
-            capture_output=True, text=True, check=False, timeout=2,
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        raise M03EgressAdmissionError("M03_EGRESS_PEER_ACTIVITY_UNVERIFIED") from None
-    if (result.returncode != 0 or not isinstance(result.stdout, str)
-            or len(result.stdout) > 2048):
-        raise M03EgressAdmissionError("M03_EGRESS_PEER_ACTIVITY_UNVERIFIED")
-    state: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        if line.count("=") != 1:
-            raise M03EgressAdmissionError("M03_EGRESS_PEER_ACTIVITY_UNVERIFIED")
-        key, value = line.split("=", 1)
-        if key not in ("LoadState", "ActiveState", "MainPID") or key in state:
-            raise M03EgressAdmissionError("M03_EGRESS_PEER_ACTIVITY_UNVERIFIED")
-        state[key] = value
-    if set(state) != {"LoadState", "ActiveState", "MainPID"} or state["LoadState"] != "loaded":
-        raise M03EgressAdmissionError("M03_EGRESS_PEER_ACTIVITY_UNVERIFIED")
-    if state["ActiveState"] != "inactive" or state["MainPID"] != "0":
-        raise M03EgressAdmissionError("M03_EGRESS_ACTIVE_UNCOORDINATED_PEER")
-    return True
 
 
 class M03SharedEgressAdmission:
@@ -84,9 +46,7 @@ class M03SharedEgressAdmission:
     """
 
     def __init__(self, path: str | Path | None = None, *,
-                 clock: Callable[[], float] | None = None,
-                 require_peer_quiet: bool | None = None,
-                 peer_probe: Callable[[str], bool] | None = None) -> None:
+                 clock: Callable[[], float] | None = None) -> None:
         self.path = Path(path) if path is not None else Path(
             os.environ.get(
                 "INDODAX_M03_EGRESS_ADMISSION_FILE",
@@ -95,16 +55,6 @@ class M03SharedEgressAdmission:
             )
         )
         self.clock = clock or time.time
-        mode = os.environ.get("INDODAX_M03_REQUIRE_PEER_QUIET", "NO")
-        if mode not in ("NO", "YES"):
-            raise M03EgressAdmissionError("M03_EGRESS_PEER_GUARD_INVALID")
-        if require_peer_quiet is not None and type(require_peer_quiet) is not bool:
-            raise M03EgressAdmissionError("M03_EGRESS_PEER_GUARD_INVALID")
-        if peer_probe is not None and not callable(peer_probe):
-            raise M03EgressAdmissionError("M03_EGRESS_PEER_GUARD_INVALID")
-        self.require_peer_quiet = (mode == "YES" if require_peer_quiet is None
-                                   else require_peer_quiet)
-        self.peer_probe = peer_probe or _systemd_peer_quiet
 
     def allowed_local_limit(self) -> int:
         try:
@@ -160,26 +110,6 @@ class M03SharedEgressAdmission:
                     or issued > now or expiry - issued > _MAX_POLICY_AGE
                     or expiry <= issued):
                 raise M03EgressAdmissionError("M03_EGRESS_ATTESTATION_EXPIRED")
-            # Stronger than the old v1 owner-only policy: the original M03
-            # systemd caller must independently prove known peer units quiet
-            # before EACH actual GET. Active/missing/unknown peer => V2 STOP.
-            # This is a conservative isolation gate, NOT yet concurrent
-            # IP-wide admission. An unknown NAT/manual consumer still requires
-            # operator/external enforcement proof before M03 permanent GO.
-            if self.require_peer_quiet:
-                for peer in peers:
-                    if not _PEER_UNIT_RE.fullmatch(peer):
-                        raise M03EgressAdmissionError("M03_EGRESS_PEER_ID_INVALID")
-                    try:
-                        quiet = self.peer_probe(peer)
-                    except M03EgressAdmissionError:
-                        raise
-                    except (OSError, ValueError, TypeError):
-                        raise M03EgressAdmissionError(
-                            "M03_EGRESS_PEER_ACTIVITY_UNVERIFIED") from None
-                    if quiet is not True:
-                        raise M03EgressAdmissionError(
-                            "M03_EGRESS_PEER_ACTIVITY_UNVERIFIED")
             return 168 - used
         except M03EgressAdmissionError:
             raise
