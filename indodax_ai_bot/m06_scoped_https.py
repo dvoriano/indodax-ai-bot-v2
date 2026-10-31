@@ -30,13 +30,13 @@ from .m06_ownership_ledger import M06OwnershipLedger, OwnershipConflict
 
 _HOST = "api.indodax.com"
 _APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"  # expired, mock compatibility
-_ONE_SHOT_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031"
+_ONE_SHOT_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031"  # spent/locked
+_RETRY_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"
 _MAX_BYTES = 1_000_000
-# Owner's fresh explicit single-run approval. Release is inert unless the
-# pinned V2 foreground CLI is launched with this exact local activation.
-_NETWORK_RELEASE_GO = (
-    os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") == _ONE_SHOT_APPROVAL_ID
-)
+# Original one-shot is permanently disabled. Only this explicitly reapproved
+# retry, on its own nonrenewable budget, may access private HTTPS.
+_RELEASE_APPROVAL_ID = os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO")
+_NETWORK_RELEASE_GO = (_RELEASE_APPROVAL_ID == _RETRY_APPROVAL_ID)
 _SYMBOL = re.compile(r"^[a-z0-9]{2,24}idr$")
 # No direct signed GET may bypass a debit through the one-shot budget.
 _BUDGET_DEBITED_FOR_THIS_GET = contextvars.ContextVar("m06_one_shot_debited", default=False)
@@ -112,7 +112,7 @@ def read_approval(path: str, *, now_ms: int | None = None) -> M06ScopedApproval:
         raise M06ScopeDenied("M06_GO_SCHEMA_INVALID")
     approval = M06ScopedApproval(**raw)
     now = int(time.time() * 1000) if now_ms is None else now_ms
-    if (approval.approval_id not in (_APPROVAL_ID, _ONE_SHOT_APPROVAL_ID)
+    if (approval.approval_id not in (_APPROVAL_ID, _ONE_SHOT_APPROVAL_ID, _RETRY_APPROVAL_ID)
             or type(approval.issued_ms) is not int or type(approval.expires_ms) is not int
             or type(now) is not int
             or approval.issued_ms <= 0 or not approval.issued_ms <= now < approval.expires_ms
@@ -121,7 +121,7 @@ def read_approval(path: str, *, now_ms: int | None = None) -> M06ScopedApproval:
             or type(approval.symbol) is not str
             or not _SYMBOL.fullmatch(approval.symbol)):
         raise M06ScopeDenied("M06_GO_EXPIRED_OR_OUT_OF_SCOPE")
-    if approval.approval_id == _ONE_SHOT_APPROVAL_ID and (
+    if approval.approval_id in (_ONE_SHOT_APPROVAL_ID, _RETRY_APPROVAL_ID) and (
             approval.max_requests != 4 or approval.symbol != "injidr"):
         raise M06ScopeDenied("M06_ONE_SHOT_SCOPE_INVALID")
     return approval
@@ -186,6 +186,29 @@ class M06RequestBudget:
 
     def _connect(self):
         return sqlite3.connect(self.path, timeout=5)
+
+    def claim_fresh_retry_once(self, approval: M06ScopedApproval) -> None:
+        """Atomically burn replay claim before the first real retry GET.
+
+        An existing consumed budget cannot be reused. A crash consumes the
+        claim without allowing an unsafe second attempt.
+        """
+        if approval.approval_id != _RETRY_APPROVAL_ID:
+            raise M06ScopeDenied("M06_RETRY_APPROVAL_REQUIRED")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT 1 FROM m06_go_budget LIMIT 1").fetchone()
+            if row is not None:
+                raise M06ScopeDenied("M06_RETRY_BUDGET_ALREADY_USED")
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_retry_claim (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                approval_id TEXT NOT NULL
+            )""")
+            try:
+                db.execute("INSERT INTO m06_retry_claim VALUES(1, ?)",
+                           (approval.approval_id,))
+            except sqlite3.IntegrityError:
+                raise M06ScopeDenied("M06_RETRY_ALREADY_CLAIMED") from None
 
     def debit(self, approval: M06ScopedApproval, *, api_key: str,
               now_ms: int | None = None) -> int:
@@ -299,10 +322,14 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         raise M06ScopeDenied("M06_LOCAL_LEDGER_PATH_INVALID")
     # With network enabled, the previous GO is categorically ineligible.
     # The 4-GET budget is durable; no repeat run or new manifest can renew it.
-    if _NETWORK_RELEASE_GO and (approval.approval_id != _ONE_SHOT_APPROVAL_ID
-                                or approval.max_requests != 4
-                                or approval.symbol != "injidr"):
+    if _NETWORK_RELEASE_GO and (
+            approval.approval_id not in (_ONE_SHOT_APPROVAL_ID, _RETRY_APPROVAL_ID)
+            or approval.max_requests != 4 or approval.symbol != "injidr"
+            or (_RELEASE_APPROVAL_ID is not None
+                and approval.approval_id != _RELEASE_APPROVAL_ID)):
         raise M06ScopeDenied("M06_NETWORK_RELEASE_SCOPE_DENIED")
+    if _NETWORK_RELEASE_GO and approval.approval_id == _RETRY_APPROVAL_ID:
+        budget.claim_fresh_retry_once(approval)
     def get(path: str, *, symbol: str | None = None, limit: int | None = None):
         now_ms = int(time.time() * 1000)
         # Source and time gated before credentials are used to sign.
