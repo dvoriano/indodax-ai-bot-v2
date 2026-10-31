@@ -25,6 +25,19 @@ Berlaku untuk semua pekerjaan coding AI/agent dalam repository ini.
 - Dilarang menyatakan fitur LIVE jika hanya mock, offline, public VIEW atau read-only. Jaga keamanan credentials, ownership order, dan fail-closed.
 - Jika bot lama dan baru berada di akun Indodax yang sama, hanya satu boleh bertransaksi LIVE tanpa koordinasi saldo/posisi lintas-bot terverifikasi.
 
+## Protokol ANTI-LOOP: wajib sebelum setiap tindakan
+
+Protokol ini mengikat setiap respons implementasi dan handover, termasuk ketika owner berkata "lanjut"/"kerjakan" atau berpindah chat. **Jangan jadikan audit, pemeriksaan ulang, tes, dokumen tambahan, monitoring tambahan, atau staging sebagai pekerjaan utama apabila tidak langsung menutup checklist yang sudah ada.**
+
+1. **Pilih dari item `[ ]` yang SUDAH ADA di Bagian 3 ROADMAP.** Terapkan urutan dependensi owner. Sebelum mengedit kode, mengusulkan perintah VPS, membuat PR, atau memeriksa ulang, tulis singkat: `TARGET: [teks item checklist asli]`; `SUDAH ADA: [bukti PASS/SHA terkait]`; `GAP: [satu syarat acceptance spesifik yang belum terpenuhi]`; `AKSI: [perubahan/deliverable konkret untuk menutup GAP]`. Jika GAP tidak bisa disebut secara spesifik, JANGAN mengulang audit.
+2. **Reuse evidence first, zero-repeat by default.** Baca register bukti Bagian 4, source SHA yang diterima, dan hasil owner sebelumnya. Dilarang meminta ulang command, memeriksa service yang sama, atau menjalankan tes PASS yang sama hanya untuk "memastikan". Pengecualian hanya jika ada perubahan code/config yang memengaruhi acceptance tersebut, bukti sebelumnya kedaluwarsa pada syarat yang eksplisit, atau insiden baru; sebutkan perubahan, tes minimal, dan mengapa bukti lama tidak cukup.
+3. **Kirim implementasi, bukan lingkaran diagnostik.** Untuk gap code/wiring: edit modul asli yang sudah ada, lakukan satu targeted proof pada caller original, lalu catat hasil. Jangan membuat scanner/AI/executor paralel atau lapisan monitoring baru sebagai substitusi. Perintah SSH owner hanya jika ada bukti nyata yang tidak dapat diperoleh dari repo dan benar-benar diperlukan untuk checklist target; singkat, aman ditempel ke shell interaktif, tidak memakai `exit`/`set -e`/`trap` yang bisa mengakhiri sesi. Jangan menyentuh service/secrets di luar scope.
+4. **BLOCKED bukan tugas audit berulang.** Jika item memerlukan izin owner, sumber eksternal, bukti IP-wide, atau syarat yang belum tersedia, tulis `BLOCKED: [dependensi konkret]` sekali. Jangan mengulang item itu sampai dependensi berubah. Kerjakan item `[ ]` lain yang independen sesuai urutan dependensi; jangan menyatakan item terblokir selesai, menghapusnya, atau melonggarkan G1/risk/safety.
+5. **Hitung hanya checklist, bukan jumlah PASS.** Unit test, staging, canary, dan sub-bukti masuk register bukti tanpa membuat `[x]` baru. Hanya centang item yang SUDAH ADA setelah semua acceptance-nya terpenuhi, sehingga `selesai +1` dan `terbuka -1`. Jangan mengubah definisi atau membuat item baru tanpa persetujuan eksplisit owner. Jika belum selesai, angka tidak berubah.
+6. **Laporkan hanya delta kerja:** target item, kode/wiring yang sungguh berubah, bukti baru (atau "belum"), blocking condition, dan satu next action yang mengarah pada penyelesaian item `[ ]`. Jangan memaparkan ulang cerita seluruh M03/M04 setiap giliran. Jangan mengklaim implementasi kalau baru memeriksa kode.
+
+Jika jawaban yang akan diberikan justru mengulang tes PASS, membuat side-feature, atau meminta command inspeksi yang sudah pernah berhasil tanpa kondisi baru, **batalkan langkah itu dan kembali ke item target**. Keamanan trading, izin owner, dan gate G1 tetap tidak boleh dilompati.
+
 ## Cara melaporkan pekerjaan
 **Milestone → file/fungsi yang berubah → jalur runtime yang tersambung → tes/hasil → status sebenarnya → next action.** Maksimal satu langkah berikutnya, tanpa mengulang laporan lama.
 
