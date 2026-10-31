@@ -103,11 +103,11 @@
 - [ ] Selesai
 
 ### M06-01 · Authenticated Indodax **private read-only** balance/orders/fills under explicit scoped GO.
-- [ ] Kode
-- [ ] Audit
-- [ ] Terhubung bot
-- [ ] Deploy
-- [ ] Selesai
+- [x] Kode. One-shot scoped signed V2 read-only source in [PR#29](https://github.com/dvoriano/indodax-ai-bot-v2/pull/29), pinned observed SHA `f21d9224638f9646c17a6b4c34059d4a1d2b383e`, 4 GET only, no executor.
+- [x] Audit. Owner previously supplied **23/23 offline PASS**; 2026-11-01 WIB owner VPS provided **REAL VIEW ONLY** result `M06_VIEW_ONLY_RECONCILED_REJECT`, `view_only_permissions_verified=true`, `execution_allowed=false`; no raw private data published. This is a bounded session, not full history or capital trust.
+- [x] Terhubung bot. Original V2 CLI `--m06-private-readonly-once` → `DailyScalpingOrchestrator` → signed 4-GET account/openOrders/injidr order-history/injidr myTrades → reconciler and journal; owner output `M06_VIEW_ONLY_COMPLETED`. Observed open_orders_count=0, order_history_count=0, fills_count=0 for the defined scope; `history_complete=false`.
+- [ ] Deploy. Successful foreground detached-worktree probe **is not** merged source or installed original V2 service/one-release deployment.
+- [ ] Selesai. Capital spendability, local rebuy ownership, account-wide history, bot-owned fills and cross-bot attribution remain unverified; M06-02 to -05 open.
 
 ### M06-02 · Verify fresh free IDR minus locked/unsettled commitment; atomic reserve, avoid double-spend.
 - [ ] Kode
