@@ -11,6 +11,7 @@ from .m06_shadow_account import AccountObservation, M06ShadowCapital, _amount
 from .m06_private_payloads import AccountBalances, OrderRecord, FillRecord
 from .m06_capital_reconcile import reconcile_unverified_capital
 from .m06_source_consistency import inspect_cross_source_consistency
+from .m06_ownership_ledger import ProtectedRebuyReview
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,9 @@ class M06ReadOnlyReconciliation:
     matched_fills_in_window: int
     unmatched_fills_in_window: int
     flo_pepe_holdings_unattributed: bool
+    local_ledger_account_bound: bool = False
+    local_rebuy_hold_present: bool = False
+    local_manual_floor_present: bool = False
     protected_rebuy_ledger_verified: bool = False
     manual_asset_ownership_verified: bool = False
     account_wide_order_history_complete: bool = False
@@ -71,7 +75,8 @@ class M06ReadOnlyReconciliation:
 def reconcile_readonly_private_snapshot(*, account: AccountBalances,
         open_orders: tuple[OrderRecord, ...],
         order_history: tuple[OrderRecord, ...],
-        fills: tuple[FillRecord, ...], symbol: str) -> M06ReadOnlyReconciliation:
+        fills: tuple[FillRecord, ...], symbol: str,
+        local_rebuy: ProtectedRebuyReview | None = None) -> M06ReadOnlyReconciliation:
     """Join four parsed endpoints through existing M06 policy/consistency.
 
     No locally certified rebuy ledger, account-wide history or cross-bot
@@ -89,6 +94,25 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
     )
     if any(type(order) is not OrderRecord for order in open_orders):
         raise ValueError("M06_ACCOUNT_RECONCILIATION_ORDER_INVALID")
+    if local_rebuy is not None:
+        if (type(local_rebuy) is not ProtectedRebuyReview
+                or local_rebuy.exchange_proceeds_verified is not False
+                or local_rebuy.manual_holding_verified is not False
+                or local_rebuy.execution_allowed is not False
+                or local_rebuy.rebuy_spending_allowed is not False
+                or local_rebuy.main_capital_spending_allowed is not False):
+            raise ValueError("M06_LOCAL_REBUY_AUTHORITY_FORGED")
+        for number in (
+                local_rebuy.floki_idr_local_protected,
+                local_rebuy.pepe_idr_local_protected,
+                local_rebuy.total_idr_local_protected,
+                local_rebuy.floki_manual_qty_local_floor,
+                local_rebuy.pepe_manual_qty_local_floor):
+            _amount(number)
+        if (local_rebuy.floki_idr_local_protected
+                + local_rebuy.pepe_idr_local_protected
+                != local_rebuy.total_idr_local_protected):
+            raise ValueError("M06_LOCAL_REBUY_TOTAL_CONFLICT")
     pending_buy = sum(1 for order in open_orders
                       if order.side == "BUY"
                       and order.executed_qty < order.original_qty)
@@ -98,7 +122,9 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
     # all-pair commitment evidence is incomplete.
     calculated = reconcile_unverified_capital(
         account=account, open_orders=open_orders,
-        rebuy_idr=Decimal("0"), unlocked_commitments_idr=Decimal("0"),
+        rebuy_idr=(local_rebuy.total_idr_local_protected
+                   if local_rebuy is not None else Decimal("0")),
+        unlocked_commitments_idr=Decimal("0"),
         local_shadow_idr=Decimal("0"),
         all_pairs_open_orders_complete=False,
     )
@@ -118,4 +144,10 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
         matched_fills_in_window=consistency.matched_fill_count,
         unmatched_fills_in_window=consistency.unmatched_fill_count,
         flo_pepe_holdings_unattributed=special_unknown,
+        local_ledger_account_bound=local_rebuy is not None,
+        local_rebuy_hold_present=(local_rebuy is not None
+            and local_rebuy.total_idr_local_protected > 0),
+        local_manual_floor_present=(local_rebuy is not None
+            and (local_rebuy.floki_manual_qty_local_floor > 0
+                 or local_rebuy.pepe_manual_qty_local_floor > 0)),
     )
