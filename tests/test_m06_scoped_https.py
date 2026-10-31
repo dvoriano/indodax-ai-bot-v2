@@ -225,6 +225,94 @@ class M06PrivateGOTests(unittest.TestCase):
                     budget=M06RequestBudget(self.db),
                     api_key="fixture-key", secret_key="fixture-secret")
 
+    def test_fresh_one_shot_go_is_exact_four_gets_and_inj_idr(self):
+        self.assertEqual(
+            self.approval.symbol, "injidr")
+        from indodax_ai_bot.m06_scoped_https import read_approval
+        base = {
+            "approval_id": "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031",
+            "issued_ms": self.now - 1000,
+            "expires_ms": self.now + 899000,
+            "max_requests": 4,
+            "symbol": "injidr",
+        }
+        path = self._private_file("new-approval.json", base)
+        accepted = read_approval(path, now_ms=self.now)
+        self.assertEqual(accepted.max_requests, 4)
+        for changed in ({"max_requests": 20}, {"symbol": "btcidr"},
+                        {"expires_ms": self.now + 901000}):
+            payload = {**base, **changed}
+            name = "bad-" + str(len(str(changed))) + "-" + str(list(changed))
+            path = self._private_file(name + ".json", payload)
+            with self.assertRaises(M06ScopeDenied):
+                read_approval(path, now_ms=self.now)
+
+    def test_live_release_rejects_old_approval_before_debit(self):
+        with patch("indodax_ai_bot.m06_scoped_https._NETWORK_RELEASE_GO", True):
+            with patch("indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls") as network:
+                with self.assertRaisesRegex(
+                        M06ScopeDenied, "NETWORK_RELEASE_SCOPE_DENIED"):
+                    run_scoped_private_probe(
+                        approval=self.approval,
+                        budget=M06RequestBudget(self.db),
+                        api_key="fixture-key", secret_key="fixture-secret")
+                network.assert_not_called()
+        with M06RequestBudget(self.db)._connect() as db:
+            self.assertIsNone(db.execute(
+                "SELECT consumed FROM m06_go_budget WHERE singleton=1"
+            ).fetchone())
+
+    def test_activated_direct_https_without_debit_is_blocked(self):
+        prepared = prepare_signed_get(
+            path="/api/v2/account",
+            api_key="fixture-key", secret_key="fixture-secret",
+            timestamp_ms=self.now,
+        )
+        with patch("indodax_ai_bot.m06_scoped_https._NETWORK_RELEASE_GO", True):
+            with patch("indodax_ai_bot.m06_scoped_https.http.client.HTTPSConnection") as https:
+                with self.assertRaisesRegex(
+                        M06ScopeDenied, "WITHOUT_ATOMIC_BUDGET"):
+                    _read_json_over_verified_tls(prepared)
+                https.assert_not_called()
+
+    def test_one_shot_account_first_four_gets_exhausts_budget_forever(self):
+        approval = M06ScopedApproval(
+            "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031",
+            self.now - 1000, self.now + 899000, 4, "injidr",
+        )
+        rows = {
+            "/api/v2/account": {
+                "uid": 987, "canTrade": False, "canWithdraw": False,
+                "canWithdrawFiat": False,
+                "balances": [{"asset": "IDR", "free": "0", "locked": "0"}],
+            },
+            "/api/v2/openOrders": [],
+            "/api/v2/order/histories": {"data": []},
+            "/api/v2/myTrades": {"data": []},
+        }
+        seen = []
+        with patch("indodax_ai_bot.m06_scoped_https._NETWORK_RELEASE_GO", True):
+            with patch("indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
+                       side_effect=lambda request: (
+                           seen.append(request.path), rows[request.path]
+                       )[1]):
+                review = run_scoped_private_probe(
+                    approval=approval,
+                    budget=M06RequestBudget(self.db),
+                    api_key="fixture-key", secret_key="fixture-secret",
+                )
+                self.assertFalse(review.execution_allowed)
+                self.assertFalse(review.history_complete)
+                self.assertEqual(len(seen), 4)
+                with self.assertRaisesRegex(
+                        M06ScopeDenied, "QUOTA_EXHAUSTED"):
+                    run_scoped_private_probe(
+                        approval=approval,
+                        budget=M06RequestBudget(self.db),
+                        api_key="fixture-key", secret_key="fixture-secret",
+                    )
+                self.assertEqual(len(seen), 4)
+
     def test_unapproved_route_cannot_hit_https(self):
         with self.assertRaisesRegex(M06ScopeDenied, "ROUTE_DENIED"):
             _read_json_over_verified_tls(object())
