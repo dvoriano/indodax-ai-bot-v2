@@ -25,6 +25,7 @@ from .m06_signed_readonly import PreparedPrivateGET, prepare_signed_get
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .m06_source_consistency import inspect_cross_source_consistency
 from .m06_account_review import reconcile_readonly_private_snapshot
+from .m06_ownership_ledger import M06OwnershipLedger, OwnershipConflict
 
 _HOST = "api.indodax.com"
 _APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"
@@ -64,6 +65,9 @@ class M06PrivateProbeResult:
     pending_buy_orders: int = 0
     unmatched_fills_in_window: int = 0
     special_asset_ownership_verified: bool = False
+    local_ledger_account_bound: bool = False
+    local_rebuy_hold_present: bool = False
+    local_manual_floor_present: bool = False
     history_complete: bool = False
     cross_bot_ownership_verified: bool = False
     bot_owned_fills_verified: bool = False
@@ -269,7 +273,8 @@ def _validate_all_pair_orders(payload: object) -> tuple:
 
 
 def run_scoped_private_probe(*, approval: M06ScopedApproval,
-        budget: M06RequestBudget, api_key: str, secret_key: str) -> M06PrivateProbeResult:
+        budget: M06RequestBudget, api_key: str, secret_key: str,
+        local_ownership_db: str | None = None) -> M06PrivateProbeResult:
     """One session: account then all-pair orders then pair-specific histories.
 
     No raw balances, UID, fills or secrets are returned by this function.
@@ -278,6 +283,8 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
     if (type(approval) is not M06ScopedApproval or type(budget) is not M06RequestBudget
             or type(api_key) is not str or type(secret_key) is not str):
         raise M06ScopeDenied("M06_PROBE_CONTRACT_INVALID")
+    if local_ownership_db is not None and type(local_ownership_db) is not str:
+        raise M06ScopeDenied("M06_LOCAL_LEDGER_PATH_INVALID")
     def get(path: str, *, symbol: str | None = None, limit: int | None = None):
         now_ms = int(time.time() * 1000)
         # Source and time gated before credentials are used to sign.
@@ -298,6 +305,18 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         account_raw = get("/api/v2/account")
         enforce_view_only_permissions(account_raw)
         account = parse_account(account_raw)
+        local_rebuy = None
+        if local_ownership_db is not None:
+            # Only the UID returned by this private account response may
+            # select a LOCAL ledger partition. No user-supplied account label.
+            # A missing/insecure/uninitialized ledger is not a permissions
+            # failure and never promotes the observed balance into authority.
+            try:
+                local_rebuy = M06OwnershipLedger.inspect_existing_account_readonly(
+                    db_path=local_ownership_db, account_uid=account.uid,
+                )
+            except OwnershipConflict:
+                local_rebuy = None
         all_orders = _validate_all_pair_orders(get("/api/v2/openOrders"))
         order_history = parse_orders(
             get("/api/v2/order/histories", symbol=approval.symbol, limit=1000),
@@ -312,7 +331,7 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         capital_review = reconcile_readonly_private_snapshot(
             account=account, open_orders=all_orders,
             order_history=order_history, fills=fills,
-            symbol=approval.symbol,
+            symbol=approval.symbol, local_rebuy=local_rebuy,
         )
     except (M06PayloadError, M06ConsistencyBlocked,
             M06ReconciliationBlocked, ValueError):
@@ -335,4 +354,7 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         pending_buy_orders=capital_review.pending_buy_orders,
         unmatched_fills_in_window=capital_review.unmatched_fills_in_window,
         special_asset_ownership_verified=capital_review.manual_asset_ownership_verified,
+        local_ledger_account_bound=capital_review.local_ledger_account_bound,
+        local_rebuy_hold_present=capital_review.local_rebuy_hold_present,
+        local_manual_floor_present=capital_review.local_manual_floor_present,
     )
