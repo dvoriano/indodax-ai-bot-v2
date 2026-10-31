@@ -14,6 +14,8 @@ from indodax_ai_bot.config import Settings
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from indodax_ai_bot.m06_shadow_account import AccountObservation
+from indodax_ai_bot.m06_ownership_ledger import M06OwnershipLedger
+from indodax_ai_bot.m06_private_payloads import OrderRecord, FillRecord
 
 
 class M06OriginalMainpathTests(unittest.TestCase):
@@ -36,6 +38,26 @@ class M06OriginalMainpathTests(unittest.TestCase):
                 row=db.execute("SELECT final_decision, reason FROM decisions WHERE trace_id=?",
                      ("M06_ACCOUNT_READONLY_NO_GO",)).fetchone()
             self.assertEqual(row,("REJECT","M06_PRIVATE_ACCOUNT_GO_ABSENT"))
+
+    def test_original_orchestrator_ownership_restart_remains_unverified(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/"ownership.sqlite3"
+            M06OwnershipLedger(path).record_local_intent(
+                account_key="account",order_id="id1",client_id="v2-1",
+                symbol="btcidr",side="BUY")
+            order=OrderRecord("id1","btcidr","BUY","FILLED",
+                Decimal("1"),Decimal("1"),"v2-1")
+            fill=FillRecord("t1","id1","btcidr",
+                Decimal("1"),Decimal("100"),Decimal("1"))
+            for _ in range(2):
+                bot=DailyScalpingOrchestrator(Settings(),DecisionJournal(
+                    Path(td)/"decisions.sqlite3"))
+                review=bot.review_m06_local_intent_ownership(
+                    db_path=str(path),account_key="account",
+                    order=order,fills=(fill,))
+                self.assertTrue(review.account_match)
+                self.assertFalse(review.bot_owned_verified)
+                self.assertFalse(review.execution_allowed)
 
     def test_original_orchestrator_parses_official_v2_fixtures_without_trusting_them(self):
         with tempfile.TemporaryDirectory() as td:
