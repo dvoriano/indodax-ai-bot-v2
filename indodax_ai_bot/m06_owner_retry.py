@@ -5,7 +5,7 @@ engine, no automatic retry, no raw balances or credentials in stdout.
 """
 from __future__ import annotations
 
-import getpass
+import termios
 import json
 import os
 from pathlib import Path
@@ -33,6 +33,47 @@ def _private_json(path: Path, data: dict) -> None:
         json.dump(data, f)
 
 
+
+def _read_connectbot_secret(label: str) -> str:
+    """Read from controlling TTY with remote echo disabled.
+
+    Unlike getpass(), print a visible READY marker on stdout first because
+    Android SSH clients may not show a /dev/tty prompt reliably.
+    """
+    if type(label) is not str:
+        raise ValueError("M06_TERMINAL_LABEL_INVALID")
+    fd = os.open("/dev/tty", os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+    try:
+        original = termios.tcgetattr(fd)
+        hidden = original.copy()
+        hidden[6] = original[6][:]
+        hidden[3] &= ~(termios.ECHO | termios.ECHONL)
+        termios.tcsetattr(fd, termios.TCSAFLUSH, hidden)
+        try:
+            current = termios.tcgetattr(fd)
+            if current[3] & (termios.ECHO | termios.ECHONL):
+                raise ValueError("M06_TERMINAL_ECHO_NOT_DISABLED")
+            print(label + ": PASTE SATU NILAI, LALU TEKAN ENTER", flush=True)
+            raw = bytearray()
+            while True:
+                char = os.read(fd, 1)
+                if not char:
+                    raise EOFError()
+                if char in (b"\\n", b"\\r"):
+                    break
+                if len(raw) >= 256:
+                    raise ValueError("M06_CREDENTIAL_TOO_LONG")
+                raw.extend(char)
+            print("M06_INPUT_RECEIVED", flush=True)
+            try:
+                return raw.decode("ascii", "strict")
+            finally:
+                raw[:] = b"\\x00" * len(raw)
+        finally:
+            termios.tcsetattr(fd, termios.TCSAFLUSH, original)
+    finally:
+        os.close(fd)
+
 def main() -> int:
     if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") != _RETRY:
         print("M06_RETRY_OWNER_GO_REQUIRED", file=sys.stderr)
@@ -49,13 +90,13 @@ def main() -> int:
         print("M06_RETRY_REQUIRES_INTERACTIVE_TERMINAL", file=sys.stderr)
         return 3
 
-    print("M06: ketik/tempel API Key View Only, lalu ENTER.")
-    print("Input tersembunyi (tidak tampil). Jangan tempel kode atau JSON.")
+    print("M06: gunakan API Key BARU (key di screenshot sebelumnya harus dicabut).", flush=True)
+    print("Input tersembunyi di sisi server. Jangan paste script atau JSON.", flush=True)
     try:
-        api_key = getpass.getpass("API Key View Only: ")
-        secret_key = getpass.getpass("Secret Key View Only: ")
-    except (EOFError, KeyboardInterrupt):
-        print("M06_RETRY_INPUT_CANCELLED", file=sys.stderr)
+        api_key = _read_connectbot_secret("LANGKAH 1/2 API KEY VIEW ONLY")
+        secret_key = _read_connectbot_secret("LANGKAH 2/2 SECRET KEY VIEW ONLY")
+    except (EOFError, KeyboardInterrupt, OSError, ValueError, termios.error):
+        print("M06_RETRY_INPUT_CANCELLED_OR_TERMINAL_UNSAFE", file=sys.stderr)
         return 3
     if not _valid_secret(api_key) or not _valid_secret(secret_key):
         print("M06_RETRY_CREDENTIAL_FORMAT_INVALID", file=sys.stderr)
