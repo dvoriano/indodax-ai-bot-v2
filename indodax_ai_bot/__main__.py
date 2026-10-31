@@ -159,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
                 orchestrator = DailyScalpingOrchestrator(settings, journal)
                 result = orchestrator.inspect_m06_private_readonly_once(
                     approval=approval, budget=budget,
-                    api_key=api_key, secret_key=secret_key)
+                    api_key=api_key, secret_key=secret_key,
+                    local_ownership_db=args.db)
                 journal.record_reject("M06_PRIVATE_READONLY_" + uuid4().hex,
                                       result.status)
             except M06ScopeDenied as exc:
@@ -176,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
                 "protected_rebuy_verified":result.protected_rebuy_verified,
                 "special_asset_ownership_verified":
                     result.special_asset_ownership_verified,
+                "local_ledger_account_bound":result.local_ledger_account_bound,
+                "local_rebuy_hold_present":result.local_rebuy_hold_present,
+                "local_manual_floor_present":result.local_manual_floor_present,
                 "pending_buy_orders":result.pending_buy_orders,
                 "unmatched_fills_in_window":result.unmatched_fills_in_window,
                 "open_orders_count":result.open_orders_count,
