@@ -77,7 +77,15 @@ test -f "$RELEASE/indodax_ai_bot/btc_ops_gate.py"
 test -f "$RELEASE/deploy/indodax-v2-public-ws-btc.capped-dropin.conf"
 test -f "$RELEASE/deploy/$TIMER"
 
-echo "===== 3. SOURCE CONFIG SCOPE ====="
+echo "===== 3. NEW M10 SYSTEMD-GATE REGRESSION ====="
+(
+  cd "$RELEASE"
+  "$ROOT/.venv/bin/python" -B -m unittest discover \
+    -s tests -p 'test_m10_btc_capped_ops.py' -v
+)
+echo "M10_STAGING_SCOPED_TESTS_PASS"
+
+echo "===== 4. SOURCE CONFIG SCOPE ====="
 test "$(git -C "$RELEASE" rev-parse HEAD)" = "$PIN"
 test "$(systemctl --user show "$SERVICE" -p MainPID --value)" = 0
 read -r -p "Ketik STAGE_M10_NONACTIVE (tidak ada service start): " CONFIRM </dev/tty
@@ -86,7 +94,7 @@ if [[ "$CONFIRM" != STAGE_M10_NONACTIVE ]]; then
   exit 0
 fi
 
-echo "===== 4. STAGE OPERATOR GATE AND TIMER DISABLED ====="
+echo "===== 5. STAGE OPERATOR GATE AND TIMER DISABLED ====="
 mkdir -m 700 "$DROPIN_DIR"
 cp "$RELEASE/deploy/indodax-v2-public-ws-btc.capped-dropin.conf" "$DROPIN"
 DROPIN_CREATED=1
@@ -96,7 +104,7 @@ TIMER_CREATED=1
 chmod 600 "$TIMER_INSTALLED"
 systemctl --user daemon-reload
 
-echo "===== 5. FAIL CLOSED / NO GO ====="
+echo "===== 6. FAIL CLOSED / NO GO ====="
 test "$(systemctl --user show "$SERVICE" -p Restart --value)" = no
 test "$(systemctl --user show "$SERVICE" -p MainPID --value)" = 0
 test "$(systemctl --user show "$SERVICE" -p DropInPaths --value)" = "$DROPIN"
