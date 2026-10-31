@@ -7,6 +7,7 @@ The original orchestrator may invoke it only through its separate CLI option.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import http.client
 import json
@@ -37,6 +38,8 @@ _NETWORK_RELEASE_GO = (
     os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") == _ONE_SHOT_APPROVAL_ID
 )
 _SYMBOL = re.compile(r"^[a-z0-9]{2,24}idr$")
+# No direct signed GET may bypass a debit through the one-shot budget.
+_BUDGET_DEBITED_FOR_THIS_GET = contextvars.ContextVar("m06_one_shot_debited", default=False)
 
 
 class M06ScopeDenied(M06ReadOnlyBlocked):
@@ -227,6 +230,8 @@ def _read_json_over_verified_tls(request: PreparedPrivateGET) -> Any:
     # a real HTTPS request. Mocked offline tests replace this function entirely.
     if not _NETWORK_RELEASE_GO:
         raise M06ScopeDenied("M06_PRIVATE_GO_REQUIRES_NEW_RELEASE")
+    if _BUDGET_DEBITED_FOR_THIS_GET.get() is not True:
+        raise M06ScopeDenied("M06_GET_WITHOUT_ATOMIC_BUDGET_DENIED")
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     conn = http.client.HTTPSConnection(_HOST, port=443, timeout=5, context=context)
@@ -306,7 +311,11 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
             path=path, api_key=api_key, secret_key=secret_key,
             timestamp_ms=now_ms, symbol=symbol, limit=limit,
         )
-        return _read_json_over_verified_tls(prepared)
+        guard = _BUDGET_DEBITED_FOR_THIS_GET.set(True)
+        try:
+            return _read_json_over_verified_tls(prepared)
+        finally:
+            _BUDGET_DEBITED_FOR_THIS_GET.reset(guard)
 
     # The private API offers account observations, not unrestricted capital
     # permission. All four reads join the original M06 capital/ownership
