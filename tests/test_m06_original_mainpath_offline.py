@@ -37,6 +37,27 @@ class M06OriginalMainpathTests(unittest.TestCase):
                      ("M06_ACCOUNT_READONLY_NO_GO",)).fetchone()
             self.assertEqual(row,("REJECT","M06_PRIVATE_ACCOUNT_GO_ABSENT"))
 
+    def test_original_orchestrator_parses_official_v2_fixtures_without_trusting_them(self):
+        with tempfile.TemporaryDirectory() as td:
+            bot=DailyScalpingOrchestrator(Settings(),DecisionJournal(
+                Path(td)/"decisions.sqlite3"))
+            out=bot.inspect_m06_offline_private_fixtures(
+                account_payload={"uid":123,"balances":[
+                    {"asset":"IDR","free":"100000","locked":"10000"}]},
+                open_orders_payload=[{"orderId":12,"symbol":"BTCIDR",
+                    "side":"BUY","status":"NEW","origQty":"1","executedQty":"0"}],
+                orders_payload={"data":[{"orderId":"btcidr-limit-12",
+                    "symbol":"btcidr","side":"BUY","status":"FILLED",
+                    "oriQty":"1","executedQty":"1"}]},
+                fills_payload={"data":[{"tradeId":"1234","orderId":"btcidr-limit-12",
+                    "symbol":"btcidr","qty":"1","price":"10000","commission":"30"}]},
+                symbol="btcidr",now_epoch=1000)
+            self.assertEqual(out["status"],"REJECT")
+            self.assertEqual(out["fills_seen"],1)
+            self.assertFalse(out["bot_ownership_verified"])
+            self.assertFalse(out["account_authenticated"])
+            self.assertFalse(out["execution_allowed"])
+
     def test_original_orchestrator_untrusted_balance_does_not_grant_authority(self):
         with tempfile.TemporaryDirectory() as td:
             orchestrator=DailyScalpingOrchestrator(Settings(),DecisionJournal(
