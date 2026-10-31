@@ -2,7 +2,7 @@
 import unittest
 from decimal import Decimal
 from indodax_ai_bot.m06_private_payloads import (
-    parse_account, parse_orders, parse_fills, M06PayloadError,
+    parse_account, parse_orders, parse_fills, parse_open_orders, M06PayloadError,
 )
 
 
@@ -31,6 +31,18 @@ class M06PrivatePayloadTests(unittest.TestCase):
         out=parse_fills(rows,expected_symbol="btcidr")
         self.assertEqual(out[0].trade_id,"72057594037936570")
         self.assertFalse(out[0].bot_owned_verified)
+
+    def test_open_orders_direct_list_and_scope_rejection(self):
+        rows=[{"orderId":6423,"clientOrderId":"manual-id",
+            "symbol":"BTCIDR","side":"SELL","status":"NEW",
+            "origQty":"0.02","executedQty":"0"}]
+        out=parse_open_orders(rows,expected_symbol="btcidr")
+        self.assertEqual(out[0].order_id,"6423")
+        self.assertFalse(out[0].bot_owned_verified)
+        with self.assertRaises(M06PayloadError):
+            parse_open_orders(rows)
+        with self.assertRaises(M06PayloadError):
+            parse_open_orders({"data":rows},expected_symbol="btcidr")
 
     def test_error_duplicates_negative_and_overfilled_fail_closed(self):
         invalid=[
