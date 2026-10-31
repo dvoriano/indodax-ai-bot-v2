@@ -60,6 +60,9 @@ def main() -> int:
     if not _valid_secret(api_key) or not _valid_secret(secret_key):
         print("M06_RETRY_CREDENTIAL_FORMAT_INVALID", file=sys.stderr)
         return 3
+    if api_key == secret_key:
+        print("M06_KEY_AND_SECRET_IDENTICAL_STOP", file=sys.stderr)
+        return 3
 
     try:
         with tempfile.TemporaryDirectory(prefix="v2-m06-retry-") as td:
