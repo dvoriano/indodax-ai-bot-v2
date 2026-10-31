@@ -313,6 +313,92 @@ class M06PrivateGOTests(unittest.TestCase):
                     )
                 self.assertEqual(len(seen), 4)
 
+    def test_new_retry_uses_fresh_claim_not_partial_original_quota(self):
+        approval = M06ScopedApproval(
+            "M06_PRIVATE_VIEW_ONLY_RETRY_20261031",
+            self.now - 1000, self.now + 899000, 4, "injidr",
+        )
+        source = {
+            "/api/v2/account": {
+                "uid": 987, "canTrade": False,
+                "canWithdraw": False, "canWithdrawFiat": False,
+                "balances": [{"asset": "IDR", "free": "100", "locked": "0"}],
+            },
+            "/api/v2/openOrders": [],
+            "/api/v2/order/histories": {"data": []},
+            "/api/v2/myTrades": {"data": []},
+        }
+        visited = []
+        with patch("indodax_ai_bot.m06_scoped_https._NETWORK_RELEASE_GO", True):
+            with patch("indodax_ai_bot.m06_scoped_https._RELEASE_APPROVAL_ID",
+                       approval.approval_id):
+                with patch(
+                    "indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
+                    side_effect=lambda req: (
+                        visited.append(req.path), source[req.path]
+                    )[1],
+                ):
+                    result = run_scoped_private_probe(
+                        approval=approval, budget=M06RequestBudget(self.db),
+                        api_key="fixture-key", secret_key="fixture-secret",
+                    )
+                    self.assertEqual(result.request_count_this_run, 4)
+                    self.assertFalse(result.execution_allowed)
+                    self.assertEqual(len(visited), 4)
+                    with self.assertRaisesRegex(
+                            M06ScopeDenied, "RETRY_BUDGET_ALREADY_USED"):
+                        run_scoped_private_probe(
+                            approval=approval,
+                            budget=M06RequestBudget(self.db),
+                            api_key="fixture-key", secret_key="fixture-secret",
+                        )
+                    self.assertEqual(len(visited), 4)
+
+    def test_retry_rejects_previously_consumed_budget_before_https(self):
+        legacy = M06ScopedApproval(
+            "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031",
+            self.now - 1000, self.now + 899000, 4, "injidr",
+        )
+        M06RequestBudget(self.db).debit(
+            legacy, api_key="fixture-key", now_ms=self.now,
+        )
+        retry = M06ScopedApproval(
+            "M06_PRIVATE_VIEW_ONLY_RETRY_20261031",
+            self.now - 1000, self.now + 899000, 4, "injidr",
+        )
+        with patch("indodax_ai_bot.m06_scoped_https._NETWORK_RELEASE_GO", True):
+            with patch("indodax_ai_bot.m06_scoped_https._RELEASE_APPROVAL_ID",
+                       retry.approval_id):
+                with patch(
+                    "indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls"
+                ) as network:
+                    with self.assertRaisesRegex(
+                            M06ScopeDenied, "RETRY_BUDGET_ALREADY_USED"):
+                        run_scoped_private_probe(
+                            approval=retry, budget=M06RequestBudget(self.db),
+                            api_key="fixture-key", secret_key="fixture-secret",
+                        )
+                    network.assert_not_called()
+
+    def test_retry_release_does_not_accept_previous_one_shot(self):
+        old = M06ScopedApproval(
+            "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031",
+            self.now - 1000, self.now + 899000, 4, "injidr",
+        )
+        with patch("indodax_ai_bot.m06_scoped_https._NETWORK_RELEASE_GO", True):
+            with patch("indodax_ai_bot.m06_scoped_https._RELEASE_APPROVAL_ID",
+                       "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"):
+                with patch(
+                    "indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls"
+                ) as network:
+                    with self.assertRaisesRegex(
+                            M06ScopeDenied, "NETWORK_RELEASE_SCOPE_DENIED"):
+                        run_scoped_private_probe(
+                            approval=old, budget=M06RequestBudget(self.db),
+                            api_key="fixture-key", secret_key="fixture-secret",
+                        )
+                    network.assert_not_called()
+
     def test_unapproved_route_cannot_hit_https(self):
         with self.assertRaisesRegex(M06ScopeDenied, "ROUTE_DENIED"):
             _read_json_over_verified_tls(object())
