@@ -187,6 +187,60 @@ class M06ProtectedRebuyOriginalTests(unittest.TestCase):
         self.assertEqual(self.ledger.review_protected_rebuy(
             account_key="a").distinct_sell_fills, 0)
 
+    def test_manual_asset_floors_survive_restart_without_lowering(self):
+        status = self.ledger.protect_manual_asset_floor(
+            account_key="account-a", asset="FLOKI",
+            minimum_qty=Decimal("750000"),
+        )
+        self.assertEqual(status.floki_manual_qty_local_floor, Decimal("750000"))
+        self.assertFalse(status.manual_holding_verified)
+        self.assertFalse(status.execution_allowed)
+        restart = M06OwnershipLedger(self.path)
+        self.assertEqual(restart.review_protected_rebuy(
+            account_key="account-a").floki_manual_qty_local_floor,
+            Decimal("750000"))
+        with self.assertRaisesRegex(OwnershipConflict, "REDUCTION_DENIED"):
+            restart.protect_manual_asset_floor(
+                account_key="account-a", asset="FLOKI",
+                minimum_qty=Decimal("749999"),
+            )
+        increased = restart.protect_manual_asset_floor(
+            account_key="account-a", asset="FLOKI",
+            minimum_qty=Decimal("800000"))
+        self.assertEqual(increased.floki_manual_qty_local_floor,
+                         Decimal("800000"))
+        pepe = restart.protect_manual_asset_floor(
+            account_key="account-a", asset="PEPE",
+            minimum_qty=Decimal("200000"))
+        self.assertEqual(pepe.pepe_manual_qty_local_floor, Decimal("200000"))
+        self.assertEqual(restart.review_protected_rebuy(
+            account_key="other-account").floki_manual_qty_local_floor,
+            Decimal("0"))
+        self.assertFalse(pepe.manual_holding_verified)
+
+    def test_original_orchestrator_manual_floor_and_restart(self):
+        with tempfile.TemporaryDirectory() as td:
+            bot = DailyScalpingOrchestrator(
+                Settings(), DecisionJournal(Path(td) / "journal.sqlite3"))
+            protected = bot.protect_m06_manual_holding_floor_offline(
+                db_path=str(self.path), account_key="owner-a",
+                asset="FLOKI", minimum_qty=Decimal("750"),
+            )
+            self.assertEqual(protected.floki_manual_qty_local_floor,
+                             Decimal("750"))
+            restarted = DailyScalpingOrchestrator(
+                Settings(), DecisionJournal(Path(td) / "journal.sqlite3"))
+            persisted = restarted.review_m06_protected_rebuy_offline(
+                db_path=str(self.path), account_key="owner-a")
+            self.assertEqual(persisted.floki_manual_qty_local_floor,
+                             Decimal("750"))
+            self.assertFalse(persisted.execution_allowed)
+            with self.assertRaisesRegex(OwnershipConflict, "REDUCTION_DENIED"):
+                restarted.protect_m06_manual_holding_floor_offline(
+                    db_path=str(self.path), account_key="owner-a",
+                    asset="FLOKI", minimum_qty=Decimal("749"),
+                )
+
     def test_original_orchestrator_uses_same_rebuy_ledger_for_capital_reject(self):
         self.intent("v2-account", "FLOKI", "SELL", "sell-f", "v2-f")
         with tempfile.TemporaryDirectory() as td:
