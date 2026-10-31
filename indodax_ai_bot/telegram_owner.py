@@ -15,6 +15,17 @@ _PUBLIC_HEALTH_STATES = frozenset((
     "HEALTHY_LAST_BATCH_UNATTESTED", "COLLECTING_UNATTESTED", "ALERT_REVIEW",
 ))
 _PUBLIC_REASON = re.compile(r"^[A-Z][A-Z0-9_]{0,80}$")
+_PUBLIC_ALERT_REASONS = frozenset((
+    "PUBLIC_BTC_HEALTH_UNAVAILABLE", "SYSTEMD_UNAVAILABLE",
+    "SYSTEMD_INVALID", "SYSTEMD_INCOMPLETE", "SYSTEMD_NOT_LOADED",
+    "M10_TIMER_OR_RESTART_UNSAFE", "M10_SERVICE_FAILURE",
+    "M10_OPERATOR_HOLD", "M10_PUBLIC_GO_SCOPE_UNSAFE",
+    "M10_PUBLIC_GO_INVALID", "M10_PUBLIC_GO_EXPIRED",
+    "M10_PUBLIC_GAP_BUDGET_EXCEEDED", "M10_PUBLIC_SIDECAR_UNSAFE",
+    "M10_PUBLIC_BATCH_CLOCK_INVALID", "M10_PUBLIC_LAST_BATCH_STALE",
+    "JOURNAL_MISSING", "JOURNAL_INVALID", "UNSAFE_PRIVATE_FILE",
+    "OVERSIZED_PRIVATE_FILE", "INVALID_PRIVATE_JSON", "INVALID_TIME",
+))
 
 
 def _btc_owner_health_text(document: Any) -> str:
@@ -42,6 +53,8 @@ def _btc_owner_health_text(document: Any) -> str:
     if not isinstance(reason, str) or not _PUBLIC_REASON.fullmatch(reason):
         return fallback
     if state == "ALERT_REVIEW":
+        if reason not in _PUBLIC_ALERT_REASONS:
+            return fallback
         return (
             "BTC PUBLIC | ALERT_REVIEW\n"
             "Alasan: " + reason + "\n"
