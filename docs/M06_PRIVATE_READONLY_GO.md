@@ -29,6 +29,12 @@ Rujukan: dokumentasi resmi Indodax Trade API V2 pada `INDODAX-TradeAPI-2.md`. `G
 
 **Hardlock pada PR#29 sekarang:** `m06_scoped_https._NETWORK_RELEASE_GO = False`. Bahkan request GET yang berhasil ditandatangani dan file izin lokal yang valid tidak akan mencapai socket HTTPS. Perubahan ini disengaja karena GO 15 menit yang diberikan sebelumnya sudah kedaluwarsa. Jangan mengubah flag menjadi `True` melalui VPS lokal atau pull request tanpa GO baru, verifikasi paket offline, dan keputusan rilis SHA yang eksplisit. Semua tes offline memakai mock transport sehingga hardlock tetap berlaku.
 
+## Protected rebuy lintas-restart, offline-only
+
+`M06OwnershipLedger` yang **sama** kini menambah dua tabel di SQLite V2 (bukan engine/domain baru): `m06_special_rebuy_observations` untuk hasil **gross IDR** dari fill SELL `flokiidr` / `pepeidr` yang cocok dengan intent lokal, serta `m06_manual_asset_floors` untuk batas minimum kuantitas aset manual. Setiap `trade_id` unik, diikat hash akun/order, dan seluruh perubahan memakai transaksi `BEGIN IMMEDIATE`. Repeated observation yang identik tidak menduplikasi cadangan; record yang berubah, fill foreign atau jumlah fill melebihi snapshot ditolak secara atomik. Rebuy BUY yang baru teramati **tidak** otomatis mengurangi dana protected; hanya pengurangan setelah bukti settlement exchange dan acceptance terpisah yang kelak boleh dirancang. Manual floor hanya naik/tetap, tidak boleh turun akibat restart atau input lokal.
+
+`DailyScalpingOrchestrator.review_m06_local_intent_ownership` tetap caller asli, kini menghasilkan protected rebuy review; `review_m06_protected_rebuy_offline`, `protect_m06_manual_holding_floor_offline` dan `reconcile_m06_capital_with_local_rebuy_offline` menggunakan **database ownership yang sama**. Reconciliation dari ledger lokal sengaja selalu `all_pairs_open_orders_complete=False`, `calculated_available_idr=0`, dan `execution_allowed=False`. Nominal lokal bukan bukti IDR yang sudah settled atau seluruh FLOKI/PEPE dimiliki bot, dan bukan basis izin BUY ataupun SELL. Manual floor bukan bukti exchange ownership. M06-04 dan M06-05 tetap OPEN sampai actual authenticated fills, complete history, cross-bot ownership dan installed runtime diverifikasi.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
