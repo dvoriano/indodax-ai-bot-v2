@@ -23,6 +23,7 @@ from typing import Any
 from .m06_private_readonly import M06ReadOnlyBlocked, READ_ONLY_PATHS
 from .m06_signed_readonly import PreparedPrivateGET, prepare_signed_get
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
+from .m06_source_consistency import inspect_cross_source_consistency
 
 _HOST = "api.indodax.com"
 _APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"
@@ -228,12 +229,13 @@ def _read_json_over_verified_tls(request: PreparedPrivateGET) -> Any:
         conn.close()
 
 
-def _validate_all_pair_orders(payload: object) -> int:
+def _validate_all_pair_orders(payload: object) -> tuple:
     if type(payload) is not list or len(payload) > 1000:
         raise M06ScopeDenied("M06_ALL_PAIR_OPEN_ORDERS_INVALID_OR_TRUNCATED")
     if len(payload) == 1000:
         raise M06ScopeDenied("M06_ALL_PAIR_OPEN_ORDERS_POSSIBLY_TRUNCATED")
     seen = set()
+    parsed = []
     for row in payload:
         if type(row) is not dict:
             raise M06ScopeDenied("M06_ALL_PAIR_OPEN_ORDER_ROW_INVALID")
@@ -242,11 +244,14 @@ def _validate_all_pair_orders(payload: object) -> int:
             # Foreign quote assets cannot be silently excluded from account review.
             raise M06ScopeDenied("M06_NON_IDR_OPEN_ORDER_NEEDS_RECONCILIATION")
         orders = parse_open_orders([row], expected_symbol=symbol.lower())
-        identity = (orders[0].symbol, orders[0].order_id)
+        if not orders[0].full_order_id:
+            raise M06ScopeDenied("M06_OPEN_FULL_ORDER_ID_REQUIRED")
+        identity = (orders[0].symbol, orders[0].full_order_id)
         if identity in seen:
             raise M06ScopeDenied("M06_ALL_PAIR_ORDER_DUPLICATE")
         seen.add(identity)
-    return len(payload)
+        parsed.extend(orders)
+    return tuple(parsed)
 
 
 def run_scoped_private_probe(*, approval: M06ScopedApproval,
@@ -283,10 +288,16 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
     )
     if len(order_history) == 1000 or len(fills) == 1000:
         raise M06ScopeDenied("M06_PRIVATE_HISTORY_POSSIBLY_TRUNCATED")
+    # Source cross-check is diagnostic only: the two histories are
+    # pair-scoped and default to the last 24h; never infer completeness.
+    inspect_cross_source_consistency(
+        open_orders=all_orders, closed_orders=order_history,
+        fills=fills, symbol=approval.symbol,
+    )
     return M06PrivateProbeResult(
         status="M06_VIEW_ONLY_OBSERVED_NOT_EXECUTABLE",
         request_count_this_run=4,
-        open_orders_count=all_orders,
+        open_orders_count=len(all_orders),
         order_history_count=len(order_history),
         fills_count=len(fills),
         view_only_permissions_verified=True,
