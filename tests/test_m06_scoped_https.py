@@ -145,6 +145,19 @@ class M06PrivateGOTests(unittest.TestCase):
                 "SELECT consumed FROM m06_go_budget WHERE singleton=1"
             ).fetchone()[0], 1)
 
+    def test_expired_owner_go_cannot_be_renewed_by_local_manifest(self):
+        # Even a syntactically valid signed request cannot reach HTTPS
+        # from this unapproved source SHA. A new GO requires a new release.
+        prepared=prepare_signed_get(
+            path="/api/v2/account",api_key="fixture-key",
+            secret_key="fixture-secret",timestamp_ms=self.now)
+        with patch("indodax_ai_bot.m06_scoped_https.http.client.HTTPSConnection"
+                   ) as https:
+            with self.assertRaisesRegex(M06ScopeDenied,
+                                        "REQUIRES_NEW_RELEASE"):
+                _read_json_over_verified_tls(prepared)
+            https.assert_not_called()
+
     def test_unapproved_route_cannot_hit_https(self):
         with self.assertRaisesRegex(M06ScopeDenied, "ROUTE_DENIED"):
             _read_json_over_verified_tls(object())
