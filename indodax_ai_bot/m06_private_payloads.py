@@ -116,7 +116,7 @@ def parse_orders(payload, *, expected_symbol: str) -> tuple[OrderRecord, ...]:
                 or not status or len(status)>32 or str(oid) in seen):
             raise M06PayloadError("M06_ORDER_IDENTITY_INVALID")
         seen.add(str(oid))
-        orig=_decimal(r.get("origQty"),"ORIG_QTY")
+        orig=_decimal(r.get("oriQty", r.get("origQty")),"ORIG_QTY")
         executed=_decimal(r.get("executedQty"),"EXEC_QTY")
         if executed>orig:
             raise M06PayloadError("M06_ORDER_OVERFILLED")
@@ -134,7 +134,7 @@ def parse_fills(payload, *, expected_symbol: str) -> tuple[FillRecord, ...]:
     out=[]
     seen=set()
     for r in rows:
-        trade_id=r.get("id")
+        trade_id=r.get("tradeId")
         order_id=r.get("orderId")
         symbol=r.get("symbol")
         if (type(trade_id) not in (str,int) or not str(trade_id)
