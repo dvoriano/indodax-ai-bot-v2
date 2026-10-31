@@ -72,8 +72,7 @@ class M10BTCPublicHealthTests(unittest.TestCase):
         else:
             kv = {
                 "LoadState": "loaded", "ActiveState": self.timer_active,
-                "Result": "success", "Restart": "no",
-                "MainPID": "0", "NRestarts": "0", "UnitFileState": self.timer_enabled,
+                "UnitFileState": self.timer_enabled,
             }
         return SimpleNamespace(
             returncode=0,
