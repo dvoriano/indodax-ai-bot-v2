@@ -20,7 +20,7 @@ from .execution_preflight import ExecutionPreflight
 from .m06_account_review import review_unverified_account, M06AccountDecision
 from .m06_shadow_account import AccountObservation
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
-from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview
+from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, ProtectedRebuyReview
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .source_coverage import assess_public_ws_btc_for_g1
@@ -201,6 +201,35 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         return M06OwnershipLedger(db_path).observe(
             account_key=account_key, order=order, fills=fills)
+
+    def review_m06_protected_rebuy_offline(self, *, db_path: str,
+            account_key: str) -> ProtectedRebuyReview:
+        """Same M06 ownership database; local gross SELL proceeds stay locked."""
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger(db_path).review_protected_rebuy(
+            account_key=account_key,
+        )
+
+    def reconcile_m06_capital_with_local_rebuy_offline(self, *,
+            db_path: str, account_key: str, account, open_orders,
+            unlocked_commitments_idr: Decimal,
+            local_shadow_idr: Decimal) -> CapitalReconciliation:
+        """Original V2 capital calculator fed by local rebuy ledger, never LIVE.
+
+        A local-only ledger cannot prove exchange-wide coverage, prior sales
+        or external commitments. Always force all_pairs complete=False.
+        """
+        self.settings.require_m01_safety()
+        rebuy = self.review_m06_protected_rebuy_offline(
+            db_path=db_path, account_key=account_key,
+        )
+        return reconcile_unverified_capital(
+            account=account, open_orders=open_orders,
+            rebuy_idr=rebuy.total_idr_local_protected,
+            unlocked_commitments_idr=unlocked_commitments_idr,
+            local_shadow_idr=local_shadow_idr,
+            all_pairs_open_orders_complete=False,
+        )
 
     def reconcile_m06_capital_offline(self, *, account, open_orders,
             rebuy_idr: Decimal, unlocked_commitments_idr: Decimal,
