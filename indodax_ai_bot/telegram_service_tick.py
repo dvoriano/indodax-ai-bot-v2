@@ -136,6 +136,18 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
     if token_path == state_db or token_path == Path(
             str(state_db) + ".dedicated-poller.lock"):
         raise ConfigurationError("M05_TICK_TOKEN_PATH_CONFLICT")
+    # M10 health is read-only and opt-in, not an implicit Telegram capability.
+    # The callback reads the ONE original BTC user-systemd, SQLite and sidecar.
+    # Default NO keeps existing active M05 behavior byte-for-byte on /health.
+    health_go = cfg.get("M05_BTC_PUBLIC_HEALTH_GO", "NO")
+    if health_go not in ("NO", "YES"):
+        raise ConfigurationError("M05_BTC_HEALTH_GO_INVALID")
+    btc_health_provider = None
+    if health_go == "YES":
+        from .btc_ops_health import health as btc_health
+        btc_root = Path.home() / "indodax-ai-bot-v2" / "runtime"
+        btc_health_provider = lambda: btc_health(root=btc_root)
+
     ledger = _existing_owner_ledger(state_db, owner_id)
     token = _token_from_file(token_path, bot_id)
     client = TelegramBotApiClient(
@@ -145,6 +157,7 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
         api=client, ledger=ledger, expected_bot_id=bot_id,
         lock_path=str(state_db) + ".dedicated-poller.lock",
         limit=10,
+        btc_health_provider=btc_health_provider,
     )
     return {
         "status": "M05_TICK_COMPLETED",

@@ -114,7 +114,8 @@ class TelegramOwnerPoller:
     def __init__(self, *, api: TelegramBotApiClient,
                  ledger: OwnerDecisionLedger,
                  clock: Callable[[], float] = time.time,
-                 expected_bot_id: int | None = None):
+                 expected_bot_id: int | None = None,
+                 btc_health_provider: Callable[[], dict[str, Any]] | None = None):
         if not isinstance(api, TelegramBotApiClient):
             raise TypeError("M05_REQUIRES_TELEGRAM_API_CLIENT")
         if not isinstance(ledger, OwnerDecisionLedger):
@@ -125,7 +126,9 @@ class TelegramOwnerPoller:
         self._expected_bot_id = expected_bot_id
         self._api = api
         self._ledger = ledger
-        self._owner = OfflineTelegramOwnerInterface(ledger)
+        self._owner = OfflineTelegramOwnerInterface(
+            ledger, btc_health_provider=btc_health_provider,
+        )
         self._clock = clock
 
     def _dispatch(self, update: Mapping[str, Any],
