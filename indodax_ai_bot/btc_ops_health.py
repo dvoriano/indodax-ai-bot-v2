@@ -20,8 +20,9 @@ from typing import Any, Callable
 ROOT = Path.home() / "indodax-ai-bot-v2" / "runtime"
 SERVICE = "indodax-v2-public-ws-btc.service"
 TIMER = "indodax-v2-public-ws-btc.timer"
-SHOW = ("LoadState", "ActiveState", "Result", "Restart", "MainPID",
-        "NRestarts", "UnitFileState")
+SERVICE_SHOW = ("LoadState", "ActiveState", "Result", "Restart",
+                "MainPID", "NRestarts", "UnitFileState")
+TIMER_SHOW = ("LoadState", "ActiveState", "UnitFileState")
 _SAFE_STR = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
 
@@ -41,9 +42,12 @@ def _private_json(path: Path, cap: int) -> dict[str, Any]:
 
 
 def _systemd(name: str, runner: Callable[..., Any]) -> dict[str, str]:
+    if name not in (SERVICE, TIMER):
+        raise ValueError("SYSTEMD_UNKNOWN_UNIT")
+    fields = SERVICE_SHOW if name == SERVICE else TIMER_SHOW
     p = runner(
         ["systemctl", "--user", "show", name, "--no-pager",
-         "--property=" + ",".join(SHOW)],
+         "--property=" + ",".join(fields)],
         capture_output=True, text=True, timeout=7, check=False,
     )
     if p.returncode != 0 or not isinstance(p.stdout, str) or len(p.stdout) > 8192:
@@ -53,10 +57,10 @@ def _systemd(name: str, runner: Callable[..., Any]) -> dict[str, str]:
         if "=" not in line:
             raise ValueError("SYSTEMD_INVALID")
         k, v = line.split("=", 1)
-        if k not in SHOW or k in data or len(v) > 200:
+        if k not in fields or k in data or len(v) > 200:
             raise ValueError("SYSTEMD_INVALID")
         data[k] = v
-    if set(data) != set(SHOW):
+    if set(data) != set(fields):
         raise ValueError("SYSTEMD_INCOMPLETE")
     return data
 
