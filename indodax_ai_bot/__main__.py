@@ -64,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m06-account-review-once", action="store_true",
+                       help="Original V2 offline M06 account review, always REJECT; no private keys/requests")
     group.add_argument("--once", action="store_true")
     parser.add_argument("--public-scanner-mainpath", action="store_true",
                         help="With --once only: opt-in same M03 bulk+G1+M04 no-trade pipeline using an existing BTC WS DB")
@@ -130,6 +132,23 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m06_account_review_once:
+            settings.require_m01_safety()
+            journal = DecisionJournal(args.db)
+            orchestrator = DailyScalpingOrchestrator(settings, journal)
+            review = orchestrator.review_m06_account(now_epoch=int(time.time()))
+            journal.record_reject("M06_ACCOUNT_READONLY_NO_GO", review.reason)
+            print(json.dumps({
+                "stage": "M06_ACCOUNT_READONLY_ORIGINAL_MAINPATH",
+                "status": review.status,
+                "reason": review.reason,
+                "execution_allowed": review.execution_allowed,
+                "account_authenticated": review.account_authenticated,
+                "orders_complete": review.orders_complete,
+                "fills_complete": review.fills_complete,
+                "cross_bot_coexistence_verified": review.cross_bot_coexistence_verified,
+            }, sort_keys=True))
+            return 0
         if (args.m05_shadow_db is None) != (args.m05_shadow_owner_id is None):
             raise ConfigurationError("M05_REQUIRES_BOTH_SHADOW_OWNER_AND_DB")
         if args.m05_shadow_db is not None and not (
