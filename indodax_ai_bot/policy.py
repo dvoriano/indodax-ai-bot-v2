@@ -51,6 +51,20 @@ class SpecialPoolReview:
 
 
 
+
+@dataclass(frozen=True)
+class MainCapitalReview:
+    """Read-only arithmetic. Only a separately verified exchange source can attest funds."""
+    free_idr: Decimal
+    locked_idr_observed: Decimal
+    reserved_rebuy_idr: Decimal
+    commitments_not_locked_idr: Decimal
+    spendable_idr: Decimal
+    overcommitted: bool
+    source_authenticated: bool = False
+    execution_allowed: bool = False
+
+
 @dataclass(frozen=True)
 class ScalpingPolicy:
     min_net_profit_idr: Decimal = Decimal("10000")
@@ -109,6 +123,42 @@ class ScalpingPolicy:
             risk_review_priority=priority,
             review_interval_seconds=60,
             pump_exception_observed=exception,
+        )
+
+    def review_main_capital(
+        self, *, free_idr: Decimal, locked_idr: Decimal,
+        floki_rebuy_idr: Decimal, pepe_rebuy_idr: Decimal,
+        commitments_not_locked_idr: Decimal,
+    ) -> MainCapitalReview:
+        """M06 budget arithmetic on UNVERIFIED, caller-supplied values.
+
+        Free IDR already excludes exchange-locked IDR. Never subtract locked
+        twice. Only subtract additional commitments not already reflected in
+        locked balance, plus the protected FLOKI/PEPE rebuy reserves. The
+        resulting number is NOT spendable exchange authority until a future
+        authenticated/account reconciler proves ownership, freshness and
+        outstanding order coverage.
+        """
+        values = (
+            free_idr, locked_idr, floki_rebuy_idr, pepe_rebuy_idr,
+            commitments_not_locked_idr,
+        )
+        if any(
+            type(v) is not Decimal or not v.is_finite() or v < 0
+            or (v != 0 and (v.adjusted() > 24 or v.adjusted() < -24))
+            for v in values
+        ):
+            raise ValueError("M06_INVALID_CAPITAL_DECIMAL")
+        rebuy = floki_rebuy_idr + pepe_rebuy_idr
+        commitments = commitments_not_locked_idr
+        remainder = free_idr - rebuy - commitments
+        return MainCapitalReview(
+            free_idr=free_idr,
+            locked_idr_observed=locked_idr,
+            reserved_rebuy_idr=rebuy,
+            commitments_not_locked_idr=commitments,
+            spendable_idr=max(Decimal("0"), remainder),
+            overcommitted=remainder < 0,
         )
 
     def review_special_asset_pool(
