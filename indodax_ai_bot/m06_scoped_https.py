@@ -28,6 +28,8 @@ from .m06_source_consistency import inspect_cross_source_consistency
 _HOST = "api.indodax.com"
 _APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"
 _MAX_BYTES = 1_000_000
+# Previous 2026-10-31 consent expired; no new private GO is embedded in this SHA.
+_NETWORK_RELEASE_GO = False
 _SYMBOL = re.compile(r"^[a-z0-9]{2,24}idr$")
 
 
@@ -202,6 +204,11 @@ def _read_json_over_verified_tls(request: PreparedPrivateGET) -> Any:
     if (not request.query or any(c in request.query for c in "\r\n#")
             or set(request.headers) != {"Accept", "X-APIKEY", "Sign"}):
         raise M06ScopeDenied("M06_REQUEST_SHAPE_DENIED")
+    # A local JSON manifest is NOT sufficient to renew a time-limited owner GO.
+    # Explicit new owner approval + reviewed pinned release is required before
+    # a real HTTPS request. Mocked offline tests replace this function entirely.
+    if not _NETWORK_RELEASE_GO:
+        raise M06ScopeDenied("M06_PRIVATE_GO_REQUIRES_NEW_RELEASE")
     context = ssl.create_default_context()
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     conn = http.client.HTTPSConnection(_HOST, port=443, timeout=5, context=context)
