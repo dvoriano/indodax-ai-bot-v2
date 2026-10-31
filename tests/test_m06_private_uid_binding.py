@@ -3,6 +3,9 @@
 No Indodax calls. No real keys. No new live DB, executor, or service.
 """
 import os
+import contextlib
+import io
+import json
 import sqlite3
 import tempfile
 import time
@@ -11,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
+from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.config import Settings
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
@@ -180,6 +184,65 @@ class M06UIDBoundReadOnlyTests(unittest.TestCase):
                 "SELECT count(*) FROM m06_special_rebuy_observations",
             ).fetchone()[0]
         self.assertEqual(before, after)
+
+    def test_original_cli_reuses_same_ledger_without_raw_account_output(self):
+        now = int(time.time() * 1000)
+        go = self.dir / "go.json"
+        go.write_text(json.dumps({
+            "approval_id": "M06_PRIVATE_READONLY_GO_20261031",
+            "issued_ms": now - 1000,
+            "expires_ms": now + 899000,
+            "max_requests": 20,
+            "symbol": "injidr",
+        }))
+        go.chmod(0o600)
+        creds = self.dir / "fixture-creds.json"
+        creds.write_text(json.dumps({
+            "api_key": "fixture-key",
+            "secret_key": "fixture-secret",
+        }))
+        creds.chmod(0o600)
+        payload = {
+            "/api/v2/account": {
+                "uid": self.uid, "canTrade": False,
+                "canWithdraw": False, "canWithdrawFiat": False,
+                "balances": [
+                    {"asset": "IDR", "free": "12345678", "locked": "0"},
+                    {"asset": "FLOKI", "free": "1000", "locked": "0"},
+                ],
+            },
+            "/api/v2/openOrders": [],
+            "/api/v2/order/histories": {"data": []},
+            "/api/v2/myTrades": {"data": []},
+        }
+        stdout = io.StringIO()
+        with patch.dict(os.environ, {
+            "INDODAX_TRADING_ENABLED": "NO",
+            "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+            "INDODAX_EXECUTION_MODE": "DRY_RUN",
+        }), patch(
+            "indodax_ai_bot.__main__._m06_fixed_budget_db",
+            return_value=str(self.dir / "budget-cli.sqlite3"),
+        ), patch(
+            "indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
+            side_effect=lambda req: payload[req.path],
+        ), contextlib.redirect_stdout(stdout):
+            rc = main([
+                "--db", str(self.path),
+                "--m06-private-readonly-once",
+                "--m06-go-file", str(go),
+                "--m06-credentials-file", str(creds),
+            ])
+        self.assertEqual(rc, 0)
+        out = json.loads(stdout.getvalue())
+        self.assertTrue(out["local_ledger_account_bound"])
+        self.assertTrue(out["local_rebuy_hold_present"])
+        self.assertTrue(out["local_manual_floor_present"])
+        self.assertFalse(out["execution_allowed"])
+        self.assertFalse(out["capital_spendable_verified"])
+        self.assertNotIn("12345678", stdout.getvalue())
+        self.assertNotIn("fixture-secret", stdout.getvalue())
+        self.assertNotIn(str(self.uid), stdout.getvalue())
 
     def test_absent_local_ledger_report_does_not_promote(self):
         now = int(time.time() * 1000)
