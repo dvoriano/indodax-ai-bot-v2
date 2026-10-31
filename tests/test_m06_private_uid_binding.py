@@ -72,11 +72,10 @@ class M06UIDBoundReadOnlyTests(unittest.TestCase):
         self.assertEqual(correct.floki_manual_qty_local_floor, Decimal("750"))
         self.assertFalse(correct.exchange_proceeds_verified)
         self.assertFalse(correct.execution_allowed)
-        other = M06OwnershipLedger.inspect_existing_account_readonly(
-            db_path=str(self.path), account_uid=422,
-        )
-        self.assertEqual(other.total_idr_local_protected, Decimal("0"))
-        self.assertEqual(other.floki_manual_qty_local_floor, Decimal("0"))
+        with self.assertRaisesRegex(OwnershipConflict, "ACCOUNT_UNBOUND"):
+            M06OwnershipLedger.inspect_existing_account_readonly(
+                db_path=str(self.path), account_uid=422,
+            )
         restart = M06OwnershipLedger.inspect_existing_account_readonly(
             db_path=str(self.path), account_uid=self.uid,
         )
