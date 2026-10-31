@@ -171,6 +171,13 @@ def main(argv: list[str] | None = None) -> int:
                 "status":result.status,
                 "view_only_permissions_verified":
                     result.view_only_permissions_verified,
+                "reconciliation_status":result.reconciliation_status,
+                "capital_spendable_verified":result.capital_spendable_verified,
+                "protected_rebuy_verified":result.protected_rebuy_verified,
+                "special_asset_ownership_verified":
+                    result.special_asset_ownership_verified,
+                "pending_buy_orders":result.pending_buy_orders,
+                "unmatched_fills_in_window":result.unmatched_fills_in_window,
                 "open_orders_count":result.open_orders_count,
                 "order_history_count":result.order_history_count,
                 "fills_count":result.fills_count,
