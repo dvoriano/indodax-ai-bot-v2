@@ -140,6 +140,28 @@ class M07OriginalPreflightAndM09PaperSeparationTests(unittest.TestCase):
             "M07_CAPITAL_REVIEW_AUTHORITY_INVALID")
         self.assertFalse(self.preflight.assess_buy(**data).execution_allowed)
 
+    def test_forged_capital_review_rejected_even_when_claimed_budget_matches(self):
+        from dataclasses import replace
+        from indodax_ai_bot.policy import ScalpingPolicy
+        original = ScalpingPolicy().review_main_capital(
+            free_idr=D("150000"), locked_idr=D("10000"),
+            floki_rebuy_idr=D("20000"), pepe_rebuy_idr=D("30000"),
+            commitments_not_locked_idr=D("0"))
+        for forged in (
+            replace(original, spendable_idr=D("99999999")),
+            replace(original, overcommitted=True),
+            replace(original, reserved_rebuy_idr=D("NaN")),
+        ):
+            with self.subTest(forged=str(forged)):
+                candidate = self.profitable_hypothesis()
+                candidate["spendable_idr"] = forged.spendable_idr
+                candidate["capital_review"] = forged
+                result = self.preflight.assess_buy(**candidate)
+                self.assertEqual(result.reason,
+                                 "M07_CAPITAL_REVIEW_INTEGRITY_INVALID")
+                self.assertFalse(result.execution_allowed)
+                self.assertFalse(result.exchange_order_request_created)
+
     def test_m06_capital_budget_cannot_approve_overspend(self):
         from indodax_ai_bot.policy import ScalpingPolicy
         review = ScalpingPolicy().review_main_capital(
