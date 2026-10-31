@@ -30,6 +30,10 @@ from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
 def _m06_fixed_budget_db() -> str:
     """Single V2 scope accounting path; cannot be reset via CLI arguments."""
+    if (os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO")
+            == "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"):
+        return str(Path.home() / ".local" / "state" /
+                   "indodax-ai-bot-v2" / "m06-owner-viewonly-retry-20261031.sqlite3")
     return str(Path.home() / ".local" / "state" /
                "indodax-ai-bot-v2" / "m06-owner-viewonly-one-shot-20261031.sqlite3")
 
