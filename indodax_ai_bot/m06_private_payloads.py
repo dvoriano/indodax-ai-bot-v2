@@ -35,6 +35,7 @@ class OrderRecord:
     executed_qty: Decimal
     client_order_id: str | None = None
     bot_owned_verified: bool = False
+    full_order_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,10 @@ class FillRecord:
     price: Decimal
     commission: Decimal
     bot_owned_verified: bool = False
+    client_order_id: str | None = None
+    is_buyer: bool | None = None
+    quote_quantity: Decimal | None = None
+    commission_asset: str | None = None
 
 
 def _decimal(value, field: str, *, positive: bool = False) -> Decimal:
@@ -123,7 +128,11 @@ def parse_orders(payload, *, expected_symbol: str) -> tuple[OrderRecord, ...]:
         cid=r.get("clientOrderId")
         if cid is not None and (type(cid) is not str or not 1<=len(cid)<=128):
             raise M06PayloadError("M06_CLIENT_ORDER_ID_INVALID")
-        out.append(OrderRecord(str(oid),symbol.lower(),side,status,orig,executed,cid))
+        full_id=r.get("fullOrderId")
+        if full_id is not None and (type(full_id) is not str or not 1<=len(full_id)<=128):
+            raise M06PayloadError("M06_FULL_ORDER_ID_INVALID")
+        out.append(OrderRecord(str(oid),symbol.lower(),side,status,orig,executed,cid,
+                               False,full_id))
     return tuple(out)
 
 
@@ -143,10 +152,26 @@ def parse_fills(payload, *, expected_symbol: str) -> tuple[FillRecord, ...]:
                 or str(trade_id) in seen):
             raise M06PayloadError("M06_FILL_IDENTITY_INVALID")
         seen.add(str(trade_id))
+        client_id=r.get("clientOrderId")
+        buyer=r.get("isBuyer")
+        quote=r.get("quoteQty")
+        fee_asset=r.get("commissionAsset")
+        if client_id is not None and (type(client_id) is not str
+                                       or not 1<=len(client_id)<=128):
+            raise M06PayloadError("M06_FILL_CLIENT_ID_INVALID")
+        if buyer is not None and type(buyer) is not bool:
+            raise M06PayloadError("M06_FILL_SIDE_INVALID")
+        if fee_asset is not None and (type(fee_asset) is not str
+                or not 2<=len(fee_asset)<=20 or not fee_asset.isascii()
+                or not fee_asset.isalnum()):
+            raise M06PayloadError("M06_FILL_FEE_ASSET_INVALID")
         out.append(FillRecord(str(trade_id),str(order_id),symbol.lower(),
              _decimal(r.get("qty"),"FILL_QTY",positive=True),
              _decimal(r.get("price"),"FILL_PRICE",positive=True),
-             _decimal(r.get("commission"),"FILL_COMMISSION")))
+             _decimal(r.get("commission"),"FILL_COMMISSION"),False,
+             client_id,buyer,
+             None if quote is None else _decimal(quote,"FILL_QUOTE_QTY"),
+             None if fee_asset is None else fee_asset.lower()))
     return tuple(out)
 
 def parse_open_orders(payload, *, expected_symbol: str | None = None) -> tuple[OrderRecord, ...]:
