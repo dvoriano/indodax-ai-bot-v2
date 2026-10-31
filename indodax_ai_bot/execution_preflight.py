@@ -84,6 +84,23 @@ class ExecutionPreflight:
             if (capital_review.source_authenticated is not False
                     or capital_review.execution_allowed is not False):
                 return deny("M07_CAPITAL_REVIEW_AUTHORITY_INVALID")
+            # Dataclasses are caller-constructible. Recompute via the ONE
+            # canonical policy before relying on the quoted spendable number.
+            # Splitting the rebuy reserve into tokens is unnecessary for the
+            # MAIN budget: both are protected IDR outflows.
+            try:
+                expected_review = self.policy.review_main_capital(
+                    free_idr=capital_review.free_idr,
+                    locked_idr=capital_review.locked_idr_observed,
+                    floki_rebuy_idr=capital_review.reserved_rebuy_idr,
+                    pepe_rebuy_idr=Decimal("0"),
+                    commitments_not_locked_idr=(
+                        capital_review.commitments_not_locked_idr),
+                )
+            except (ValueError, TypeError, ArithmeticError):
+                return deny("M07_CAPITAL_REVIEW_INTEGRITY_INVALID")
+            if capital_review != expected_review:
+                return deny("M07_CAPITAL_REVIEW_INTEGRITY_INVALID")
             if (type(spendable_idr) is not Decimal
                     or spendable_idr != capital_review.spendable_idr):
                 return deny("M07_CAPITAL_SPENDABLE_MISMATCH")
