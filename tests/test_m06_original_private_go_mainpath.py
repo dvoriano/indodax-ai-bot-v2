@@ -52,13 +52,14 @@ class M06OriginalPrivateGOCLI(unittest.TestCase):
                 "INDODAX_TRADING_ENABLED":"NO",
                 "INDODAX_ALLOW_LIVE_EXECUTION":"NO",
                 "INDODAX_EXECUTION_MODE":"DRY_RUN",
-            }), patch("indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
+            }), patch("indodax_ai_bot.__main__._m06_fixed_budget_db",
+                      return_value=str(directory/"budget.sqlite3")), patch(
+                      "indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
                       side_effect=fixture), contextlib.redirect_stdout(output):
                 rc=main(["--db",str(directory/"journal.sqlite3"),
                     "--m06-private-readonly-once",
                     "--m06-go-file",str(go),
-                    "--m06-credentials-file",str(creds),
-                    "--m06-budget-db",str(directory/"budget.sqlite3")])
+                    "--m06-credentials-file",str(creds)])
             self.assertEqual(rc,0)
             self.assertEqual(len(seen),4)
             report=json.loads(output.getvalue())
