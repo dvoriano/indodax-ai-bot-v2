@@ -39,6 +39,9 @@ class ProtectedRebuyReview:
     pepe_idr_local_protected: Decimal
     total_idr_local_protected: Decimal
     distinct_sell_fills: int
+    floki_manual_qty_local_floor: Decimal = Decimal("0")
+    pepe_manual_qty_local_floor: Decimal = Decimal("0")
+    manual_holding_verified: bool = False
     exchange_proceeds_verified: bool = False
     rebuy_spending_allowed: bool = False
     main_capital_spending_allowed: bool = False
@@ -74,6 +77,12 @@ class M06OwnershipLedger:
                 order_id TEXT NOT NULL,
                 gross_idr TEXT NOT NULL
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_manual_asset_floors (
+                account_hash TEXT NOT NULL,
+                asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
+                minimum_qty TEXT NOT NULL,
+                PRIMARY KEY (account_hash, asset)
+            )""")
 
     def _db(self):
         db=sqlite3.connect(self.path,timeout=10)
@@ -106,6 +115,43 @@ class M06OwnershipLedger:
             except sqlite3.IntegrityError:
                 raise OwnershipConflict("M06_CLIENT_ID_REUSE_CONFLICT") from None
 
+    def protect_manual_asset_floor(self, *, account_key: str,
+                                   asset: str,
+                                   minimum_qty: Decimal) -> ProtectedRebuyReview:
+        """Monotonic LOCAL exclusion. No exchange proof and no floor release."""
+        account = self._identity(account_key)
+        if asset not in ("FLOKI", "PEPE") or type(asset) is not str:
+            raise OwnershipConflict("M06_MANUAL_ASSET_INVALID")
+        try:
+            qty = _amount(minimum_qty)
+        except ValueError:
+            raise OwnershipConflict("M06_MANUAL_FLOOR_INVALID") from None
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT minimum_qty FROM m06_manual_asset_floors "
+                "WHERE account_hash=? AND asset=?", (account, asset),
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    "INSERT INTO m06_manual_asset_floors VALUES(?,?,?)",
+                    (account, asset, str(qty)),
+                )
+            else:
+                try:
+                    previous = _amount(Decimal(row[0]))
+                except (ValueError, ArithmeticError):
+                    raise OwnershipConflict("M06_MANUAL_FLOOR_CORRUPT") from None
+                if qty < previous:
+                    raise OwnershipConflict("M06_MANUAL_FLOOR_REDUCTION_DENIED")
+                if qty > previous:
+                    db.execute(
+                        "UPDATE m06_manual_asset_floors SET minimum_qty=? "
+                        "WHERE account_hash=? AND asset=?",
+                        (str(qty), account, asset),
+                    )
+            return self._read_rebuy_in_transaction(db, account)
+
     @staticmethod
     def _read_rebuy_in_transaction(db, account_hash: str) -> ProtectedRebuyReview:
         rows = db.execute(
@@ -133,8 +179,21 @@ class M06OwnershipLedger:
             _amount(floki + pepe)
         except ValueError:
             raise OwnershipConflict("M06_REBUY_LEDGER_TOTAL_OUT_OF_RANGE") from None
+        floors = dict(db.execute(
+            "SELECT asset,minimum_qty FROM m06_manual_asset_floors "
+            "WHERE account_hash=?", (account_hash,),
+        ).fetchall())
+        if any(asset not in ("FLOKI", "PEPE") for asset in floors):
+            raise OwnershipConflict("M06_MANUAL_FLOOR_ASSET_CORRUPT")
+        try:
+            floki_floor = _amount(Decimal(floors.get("FLOKI", "0")))
+            pepe_floor = _amount(Decimal(floors.get("PEPE", "0")))
+        except (ValueError, ArithmeticError):
+            raise OwnershipConflict("M06_MANUAL_FLOOR_CORRUPT") from None
         return ProtectedRebuyReview(
             floki, pepe, floki + pepe, len(rows),
+            floki_manual_qty_local_floor=floki_floor,
+            pepe_manual_qty_local_floor=pepe_floor,
         )
 
     def review_protected_rebuy(self, *, account_key: str) -> ProtectedRebuyReview:
