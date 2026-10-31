@@ -184,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
                 "local_ledger_account_bound":result.local_ledger_account_bound,
                 "local_rebuy_hold_present":result.local_rebuy_hold_present,
                 "local_manual_floor_present":result.local_manual_floor_present,
+                "local_shadow_reservations_present":result.local_shadow_reservations_present,
+                "local_shadow_coverage_complete":result.local_shadow_coverage_complete,
                 "pending_buy_orders":result.pending_buy_orders,
                 "unmatched_fills_in_window":result.unmatched_fills_in_window,
                 "open_orders_count":result.open_orders_count,
