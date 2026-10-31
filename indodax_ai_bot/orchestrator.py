@@ -19,6 +19,7 @@ from .position_manager import PositionManager
 from .execution_preflight import ExecutionPreflight
 from .m06_account_review import review_unverified_account, M06AccountDecision
 from .m06_shadow_account import AccountObservation
+from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -162,6 +163,34 @@ class DailyScalpingOrchestrator:
         """One original orchestrator, local offline account diagnostic only."""
         self.settings.require_m01_safety()
         return review_unverified_account(observation, now_epoch=now_epoch)
+
+    def inspect_m06_offline_private_fixtures(self, *, account_payload,
+            open_orders_payload, orders_payload, fills_payload,
+            symbol: str, now_epoch: int) -> dict:
+        """Original orchestrator parser path, untrusted fixtures, NO network."""
+        self.settings.require_m01_safety()
+        if type(now_epoch) is not int or now_epoch <= 0:
+            raise ValueError("M06_REVIEW_EPOCH_INVALID")
+        account = parse_account(account_payload)
+        open_orders = parse_open_orders(open_orders_payload, expected_symbol=symbol)
+        orders = parse_orders(orders_payload, expected_symbol=symbol)
+        fills = parse_fills(fills_payload, expected_symbol=symbol)
+        return {
+            "status": "REJECT",
+            "reason": "M06_PRIVATE_FIXTURE_UNTRUSTED_OR_INCOMPLETE",
+            "observed_uid_present": account.uid > 0,
+            "free_idr_unverified": str(account.free_idr),
+            "locked_idr_unverified": str(account.locked_idr),
+            "open_orders_seen": len(open_orders),
+            "historical_orders_seen": len(orders),
+            "fills_seen": len(fills),
+            "account_authenticated": False,
+            "orders_complete": False,
+            "fills_complete": False,
+            "bot_ownership_verified": False,
+            "cross_bot_coexistence_verified": False,
+            "execution_allowed": False,
+        }
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
         """One original orchestrator result, NO Telegram/order-side effects."""
