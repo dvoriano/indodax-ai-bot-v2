@@ -31,7 +31,7 @@ from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 def _m06_fixed_budget_db() -> str:
     """Single V2 scope accounting path; cannot be reset via CLI arguments."""
     return str(Path.home() / ".local" / "state" /
-               "indodax-ai-bot-v2" / "m06-readonly-go-20261031.sqlite3")
+               "indodax-ai-bot-v2" / "m06-owner-viewonly-one-shot-20261031.sqlite3")
 
 
 def _m03_deep_compact_from_original(outcome) -> dict:
