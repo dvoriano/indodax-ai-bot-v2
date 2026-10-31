@@ -53,5 +53,52 @@ class SpecialAssetReservePolicyTests(unittest.TestCase):
                 manual_quantity=D("50"), bot_owned_quantity=D("50"))
 
 
+
+    def test_free_idr_not_double_subtract_locked_idr(self):
+        # Indodax free is already net of exchange locked funds.
+        out = self.policy.review_main_capital(
+            free_idr=D("120000"), locked_idr=D("50000"),
+            floki_rebuy_idr=D("30000"), pepe_rebuy_idr=D("10000"),
+            commitments_not_locked_idr=D("20000"))
+        self.assertEqual(out.spendable_idr, D("60000"))
+        self.assertEqual(out.locked_idr_observed, D("50000"))
+        self.assertEqual(out.reserved_rebuy_idr, D("40000"))
+        self.assertFalse(out.overcommitted)
+        self.assertFalse(out.source_authenticated)
+        self.assertFalse(out.execution_allowed)
+
+    def test_idr_rebuy_reserve_and_unlocked_commitments_cannot_go_negative(self):
+        out = self.policy.review_main_capital(
+            free_idr=D("30000"), locked_idr=D("90000"),
+            floki_rebuy_idr=D("25000"), pepe_rebuy_idr=D("15000"),
+            commitments_not_locked_idr=D("5000"))
+        self.assertEqual(out.spendable_idr, D("0"))
+        self.assertTrue(out.overcommitted)
+        self.assertFalse(out.execution_allowed)
+
+    def test_invalid_free_locked_commitments_and_nondecimals_rejected(self):
+        good = dict(
+            free_idr=D("100000"), locked_idr=D("0"),
+            floki_rebuy_idr=D("0"), pepe_rebuy_idr=D("0"),
+            commitments_not_locked_idr=D("0"))
+        for field in good:
+            for invalid in (D("-1"), D("NaN"), D("Infinity"), None,
+                            1, True, 1.0, D("1e30")):
+                with self.subTest(field=field, invalid=str(invalid)):
+                    case = dict(good)
+                    case[field] = invalid
+                    with self.assertRaisesRegex(ValueError, "M06_INVALID_CAPITAL_DECIMAL"):
+                        self.policy.review_main_capital(**case)
+
+    def test_zero_free_idr_never_implies_authorized_account(self):
+        out = self.policy.review_main_capital(
+            free_idr=D("0"), locked_idr=D("0"),
+            floki_rebuy_idr=D("0"), pepe_rebuy_idr=D("0"),
+            commitments_not_locked_idr=D("0"))
+        self.assertEqual(out.spendable_idr, D("0"))
+        self.assertFalse(out.source_authenticated)
+        self.assertFalse(out.execution_allowed)
+
+
 if __name__ == "__main__":
     unittest.main()
