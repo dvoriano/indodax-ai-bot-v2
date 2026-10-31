@@ -8,6 +8,7 @@ import hashlib
 import sqlite3
 import os
 import stat
+from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -123,7 +124,7 @@ class M06OwnershipLedger:
                     or f.st_mode & 0o077):
                 raise OwnershipConflict("M06_LOCAL_LEDGER_INSECURE")
             # Explicit URI mode=ro never creates tables, DB, or journal rows.
-            with sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=2) as db:
+            with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=2)) as db:
                 db.execute("PRAGMA query_only=ON")
                 db.execute("BEGIN")
                 return cls._read_rebuy_in_transaction(db, account_hash)
