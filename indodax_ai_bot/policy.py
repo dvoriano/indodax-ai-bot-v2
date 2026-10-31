@@ -39,6 +39,19 @@ class ScalpingTimeAssessment:
 
 
 @dataclass(frozen=True)
+class SpecialPoolReview:
+    """FLOKI/PEPE mathematical quota, NOT authenticated token ownership."""
+    asset: str
+    maximum_trading_quantity: Decimal
+    minimum_reserved_quantity: Decimal
+    manually_excluded_quantity: Decimal
+    reviewed: bool
+    wallet_authenticated: bool = False
+    execution_allowed: bool = False
+
+
+
+@dataclass(frozen=True)
 class ScalpingPolicy:
     min_net_profit_idr: Decimal = Decimal("10000")
     min_net_roi_percent: Decimal = Decimal("2")
@@ -96,6 +109,40 @@ class ScalpingPolicy:
             risk_review_priority=priority,
             review_interval_seconds=60,
             pump_exception_observed=exception,
+        )
+
+    def review_special_asset_pool(
+        self, *, asset: str, total_quantity: Decimal,
+        manual_quantity: Decimal, bot_owned_quantity: Decimal,
+    ) -> SpecialPoolReview:
+        """M06 token reserve and manually-owned exclusions, PURE PREVIEW.
+
+        Never infer wallet provenance or spending rights from caller inputs.
+        FLOKI token trading cap 25%, PEPE token trading cap 30%; the other
+        75%/70% are reserved. Manually held tokens do not belong to the bot,
+        regardless of available balance. No SELL/BALANCE/private endpoint.
+        """
+        if asset not in ("FLOKI", "PEPE"):
+            raise ValueError("M06_SPECIAL_ASSET_UNSUPPORTED")
+        values = (total_quantity, manual_quantity, bot_owned_quantity)
+        if any(type(v) is not Decimal or not v.is_finite() or v < 0
+               for v in values):
+            raise ValueError("M06_SPECIAL_ASSET_QUANTITY_INVALID")
+        if manual_quantity + bot_owned_quantity > total_quantity:
+            raise ValueError("M06_SPECIAL_ASSET_OWNERSHIP_OVERLAP")
+        # Owner's 50% manual holdings remain entirely outside bot control.
+        # This is a conservative allocation invariant, never wallet proof.
+        if manual_quantity < total_quantity * Decimal("0.50"):
+            raise ValueError("M06_MANUAL_HALF_NOT_RESERVED")
+        portion = Decimal("0.25") if asset == "FLOKI" else Decimal("0.30")
+        cap = total_quantity * portion
+        available = min(cap, bot_owned_quantity)
+        return SpecialPoolReview(
+            asset=asset,
+            maximum_trading_quantity=available,
+            minimum_reserved_quantity=total_quantity - cap,
+            manually_excluded_quantity=manual_quantity,
+            reviewed=True,
         )
 
     def eligible_buy(self, estimated_net_profit_idr: Decimal, estimated_net_roi_percent: Decimal) -> bool:

@@ -147,18 +147,46 @@ class OfflineTelegramOwnerInterface:
         # M10 optional health takes priority ONLY after explicit opt-in.
         if command in ("/health", "/scanner") and len(parts) == 1:
             return readonly_operator_view(command, now_epoch=now_epoch)
-        # Commands exist as a real UI contract, not fabricated account data.
-        known = {
-            "/scanner", "/market", "/ai", "/buy", "/positions", "/sell",
-            "/balance", "/profit", "/history", "/risk", "/health",
+        # M05: every original owner command has an explicit, bounded V2
+        # capability boundary. No V1, exchange account, provider, or order call.
+        # The mode/pending count comes from the existing durable owner ledger;
+        # it is NOT a count of qualified live trading opportunities.
+        unavailable = {
+            "/market": ("M05_MARKET_G1_UNVERIFIED",
+                        "Sumber G1 independen belum terverifikasi. Tidak ada sinyal BUY sah."),
+            "/ai": ("M05_PAID_THREE_ROLE_RESULTS_UNAVAILABLE",
+                    "MARKET/RISK/STRATEGY belum menghasilkan tiga respons nyata yang lolos G1. Biaya AI tidak dipakai."),
+            "/buy": ("M05_BUY_EXECUTOR_NOT_AUTHORIZED",
+                     "BUY tidak tersedia: G1, Risk, modal terverifikasi, owner dan preflight belum lengkap."),
+            "/positions": ("M05_OWNED_POSITION_SOURCE_UNAVAILABLE",
+                           "Posisi bot V2 belum direkonsiliasi dengan fills Indodax. Saldo manual tidak dianggap milik bot."),
+            "/sell": ("M05_SELL_EXECUTOR_NOT_AUTHORIZED",
+                      "SELL belum tersedia: lot, quantity, fees dan fill bot-owned belum terverifikasi."),
+            "/balance": ("M05_AUTHENTICATED_BALANCE_UNAVAILABLE",
+                         "Saldo IDR/FLOKI/PEPE belum dibaca lewat izin private read-only V2. Nilai saldo tidak direkayasa."),
+            "/profit": ("M05_SETTLED_IDR_PNL_UNAVAILABLE",
+                        "Laba bersih belum tersedia tanpa SELL fill dan settlement IDR terverifikasi."),
+            "/history": ("M05_EXCHANGE_TRADE_HISTORY_UNAVAILABLE",
+                         "Riwayat trading Indodax belum direkonsiliasi; catatan shadow bukan order nyata."),
+            "/risk": ("M05_RISK_SOURCE_NOT_QUALIFIED",
+                      "RISK tetap veto: G1/akun/fees/ownership/guard LIVE belum terbukti."),
         }
-        if command in known and len(parts) == 1:
+        if command in unavailable and len(parts) == 1:
+            reason, message = unavailable[command]
+            owner = self.ledger.status(
+                user_id=user_id, chat_id=chat_id, chat_type=chat_type
+            )
+            # Ledger is authoritative only for owner mode / shadow proposals.
+            # Avoid presenting a shadow proposal as a real BUY opportunity.
+            mode = owner["owner_mode"]
+            pending = owner["pending_shadow_proposals"]
+            suffix = (
+                f"\nMode: {mode}. Proposal shadow tertunda: {pending}."
+                if command in ("/buy", "/risk", "/ai") else ""
+            )
             return {
-                **_blocked("LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED"),
-                "text": (
-                    "Belum terhubung ke sumber live tepercaya atau akun; "
-                    "tidak ada data transaksi yang akan direkayasa."
-                ),
+                **_blocked(reason), "owner_view": command[1:].upper() + "_UNAVAILABLE",
+                "text": message + suffix + "\nFinal REJECT. Trading OFF.",
             }
         return _blocked("UNKNOWN_TELEGRAM_COMMAND")
 

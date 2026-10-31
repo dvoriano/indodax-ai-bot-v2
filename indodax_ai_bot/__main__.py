@@ -440,6 +440,12 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
             }
+            # Original V2 CLI surfaces ONLY bounded hard-deny diagnostics.
+            # No buy lot, wallet estimate or simulated PnL is fabricated.
+            if outcome.position_review is not None:
+                result["position_review"] = outcome.position_review
+            if outcome.preflight_review is not None:
+                result["preflight_review"] = outcome.preflight_review
             if args.public_ws_once or args.public_ws_collect or args.public_ws_supervised_once:
                 result["public_ws"] = outcome.public_ws
                 result["live_trading_authorized"] = False
