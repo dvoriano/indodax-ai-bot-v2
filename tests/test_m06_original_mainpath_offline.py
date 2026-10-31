@@ -39,6 +39,20 @@ class M06OriginalMainpathTests(unittest.TestCase):
                      ("M06_ACCOUNT_READONLY_NO_GO",)).fetchone()
             self.assertEqual(row,("REJECT","M06_PRIVATE_ACCOUNT_GO_ABSENT"))
 
+    def test_original_orchestrator_capital_with_incomplete_orders_stays_zero(self):
+        from indodax_ai_bot.m06_private_payloads import AccountBalances
+        with tempfile.TemporaryDirectory() as td:
+            bot=DailyScalpingOrchestrator(Settings(),DecisionJournal(
+                Path(td)/"decisions.sqlite3"))
+            account=AccountBalances(1,(("IDR",Decimal("100000"),Decimal("0")),),
+                                    Decimal("100000"),Decimal("0"))
+            result=bot.reconcile_m06_capital_offline(
+                account=account,open_orders=(),rebuy_idr=Decimal("10000"),
+                unlocked_commitments_idr=Decimal("0"),
+                local_shadow_idr=Decimal("0"))
+            self.assertEqual(result.calculated_available_idr,Decimal("0"))
+            self.assertFalse(result.execution_allowed)
+
     def test_original_orchestrator_ownership_restart_remains_unverified(self):
         with tempfile.TemporaryDirectory() as td:
             path=Path(td)/"ownership.sqlite3"
