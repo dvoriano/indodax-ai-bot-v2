@@ -58,6 +58,19 @@ class M06OwnerRetryTests(unittest.TestCase):
                             original.assert_not_called()
         self.assertFalse(self.path.exists())
 
+    def test_pasting_same_key_twice_stops_before_any_private_call(self):
+        with patch.dict(os.environ, self.env):
+            with patch.object(retry, "_BUDGET", self.path):
+                with patch.object(retry.sys, "stdin", FakeTTY()):
+                    with patch(
+                        "indodax_ai_bot.m06_owner_retry.getpass.getpass",
+                        side_effect=["same-key", "same-key"],
+                    ):
+                        with patch("indodax_ai_bot.__main__.main") as original:
+                            self.assertEqual(retry.main(), 3)
+                            original.assert_not_called()
+        self.assertFalse(self.path.exists())
+
     def test_hidden_prompts_pass_only_to_original_cli_and_clean_files(self):
         snapshots = []
         def original(argv):
