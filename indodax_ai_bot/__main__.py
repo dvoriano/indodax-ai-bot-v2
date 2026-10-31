@@ -187,8 +187,6 @@ def main(argv: list[str] | None = None) -> int:
             admission_mode = os.environ.get("INDODAX_M03_REQUIRE_EGRESS_ADMISSION", "NO")
             if admission_mode not in ("NO", "YES"):
                 raise ConfigurationError("M03_EGRESS_ADMISSION_MODE_INVALID")
-            if admission_mode == "YES":
-                M03SharedEgressAdmission().allowed_local_limit()
             # Require BTC source even on light minutes so the same service
             # cannot silently run without its planned M04 read-only join.
             if not args.ws_db:
@@ -197,6 +195,12 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M03_SCHEDULED_WS_DB_MUST_BE_SEPARATE")
             if not Path(args.ws_db).is_file():
                 raise ConfigurationError("M03_SCHEDULED_WS_DB_NOT_FOUND")
+            # Production scheduled CLI cannot silently bypass the original
+            # fail-closed egress policy, even when called outside systemd.
+            # A fresh owner-only policy is checked again before EACH HTTP GET.
+            if admission_mode != "YES":
+                raise ConfigurationError("M03_EGRESS_ADMISSION_REQUIRED")
+            M03SharedEgressAdmission().allowed_local_limit()
         # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
         # Sumopod adapter from protected process environment. It is always
         # payment-disabled at this milestone and public G1 cannot qualify it.
