@@ -27,13 +27,48 @@ class M06OwnerRetryTests(unittest.TestCase):
             "INDODAX_EXECUTION_MODE": "DRY_RUN",
         }
 
+    def test_connectbot_reader_disables_echo_and_prints_ready(self):
+        import contextlib
+        import io
+        import termios
+        fake_fd = 25
+        term = [0, 0, 0, termios.ECHO | termios.ECHONL, 0, 0, [0] * 32]
+        changed = []
+        sequence = iter((b"a", b"b", b"c", b"\\n"))
+        def tcsetattr(fd, how, attributes):
+            self.assertEqual(fd, fake_fd)
+            changed.append(attributes[3])
+        def tcgetattr(fd):
+            self.assertEqual(fd, fake_fd)
+            if changed:
+                attrs = term.copy()
+                attrs[3] = changed[-1]
+                return attrs
+            return term.copy()
+        out = io.StringIO()
+        with patch("indodax_ai_bot.m06_owner_retry.os.open",
+                   return_value=fake_fd), patch(
+                   "indodax_ai_bot.m06_owner_retry.os.close"), patch(
+                   "indodax_ai_bot.m06_owner_retry.os.read",
+                   side_effect=lambda fd, n: next(sequence)), patch(
+                   "indodax_ai_bot.m06_owner_retry.termios.tcgetattr",
+                   side_effect=tcgetattr), patch(
+                   "indodax_ai_bot.m06_owner_retry.termios.tcsetattr",
+                   side_effect=tcsetattr), contextlib.redirect_stdout(out):
+            answer = retry._read_connectbot_secret("LANGKAH API")
+        self.assertEqual(answer, "abc")
+        self.assertEqual(changed[0] & (termios.ECHO | termios.ECHONL), 0)
+        self.assertEqual(changed[-1] & (termios.ECHO | termios.ECHONL),
+                         termios.ECHO | termios.ECHONL)
+        self.assertIn("PASTE SATU NILAI", out.getvalue())
+
     def test_no_owner_go_never_asks_for_credentials(self):
         with patch.dict(os.environ, self.env, clear=True):
             with patch.dict(os.environ, {
                     "M06_OWNER_ONE_SHOT_PRIVATE_GO": ""
             }):
                 with patch.object(retry, "_BUDGET", self.path):
-                    with patch("indodax_ai_bot.m06_owner_retry.getpass.getpass") as prompt:
+                    with patch("indodax_ai_bot.m06_owner_retry._read_connectbot_secret") as prompt:
                         self.assertEqual(retry.main(), 3)
                         prompt.assert_not_called()
 
@@ -41,7 +76,7 @@ class M06OwnerRetryTests(unittest.TestCase):
         self.path.touch()
         with patch.dict(os.environ, self.env):
             with patch.object(retry, "_BUDGET", self.path):
-                with patch("indodax_ai_bot.m06_owner_retry.getpass.getpass") as prompt:
+                with patch("indodax_ai_bot.m06_owner_retry._read_connectbot_secret") as prompt:
                     self.assertEqual(retry.main(), 3)
                     prompt.assert_not_called()
 
@@ -50,7 +85,7 @@ class M06OwnerRetryTests(unittest.TestCase):
             with patch.object(retry, "_BUDGET", self.path):
                 with patch.object(retry.sys, "stdin", FakeTTY()):
                     with patch(
-                        "indodax_ai_bot.m06_owner_retry.getpass.getpass",
+                        "indodax_ai_bot.m06_owner_retry._read_connectbot_secret",
                         side_effect=["fixture-key", "bad secret with spaces"],
                     ):
                         with patch("indodax_ai_bot.__main__.main") as original:
@@ -63,7 +98,7 @@ class M06OwnerRetryTests(unittest.TestCase):
             with patch.object(retry, "_BUDGET", self.path):
                 with patch.object(retry.sys, "stdin", FakeTTY()):
                     with patch(
-                        "indodax_ai_bot.m06_owner_retry.getpass.getpass",
+                        "indodax_ai_bot.m06_owner_retry._read_connectbot_secret",
                         side_effect=["same-key", "same-key"],
                     ):
                         with patch("indodax_ai_bot.__main__.main") as original:
@@ -88,7 +123,7 @@ class M06OwnerRetryTests(unittest.TestCase):
             with patch.object(retry, "_BUDGET", self.path):
                 with patch.object(retry.sys, "stdin", FakeTTY()):
                     with patch(
-                        "indodax_ai_bot.m06_owner_retry.getpass.getpass",
+                        "indodax_ai_bot.m06_owner_retry._read_connectbot_secret",
                         side_effect=["fixture-key", "fixture-secret"],
                     ):
                         with patch("indodax_ai_bot.__main__.main",
