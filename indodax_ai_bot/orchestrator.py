@@ -20,6 +20,7 @@ from .execution_preflight import ExecutionPreflight
 from .m06_account_review import review_unverified_account, M06AccountDecision
 from .m06_shadow_account import AccountObservation
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
+from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -191,6 +192,13 @@ class DailyScalpingOrchestrator:
             "cross_bot_coexistence_verified": False,
             "execution_allowed": False,
         }
+
+    def review_m06_local_intent_ownership(self, *, db_path: str,
+            account_key: str, order, fills) -> OwnershipReview:
+        """One original V2 orchestrator: persisted local evidence, never authenticated."""
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger(db_path).observe(
+            account_key=account_key, order=order, fills=fills)
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
         """One original orchestrator result, NO Telegram/order-side effects."""
