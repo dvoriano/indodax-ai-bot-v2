@@ -51,7 +51,8 @@ def reconcile_unverified_capital(*, account: AccountBalances,
         raise M06ReconciliationBlocked("M06_RECONCILE_OVERFILLED")
     pending_unpriced=any(order.side=="BUY" and order.executed_qty<order.original_qty
                          for order in open_orders)
-    # Free IDR already excludes locked IDR. An incomplete all-pair scope or\n    # unknown open BUY notional invalidates spendability even as a preview.
+    # Free IDR already excludes locked IDR. An incomplete all-pair scope or
+    # unknown open BUY notional invalidates spendability even as a preview.
     available=(
         Decimal("0")
         if pending_unpriced or not all_pairs_open_orders_complete
