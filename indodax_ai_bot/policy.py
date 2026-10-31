@@ -130,6 +130,10 @@ class ScalpingPolicy:
             raise ValueError("M06_SPECIAL_ASSET_QUANTITY_INVALID")
         if manual_quantity + bot_owned_quantity > total_quantity:
             raise ValueError("M06_SPECIAL_ASSET_OWNERSHIP_OVERLAP")
+        # Owner's 50% manual holdings remain entirely outside bot control.
+        # This is a conservative allocation invariant, never wallet proof.
+        if manual_quantity < total_quantity * Decimal("0.50"):
+            raise ValueError("M06_MANUAL_HALF_NOT_RESERVED")
         portion = Decimal("0.25") if asset == "FLOKI" else Decimal("0.30")
         cap = total_quantity * portion
         available = min(cap, bot_owned_quantity)
