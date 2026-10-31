@@ -7,6 +7,8 @@ on:
       - "deploy/indodax-v2-public-ws-btc.capped-dropin.conf"
       - "deploy/indodax-v2-public-ws-btc.timer"
       - "tests/test_m10_btc_capped_ops.py"
+      - "indodax_ai_bot/btc_ops_health.py"
+      - "tests/test_m10_btc_public_health.py"
       - ".github/workflows/m10-btc-capped.yml"
   workflow_dispatch:
 
@@ -28,6 +30,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile actual original BTC M10 gate and test
-        run: python -m py_compile indodax_ai_bot/btc_ops_gate.py tests/test_m10_btc_capped_ops.py
+        run: python -m py_compile indodax_ai_bot/btc_ops_gate.py indodax_ai_bot/btc_ops_health.py tests/test_m10_btc_capped_ops.py tests/test_m10_btc_public_health.py
       - name: M10 owner GO, gap failstop and original systemd wiring
-        run: python -m unittest discover -s tests -p 'test_m10_btc_capped_ops.py' -v
+        run: |
+          python -m unittest discover -s tests -p 'test_m10_btc_capped_ops.py' -v
+          python -m unittest discover -s tests -p 'test_m10_btc_public_health.py' -v
