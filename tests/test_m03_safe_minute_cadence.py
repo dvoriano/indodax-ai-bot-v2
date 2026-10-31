@@ -10,6 +10,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from decimal import Decimal
 from io import StringIO
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -17,6 +18,7 @@ import unittest
 
 from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.contracts import FinalDecision
+from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import CycleResult, DailyScalpingOrchestrator
 
 
@@ -47,11 +49,18 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                 ai_shadow={"completed_roles": [], "execution_allowed": False},
             )
             with (
+                patch.dict(os.environ, {"INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES"}),
+                patch("indodax_ai_bot.__main__.M03SharedEgressAdmission"),
                 patch("indodax_ai_bot.__main__.time.time", return_value=now),
                 patch.object(DailyScalpingOrchestrator, "run_scan_cycle",
                              return_value=scan) as light,
                 patch.object(DailyScalpingOrchestrator, "run_cycle",
                              return_value=deep) as scheduled,
+                # The cadence fixture mocks the orchestrator and therefore
+                # intentionally does not create its original journal decision.
+                # Actual compact SQLite persistence is covered in the new
+                # end-to-end CLI/HTTP-boundary test, not by this stub.
+                patch.object(DecisionJournal, "record_m03_compact_tick"),
                 patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket",
                       side_effect=AssertionError("NO_EXCHANGE_GET")),
                 redirect_stdout(out),
@@ -134,8 +143,12 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
             ws = Path(td) / "ws.db"
             ws.write_bytes(b"fixture")
             out, err = StringIO(), StringIO()
-            with patch("indodax_ai_bot.__main__.SumopodChatAdapter.configured_from_env",
-                       side_effect=AssertionError("NO_PAID_PROVIDER_CONSTRUCTION")) as adapter:
+            with (
+                patch.dict(os.environ, {"INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES"}),
+                patch("indodax_ai_bot.__main__.M03SharedEgressAdmission"),
+                patch("indodax_ai_bot.__main__.SumopodChatAdapter.configured_from_env",
+                      side_effect=AssertionError("NO_PAID_PROVIDER_CONSTRUCTION")) as adapter,
+            ):
                 with redirect_stdout(out), redirect_stderr(err):
                     rc = main([
                         "--scheduled-public-scanner-once",
@@ -146,6 +159,29 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("SUMOPOD_SHADOW_REQUIRES_BULK_DEEP_ONCE", err.getvalue())
             adapter.assert_not_called()
+
+    def test_scheduled_cli_cannot_bypass_admission_by_unsetting_env(self):
+        with TemporaryDirectory() as td:
+            ws = Path(td) / "observed-ws.sqlite3"
+            ws.write_bytes(b"existing-observation")
+            journal = Path(td) / "should-not-exist.sqlite3"
+            out, err = StringIO(), StringIO()
+            with (
+                patch.dict(os.environ, {"INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "NO"}),
+                patch("indodax_ai_bot.__main__.M03SharedEgressAdmission",
+                      side_effect=AssertionError("POLICY_CANNOT_BE_SKIPPED")) as admission,
+                patch.object(DailyScalpingOrchestrator, "run_scan_cycle",
+                             side_effect=AssertionError("NO_SCANNER")) as scanner,
+                redirect_stdout(out), redirect_stderr(err),
+            ):
+                rc = main(["--scheduled-public-scanner-once", "--ws-db", str(ws),
+                           "--db", str(journal)])
+            self.assertEqual(rc, 2)
+            self.assertIn("M03_EGRESS_ADMISSION_REQUIRED", err.getvalue())
+            self.assertEqual(out.getvalue(), "")
+            self.assertFalse(journal.exists())
+            admission.assert_not_called()
+            scanner.assert_not_called()
 
     def test_systemd_timer_uses_one_nonoverlapping_two_lane_entry(self):
         root = Path(__file__).resolve().parents[1]

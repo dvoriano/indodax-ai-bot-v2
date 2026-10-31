@@ -69,6 +69,27 @@ class M04VCLIShadowWiringTests(unittest.TestCase):
         self.assertNotIn(GOOD_ENV["SUMOPOD_API_KEY"], json.dumps(result))
         post.assert_not_called()
 
+    def test_owner_glm53_three_role_selection_real_cli_still_rejects_untrusted_source(self):
+        # Real CLI -> original app/orchestrator -> original M04 ThreeRoleShadow
+        # with fake public market and fake-only model boundary. NO network.
+        safe = {
+            "SUMOPOD_API_KEY": "test-no-real-provider-key",
+            "INDODAX_TRADING_ENABLED": "NO",
+            "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+            "INDODAX_EXECUTION_MODE": "DRY_RUN",
+        }
+        with patch("indodax_ai_bot.sumopod_provider._post",
+                   side_effect=AssertionError("NO_PAID_NETWORK")) as post:
+            rc, result, err = self.run_public_bulk(flag=True, env=safe)
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(result["sumopod_shadow"]["configured"])
+        self.assertEqual(result["sumopod_shadow"]["role_usage_events"], 0)
+        self.assertEqual(result["ai_shadow"]["completed_roles"], [])
+        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["sumopod_shadow"]["paid_network_allowed"])
+        post.assert_not_called()
+
     def test_malformed_model_config_fails_without_disclosing_key(self):
         invalid = dict(GOOD_ENV)
         invalid["SUMOPOD_MODEL_RISK"] = ""

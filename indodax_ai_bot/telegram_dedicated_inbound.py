@@ -13,7 +13,7 @@ import fcntl
 import os
 from pathlib import Path
 import stat
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import (
@@ -63,6 +63,7 @@ def dedicated_poller_lock(path: str | Path) -> Iterator[None]:
 def dedicated_owner_poll_once(
     *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
     expected_bot_id: int, lock_path: str | Path, limit: int = 10,
+    btc_health_provider: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Get pinned identity, reject webhook conflict, poll ONCE, then release lock.
 
@@ -92,6 +93,7 @@ def dedicated_owner_poll_once(
 
         result = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
+            btc_health_provider=btc_health_provider,
         ).poll_once(limit=limit)
     if result.get("final_decision") != "REJECT" or (
             result.get("execution_allowed") is not False):

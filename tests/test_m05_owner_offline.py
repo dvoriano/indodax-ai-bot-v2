@@ -174,17 +174,28 @@ class M05OwnerOfflineTests(unittest.TestCase):
                           text="/kontrol manual", now_epoch=NOW+3)
         self.assertTrue(self.proposal()["accepted"])
 
-    def test_all_named_telegram_commands_fail_closed_on_unconnected_data(self):
+    def test_unconnected_account_and_ai_commands_still_fail_closed(self):
         ui = OfflineTelegramOwnerInterface(self.store)
-        for cmd in ("/scanner", "/market", "/ai", "/buy", "/positions",
-                    "/sell", "/balance", "/profit", "/history",
-                    "/risk", "/health"):
+        for cmd in ("/market", "/ai", "/buy", "/positions",
+                    "/sell", "/balance", "/profit", "/history", "/risk"):
             with self.subTest(command=cmd):
                 response = ui.handle_command(
                     user_id=OWNER, chat_id=OWNER, text=cmd, now_epoch=NOW)
                 self.assertEqual(response["reason"],
                                  "LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED")
                 self.assertFalse(response["execution_allowed"])
+        # Only actual V2 public/operational views were wired, never BUY.
+        for cmd in ("/scanner", "/health"):
+            fixture = {"accepted": True, "final_decision": "REJECT",
+                       "execution_allowed": False,
+                       "text": "V2 READONLY ONLY"}
+            with self.subTest(command=cmd), patch(
+                    "indodax_ai_bot.telegram_owner.readonly_operator_view",
+                    return_value=fixture) as provider:
+                response = ui.handle_command(
+                    user_id=OWNER, chat_id=OWNER, text=cmd, now_epoch=NOW)
+                self.assertEqual(response, fixture)
+                provider.assert_called_once_with(cmd, now_epoch=NOW)
         self.assertIn("MANUAL", ui.handle_command(
             user_id=OWNER, chat_id=OWNER,
             text="/start", now_epoch=NOW)["text"])
