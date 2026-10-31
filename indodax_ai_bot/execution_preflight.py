@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .policy import ScalpingPolicy
+from .policy import ScalpingPolicy, MainCapitalReview
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,7 @@ class ExecutionPreflight:
         sell_all_in_fee_idr: Decimal | None = None,
         spread_slippage_idr: Decimal | None = None,
         spendable_idr: Decimal | None = None,
+        capital_review: MainCapitalReview | None = None,
     ) -> PreflightReview:
         deny = lambda reason: PreflightReview("REJECT", reason)
         flags = (risk_allow, owner_pass, issuer_authenticated,
@@ -74,6 +75,18 @@ class ExecutionPreflight:
                 or now_epoch <= 0
                 or not now_epoch < source_expires_epoch <= now_epoch + 90):
             return deny("M07_PAIR_OR_SOURCE_TTL_INVALID")
+        if capital_review is not None:
+            # This object is a mathematical budget review, not an Indodax
+            # signed balance or proof of bot-owned unsettled commitments.
+            # Never promote a caller-crafted source_authenticated=True flag.
+            if type(capital_review) is not MainCapitalReview:
+                return deny("M07_CAPITAL_REVIEW_TYPE_INVALID")
+            if (capital_review.source_authenticated is not False
+                    or capital_review.execution_allowed is not False):
+                return deny("M07_CAPITAL_REVIEW_AUTHORITY_INVALID")
+            if (type(spendable_idr) is not Decimal
+                    or spendable_idr != capital_review.spendable_idr):
+                return deny("M07_CAPITAL_SPENDABLE_MISMATCH")
         values = (buy_notional_idr, projected_sell_notional_idr,
                   buy_all_in_fee_idr, sell_all_in_fee_idr,
                   spread_slippage_idr, spendable_idr)
