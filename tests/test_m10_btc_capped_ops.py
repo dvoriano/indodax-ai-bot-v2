@@ -210,9 +210,11 @@ class M10BTCOriginalCollectorOperationsTests(unittest.TestCase):
         self.assertIn("INDODAX_EXECUTION_MODE=DRY_RUN", original)
         self.assertIn("Restart=no", dropin)
         self.assertIn("ExecCondition=%h/indodax-ai-bot-v2/.venv/bin/python "
-                      "-B -m indodax_ai_bot.btc_ops_gate check", dropin)
+                      "-B %h/indodax-ai-bot-v2-m10-ops/"
+                      "indodax_ai_bot/btc_ops_gate.py check", dropin)
         self.assertIn("ExecStopPost=%h/indodax-ai-bot-v2/.venv/bin/python "
-                      "-B -m indodax_ai_bot.btc_ops_gate exit-hook", dropin)
+                      "-B %h/indodax-ai-bot-v2-m10-ops/"
+                      "indodax_ai_bot/btc_ops_gate.py exit-hook", dropin)
         self.assertIn("Unit=indodax-v2-public-ws-btc.service", timer)
         self.assertIn("OnCalendar=*:0/15", timer)
         self.assertIn("Persistent=false", timer)
