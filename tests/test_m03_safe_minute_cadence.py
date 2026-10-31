@@ -143,10 +143,12 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
             ws = Path(td) / "ws.db"
             ws.write_bytes(b"fixture")
             out, err = StringIO(), StringIO()
-            with (patch.dict(os.environ, {"INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES"}),
-                  patch("indodax_ai_bot.__main__.M03SharedEgressAdmission"),
-                  patch("indodax_ai_bot.__main__.SumopodChatAdapter.configured_from_env",
-                        side_effect=AssertionError("NO_PAID_PROVIDER_CONSTRUCTION"))) as adapter:
+            with (
+                patch.dict(os.environ, {"INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES"}),
+                patch("indodax_ai_bot.__main__.M03SharedEgressAdmission"),
+                patch("indodax_ai_bot.__main__.SumopodChatAdapter.configured_from_env",
+                      side_effect=AssertionError("NO_PAID_PROVIDER_CONSTRUCTION")) as adapter,
+            ):
                 with redirect_stdout(out), redirect_stderr(err):
                     rc = main([
                         "--scheduled-public-scanner-once",
