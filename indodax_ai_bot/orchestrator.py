@@ -21,6 +21,7 @@ from .m06_account_review import review_unverified_account, M06AccountDecision
 from .m06_shadow_account import AccountObservation
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview
+from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -199,6 +200,19 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         return M06OwnershipLedger(db_path).observe(
             account_key=account_key, order=order, fills=fills)
+
+    def reconcile_m06_capital_offline(self, *, account, open_orders,
+            rebuy_idr: Decimal, unlocked_commitments_idr: Decimal,
+            local_shadow_idr: Decimal,
+            all_pairs_open_orders_complete: bool = False) -> CapitalReconciliation:
+        """One original orchestrator boundary; NEVER authenticated account authority."""
+        self.settings.require_m01_safety()
+        return reconcile_unverified_capital(
+            account=account, open_orders=open_orders, rebuy_idr=rebuy_idr,
+            unlocked_commitments_idr=unlocked_commitments_idr,
+            local_shadow_idr=local_shadow_idr,
+            all_pairs_open_orders_complete=all_pairs_open_orders_complete,
+        )
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
         """One original orchestrator result, NO Telegram/order-side effects."""
