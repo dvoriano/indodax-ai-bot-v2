@@ -28,10 +28,14 @@ from .m06_account_review import reconcile_readonly_private_snapshot
 from .m06_ownership_ledger import M06OwnershipLedger, OwnershipConflict
 
 _HOST = "api.indodax.com"
-_APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"
+_APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"  # expired, mock compatibility
+_ONE_SHOT_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031"
 _MAX_BYTES = 1_000_000
-# Previous 2026-10-31 consent expired; no new private GO is embedded in this SHA.
-_NETWORK_RELEASE_GO = False
+# Owner's fresh explicit single-run approval. Release is inert unless the
+# pinned V2 foreground CLI is launched with this exact local activation.
+_NETWORK_RELEASE_GO = (
+    os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") == _ONE_SHOT_APPROVAL_ID
+)
 _SYMBOL = re.compile(r"^[a-z0-9]{2,24}idr$")
 
 
@@ -105,7 +109,7 @@ def read_approval(path: str, *, now_ms: int | None = None) -> M06ScopedApproval:
         raise M06ScopeDenied("M06_GO_SCHEMA_INVALID")
     approval = M06ScopedApproval(**raw)
     now = int(time.time() * 1000) if now_ms is None else now_ms
-    if (approval.approval_id != _APPROVAL_ID
+    if (approval.approval_id not in (_APPROVAL_ID, _ONE_SHOT_APPROVAL_ID)
             or type(approval.issued_ms) is not int or type(approval.expires_ms) is not int
             or type(now) is not int
             or approval.issued_ms <= 0 or not approval.issued_ms <= now < approval.expires_ms
@@ -114,6 +118,9 @@ def read_approval(path: str, *, now_ms: int | None = None) -> M06ScopedApproval:
             or type(approval.symbol) is not str
             or not _SYMBOL.fullmatch(approval.symbol)):
         raise M06ScopeDenied("M06_GO_EXPIRED_OR_OUT_OF_SCOPE")
+    if approval.approval_id == _ONE_SHOT_APPROVAL_ID and (
+            approval.max_requests != 4 or approval.symbol != "injidr"):
+        raise M06ScopeDenied("M06_ONE_SHOT_SCOPE_INVALID")
     return approval
 
 
@@ -285,6 +292,12 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         raise M06ScopeDenied("M06_PROBE_CONTRACT_INVALID")
     if local_ownership_db is not None and type(local_ownership_db) is not str:
         raise M06ScopeDenied("M06_LOCAL_LEDGER_PATH_INVALID")
+    # With network enabled, the previous GO is categorically ineligible.
+    # The 4-GET budget is durable; no repeat run or new manifest can renew it.
+    if _NETWORK_RELEASE_GO and (approval.approval_id != _ONE_SHOT_APPROVAL_ID
+                                or approval.max_requests != 4
+                                or approval.symbol != "injidr"):
+        raise M06ScopeDenied("M06_NETWORK_RELEASE_SCOPE_DENIED")
     def get(path: str, *, symbol: str | None = None, limit: int | None = None):
         now_ms = int(time.time() * 1000)
         # Source and time gated before credentials are used to sign.
