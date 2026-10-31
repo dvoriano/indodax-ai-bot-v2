@@ -53,6 +53,8 @@ Bot beroperasi **24/7 untuk memantau pasar**, tetapi hanya trading pada kesempat
 
 **Status bukti yang sah:** NOT_STARTED, CODED, TESTED_OFFLINE, VERIFIED_PUBLIC_ONLINE, VERIFIED_PRIVATE_READONLY, VERIFIED_PAPER, VERIFIED_LIVE, BLOCKED. Salah satu jenis bukti tidak menaikkan klaim jenis lain. Jangan mengulang accepted PASS tanpa perubahan fungsi terkait.
 
+**KEPUTUSAN OWNER 31 OKTOBER 2026 — CI HYBRID TANPA BIAYA TAMBAHAN.** Gunakan **GitHub Actions** sebagai verifikasi otomatis selama **kuota gratis akun masih tersedia dan runner benar-benar dapat menjalankan langkah tes**. Jika kuota habis, billing membatasi Actions, atau runner belum tersedia, **fallback** ke targeted offline/regression tests dari **commit SHA GitHub V2 yang dipin** dalam **temporary Git worktree terisolasi pada VPS V2 yang sudah ada**. Jalankan `NO/NO/DRY_RUN` dengan lingkungan minimal tanpa API key/secret dan tanpa menyentuh layanan aktif atau repo V1/Hermes. Tidak memasang self-hosted GitHub Actions runner di VPS trading, tidak meningkatkan biaya/budget secara otomatis, tidak membuka private API, paid AI, atau LIVE. Catat untuk setiap bukti: commit SHA, scope, perintah, jumlah PASS/FAIL dan lokasi tes; **PASS VPS = TESTED_OFFLINE, bukan CI GREEN, bukan deploy, bukan ONLINE/LIVE**. Saat kuota gratis kembali, gunakan GitHub CI lagi secara hemat pada perubahan yang relevan, dengan timeout/concurrency bila diterapkan; jangan mengulang accepted tests tanpa alasan. Kegagalan runner/kuota adalah **BLOCKED_CI_INFRA**, bukan kegagalan kode, kecuali ada log tes yang membuktikannya. Ini hanya kebijakan metode pengujian, **bukan perubahan acceptance atau izin operasi V2**.
+
 ## B. KEPUTUSAN PRODUK YANG TETAP
 
 | Area | Kebutuhan final |
