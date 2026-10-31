@@ -53,7 +53,15 @@ Rujukan: dokumentasi resmi Indodax Trade API V2 pada `INDODAX-TradeAPI-2.md`. `G
 
 Original M06 private diagnostic now reads the existing V2 journal SQLite as a read-only local source. The lookup uses the account UID returned by the account parser; it does not accept an arbitrary user account label. The file must be private and already exist. Missing or incompatible local evidence is reported as unavailable, without creating new tables.
 
-This is **CODED only** until the new tests pass on pinned V2 source. A matching local ledger is not verified exchange ownership. All trade and capital permissions remain OFF. Historical data from another account or unbound local records must not be silently migrated.
+UID-binding offline tests were previously accepted and the owner subsequently completed a real bounded View Only 4-GET probe. A matching local ledger is still not verified exchange ownership. All trade and capital permissions remain OFF. Historical data from another account or unbound local records must not be silently migrated.
+
+## M06-02 local shadow commitments on original path
+
+The owner completed a real four-GET View Only diagnostic from PR#29 source `f21d9224638f9646c17a6b4c34059d4a1d2b383e` on 1 November 2026 WIB. The account permission check returned `view_only_permissions_verified=true`, with all three observed order-history counts zero for the queried scope and **final REJECT**. The original one-shot and retry quota databases must remain untouched. Do not repeat that successful authenticated probe merely to re-run local tests.
+
+The next incremental M06-02 code path reads *active* `m06_shadow_reserve` rows in the **same SQLite read-only transaction** as the UID-bound `M06OwnershipLedger` protected FLOKI/PEPE rebuy evidence. The UID maps to the existing account hash. Only rows with `released=0` and matching `account_key_hash` count. Replay does not duplicate a local reservation; releases are excluded. The reader fails closed on malformed amounts or more than 10,000 rows. Missing shadow table means `local_shadow_coverage_complete=false`, never proof of an empty liability. A local table that exists only proves *local* table coverage, **not account-wide/cross-bot completeness**. Original `reconcile_readonly_private_snapshot` supplies these local liabilities to `reconcile_unverified_capital` instead of silently passing zero.
+
+Original CLI outputs only `local_shadow_reservations_present` and `local_shadow_coverage_complete` booleans; no raw IDR totals, account UID, client IDs, or keys. Both `capital_spendable_verified` and `execution_allowed` always remain false, even after authenticated View Only observations, because unlocked cross-bot commitments and full account history are not independently established. No additional exchange GET, new service, or live reservation permission is enabled. This change requires focused offline source testing before the M06-02 code/audit stage may be marked accepted.
 
 ## Acceptance before first private request
 
