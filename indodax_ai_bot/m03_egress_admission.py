@@ -28,7 +28,7 @@ _REQUIRED_PEERS = frozenset({
     "crypto-bot-telegram.service",
     "hermes-gateway.service",
 })
-_PEER_UNIT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,79}\\.service$")
+_PEER_UNIT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@_.:-]{0,79}\.service$")
 _MAX_FILE_BYTES = 8192
 _MAX_POLICY_AGE = 900
 _REQUIRED_FIELDS = frozenset({
