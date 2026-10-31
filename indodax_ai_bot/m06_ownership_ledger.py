@@ -127,6 +127,20 @@ class M06OwnershipLedger:
             with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=2)) as db:
                 db.execute("PRAGMA query_only=ON")
                 db.execute("BEGIN")
+                bound = any(
+                    db.execute(
+                        "SELECT 1 FROM " + table
+                        + " WHERE account_hash=? LIMIT 1",
+                        (account_hash,),
+                    ).fetchone() is not None
+                    for table in (
+                        "m06_intents",
+                        "m06_special_rebuy_observations",
+                        "m06_manual_asset_floors",
+                    )
+                )
+                if not bound:
+                    raise OwnershipConflict("M06_LOCAL_ACCOUNT_UNBOUND")
                 return cls._read_rebuy_in_transaction(db, account_hash)
         except OwnershipConflict:
             raise
