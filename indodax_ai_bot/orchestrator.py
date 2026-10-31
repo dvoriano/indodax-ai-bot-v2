@@ -255,12 +255,14 @@ class DailyScalpingOrchestrator:
 
     def inspect_m06_private_readonly_once(self, *, approval: M06ScopedApproval,
             budget: M06RequestBudget, api_key: str,
-            secret_key: str) -> M06PrivateProbeResult:
+            secret_key: str,
+            local_ownership_db: str | None = None) -> M06PrivateProbeResult:
         """Original orchestrator; explicit M06 GO, four GETs, no trade authority."""
         self.settings.require_m01_safety()
         return run_scoped_private_probe(
             approval=approval, budget=budget,
             api_key=api_key, secret_key=secret_key,
+            local_ownership_db=local_ownership_db,
         )
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
