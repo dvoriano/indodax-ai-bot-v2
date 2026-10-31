@@ -27,6 +27,8 @@ Rujukan: dokumentasi resmi Indodax Trade API V2 pada `INDODAX-TradeAPI-2.md`. `G
 
 **GO lama tidak dapat diperpanjang lewat percakapan atau file lokal.** Persetujuan awal maksimal 15 menit/20 request adalah jendela sekali pakai, bukan otorisasi permanen; apabila window terlewat, perlu izin baru yang eksplisit sebelum request privat apa pun. Tidak boleh membuat waktu awal baru sendiri lalu menyebutnya kelanjutan GO 31 Oktober.
 
+**Hardlock pada PR#29 sekarang:** `m06_scoped_https._NETWORK_RELEASE_GO = False`. Bahkan request GET yang berhasil ditandatangani dan file izin lokal yang valid tidak akan mencapai socket HTTPS. Perubahan ini disengaja karena GO 15 menit yang diberikan sebelumnya sudah kedaluwarsa. Jangan mengubah flag menjadi `True` melalui VPS lokal atau pull request tanpa GO baru, verifikasi paket offline, dan keputusan rilis SHA yang eksplisit. Semua tes offline memakai mock transport sehingga hardlock tetap berlaku.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
