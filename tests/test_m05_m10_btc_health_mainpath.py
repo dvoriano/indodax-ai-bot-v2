@@ -86,7 +86,7 @@ class M05OriginalTelegramToM10HealthTests(unittest.TestCase):
     def fake_api(self, method, payload):
         self.calls.append((method, dict(payload)))
         if method == "getMe":
-            return {"id": BOT_ID, "is_bot": True}
+            return {"id": BOT_ID, "is_bot": True, "username": "v2test_owner_bot"}
         if method == "getWebhookInfo":
             return {"url": "", "pending_update_count": 0}
         if method == "getUpdates":
