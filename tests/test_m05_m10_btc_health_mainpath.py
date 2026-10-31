@@ -173,6 +173,17 @@ class M05OriginalTelegramToM10HealthTests(unittest.TestCase):
         self.assertNotIn("SECRET_TOKEN", msg)
         self.assertIn("Trading: OFF", msg)
 
+    def test_syntactically_valid_secret_like_reason_not_sent_to_owner(self):
+        untrusted = healthy()
+        untrusted["status"] = "ALERT_REVIEW"
+        untrusted["reason"] = "PRIVATE_TOKEN_SECRET_VALUE"
+        _, sensor = self.tick({"M05_BTC_PUBLIC_HEALTH_GO": "YES"}, untrusted)
+        sensor.assert_called_once()
+        msg = self.calls[-1][1]["text"]
+        self.assertIn("ALERT_REVIEW", msg)
+        self.assertNotIn("PRIVATE_TOKEN_SECRET_VALUE", msg)
+        self.assertIn("Status kesehatan belum dapat diverifikasi", msg)
+
     def test_invalid_go_denied_before_any_telegram_transport(self):
         cfg = {**self.env, "M05_BTC_PUBLIC_HEALTH_GO": "MAYBE"}
         with patch.object(TelegramBotApiClient, "call",
