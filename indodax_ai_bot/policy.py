@@ -39,6 +39,63 @@ class ScalpingTimeAssessment:
 
 
 @dataclass(frozen=True)
+class MainCapitalPreview:
+    """Port of V1 protected-IDR preview, NOT authenticated balance authority.
+
+    Explicit external caller-supplied inputs are never accepted as verified
+    exchange free/locked, owned filled orders, or spendable balance.
+    """
+    status: str
+    reason: str
+    preview_main_idr: Decimal
+    ledger_eligible: bool = False
+    execution_allowed: bool = False
+    private_api_called: bool = False
+
+
+def _capital_decimal(value: Decimal | str | int) -> Decimal:
+    """Reject float/bool/None and missing protected rebuy cash amounts."""
+    if type(value) not in (Decimal, str, int):
+        raise ValueError("INVALID_PROTECTED_CAPITAL_TYPE")
+    try:
+        result = Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        raise ValueError("INVALID_PROTECTED_CAPITAL_NUMBER") from None
+    if not result.is_finite() or result < 0:
+        raise ValueError("INVALID_PROTECTED_CAPITAL_NUMBER")
+    return result
+
+
+def preview_main_capital_from_free_idr(
+    *, free_idr: Decimal | str | int,
+    floki_rebuy_cash_idr: Decimal | str | int,
+    pepe_rebuy_cash_idr: Decimal | str | int,
+    other_unlocked_commitments_idr: Decimal | str | int,
+) -> MainCapitalPreview:
+    """Migrate V1 capital_reconciliation_adapter.preview_free_idr_main.
+
+    Preview only; caller must provide each balance/reserve explicitly.
+    Exchange locked funds must already be absent from `free_idr`, and
+    MUST NOT be subtracted twice. Open order commitments are included in
+    `other_unlocked_commitments_idr` only when not already locked.
+    Do not add historical sales, earnings, deposit or original USDT to free.
+    Unknown protected cash != zero; never infer available MAIN amount.
+    """
+    denied = MainCapitalPreview("REJECT", "UNVERIFIED_FREE_IDR_OR_RESERVES", Decimal("0"))
+    try:
+        free = _capital_decimal(free_idr)
+        floki = _capital_decimal(floki_rebuy_cash_idr)
+        pepe = _capital_decimal(pepe_rebuy_cash_idr)
+        other = _capital_decimal(other_unlocked_commitments_idr)
+    except ValueError:
+        return denied
+    protected = floki + pepe + other
+    if protected > free:
+        return MainCapitalPreview("REJECT", "PROTECTED_CASH_EXCEEDS_FREE_IDR", Decimal("0"))
+    return MainCapitalPreview("PREVIEW_ONLY", "FREE_IDR_MINUS_PROTECTED_CASH", free - protected)
+
+
+@dataclass(frozen=True)
 class ScalpingPolicy:
     min_net_profit_idr: Decimal = Decimal("10000")
     min_net_roi_percent: Decimal = Decimal("2")
