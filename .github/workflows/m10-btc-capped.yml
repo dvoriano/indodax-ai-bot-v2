@@ -9,6 +9,11 @@ on:
       - "tests/test_m10_btc_capped_ops.py"
       - "indodax_ai_bot/btc_ops_health.py"
       - "tests/test_m10_btc_public_health.py"
+      - "indodax_ai_bot/telegram_owner.py"
+      - "indodax_ai_bot/telegram_bot_api.py"
+      - "indodax_ai_bot/telegram_dedicated_inbound.py"
+      - "indodax_ai_bot/telegram_service_tick.py"
+      - "tests/test_m05_m10_btc_health_mainpath.py"
       - ".github/workflows/m10-btc-capped.yml"
   workflow_dispatch:
 
@@ -35,3 +40,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_m10_btc_capped_ops.py' -v
           python -m unittest discover -s tests -p 'test_m10_btc_public_health.py' -v
+      - name: M05 original Telegram owner /health mainpath regression
+        run: |
+          python -m unittest discover -s tests -p 'test_m05_m10_btc_health_mainpath.py' -v
+          python -m unittest discover -s tests -p 'test_m05_telegram_service_tick.py' -v
+          python -m unittest discover -s tests -p 'test_m05_dedicated_inbound.py' -v
