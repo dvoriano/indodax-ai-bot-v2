@@ -6,6 +6,8 @@ reconciled before an owned position can be declared. No network or trading.
 from __future__ import annotations
 import hashlib
 import sqlite3
+import os
+import stat
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -88,6 +90,47 @@ class M06OwnershipLedger:
         db=sqlite3.connect(self.path,timeout=10)
         db.execute("PRAGMA busy_timeout=10000")
         return db
+
+    @staticmethod
+    def account_scope_from_exchange_uid(uid: int) -> str:
+        """Account identifier from parsed Indodax account ONLY, not API key."""
+        if type(uid) is not int or uid <= 0:
+            raise OwnershipConflict("M06_ACCOUNT_UID_INVALID")
+        return "INDODAX_V2_UID:" + str(uid)
+
+    @classmethod
+    def inspect_existing_account_readonly(cls, *, db_path: str,
+                                          account_uid: int) -> ProtectedRebuyReview:
+        """Read existing local holds using SQLite RO; never create/migrate DB.
+
+        An account's locally recorded intents must use the canonical uid
+        binding; no caller-supplied account label or API key can substitute.
+        A missing, insecure, or mismatched ledger fails closed.
+        """
+        key = cls.account_scope_from_exchange_uid(account_uid)
+        account_hash = cls._identity(key)
+        if type(db_path) is not str or not db_path:
+            raise OwnershipConflict("M06_LOCAL_LEDGER_PATH_INVALID")
+        p = Path(os.path.abspath(db_path))
+        parent = p.parent
+        try:
+            owner = os.getuid()
+            d = parent.lstat()
+            f = p.lstat()
+            if (not stat.S_ISDIR(d.st_mode) or d.st_uid != owner
+                    or d.st_mode & 0o077
+                    or not stat.S_ISREG(f.st_mode) or f.st_uid != owner
+                    or f.st_mode & 0o077):
+                raise OwnershipConflict("M06_LOCAL_LEDGER_INSECURE")
+            # Explicit URI mode=ro never creates tables, DB, or journal rows.
+            with sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=2) as db:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                return cls._read_rebuy_in_transaction(db, account_hash)
+        except OwnershipConflict:
+            raise
+        except (OSError, sqlite3.Error, ValueError):
+            raise OwnershipConflict("M06_LOCAL_LEDGER_UNAVAILABLE") from None
 
     @staticmethod
     def _identity(account_key: str) -> str:
