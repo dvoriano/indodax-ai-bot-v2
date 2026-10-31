@@ -147,18 +147,36 @@ class OfflineTelegramOwnerInterface:
         # M10 optional health takes priority ONLY after explicit opt-in.
         if command in ("/health", "/scanner") and len(parts) == 1:
             return readonly_operator_view(command, now_epoch=now_epoch)
-        # Commands exist as a real UI contract, not fabricated account data.
-        known = {
-            "/scanner", "/market", "/ai", "/buy", "/positions", "/sell",
-            "/balance", "/profit", "/history", "/risk", "/health",
+        # All other commands are explicitly bounded, owner-only and
+        # unavailable until the ORIGINAL V2 authenticated modules are wired.
+        # Never infer balances, fills, AI opinions or execution permission
+        # from public BTC WS/Telegram mode/this local ledger.
+        unavailable = {
+            "/market": ("M05_G1_MARKET_UNQUALIFIED",
+                        "Market V2 belum memiliki G1 upstream terverifikasi; tidak ada sinyal BUY."),
+            "/ai": ("M05_THREE_ROLE_NOT_VERIFIED",
+                    "MARKET/RISK/STRATEGY belum menghasilkan jawaban provider yang sah."),
+            "/buy": ("M05_BUY_PREFLIGHT_UNAVAILABLE",
+                     "BUY ditolak: G1, Risk, saldo verified, preflight dan LIVE GO belum lengkap."),
+            "/positions": ("M05_OWNED_POSITIONS_UNAVAILABLE",
+                           "Posisi bot-owned dan exchange-confirmed fills belum diverifikasi."),
+            "/sell": ("M05_SELL_OWNERSHIP_UNAVAILABLE",
+                      "SELL ditolak: quantity bot-owned dan fill/settlement belum terbukti."),
+            "/balance": ("M05_PRIVATE_BALANCE_UNAVAILABLE",
+                         "Saldo private free/locked belum dibaca dengan scoped owner GO."),
+            "/profit": ("M05_REALIZED_PNL_UNAVAILABLE",
+                        "Laba bersih realized WIB belum direkonsiliasi dari fills dan settled IDR."),
+            "/history": ("M05_EXCHANGE_HISTORY_UNAVAILABLE",
+                         "Riwayat order/fill akun belum diverifikasi; tidak dibuat data tiruan."),
+            "/risk": ("M05_RISK_DECISION_UNAVAILABLE",
+                      "Tidak ada keputusan Risk ALLOW terverifikasi untuk entry."),
         }
-        if command in known and len(parts) == 1:
+        if command in unavailable and len(parts) == 1:
+            reason, detail = unavailable[command]
             return {
-                **_blocked("LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED"),
-                "text": (
-                    "Belum terhubung ke sumber live tepercaya atau akun; "
-                    "tidak ada data transaksi yang akan direkayasa."
-                ),
+                **_blocked(reason),
+                "text": "V2 " + command + " | NOT_AVAILABLE\\n"
+                        + detail + "\\nFinal REJECT. Trading OFF.",
             }
         return _blocked("UNKNOWN_TELEGRAM_COMMAND")
 
