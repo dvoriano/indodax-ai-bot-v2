@@ -19,6 +19,7 @@ class PositionReview:
     highest_net_tier: str | None = None
     hold_phase: str | None = None
     protective_review_required: bool = False
+    protective_reason: str | None = None
     source_authenticated: bool = False
     bot_ownership_verified: bool = False
     execution_allowed: bool = False
@@ -53,6 +54,11 @@ class PositionManager:
         trailing_protection_active: bool = False,
         market_source_fresh: bool = False,
         risk_review_clear: bool = False,
+        entry_price_idr: Decimal | None = None,
+        last_price_idr: Decimal | None = None,
+        peak_price_idr: Decimal | None = None,
+        stop_loss_percent: Decimal | None = None,
+        trailing_percent: Decimal | None = None,
     ) -> PositionReview:
         """Quote math for integration/PAPER only, never an owned SELL signal.
 
@@ -77,10 +83,36 @@ class PositionManager:
             estimated_sell_fees_idr=estimated_sell_fees_idr,
             incremental_slippage_idr=incremental_slippage_idr,
         )
+        # M08 stop/trailing are QUOTE REVIEWS, not SELL orders. Require the
+        # full price/threshold bundle; never silently disable partial inputs.
+        quote = (
+            entry_price_idr, last_price_idr, peak_price_idr,
+            stop_loss_percent, trailing_percent,
+        )
+        protective_reason = None
+        if any(v is not None for v in quote):
+            if any(
+                type(v) is not Decimal or not v.is_finite()
+                for v in quote
+            ):
+                raise ValueError("M08_PROTECTIVE_QUOTE_INCOMPLETE")
+            entry, last, peak, stop, trail = quote
+            if (entry <= 0 or last <= 0 or peak <= 0
+                    or peak < last or stop <= 0 or trail <= 0
+                    or stop > 25 or trail > 25):
+                raise ValueError("M08_PROTECTIVE_QUOTE_UNSAFE")
+            if last <= entry * (Decimal("1") - stop / Decimal("100")):
+                protective_reason = "STOP_LOSS_REVIEW"
+            elif (peak > entry and
+                  last <= peak * (Decimal("1") - trail / Decimal("100"))):
+                protective_reason = "TRAILING_REVIEW"
+        if protective_reason is None and time.risk_review_priority == "URGENT":
+            protective_reason = "TIME_STOP_REVIEW"
         return PositionReview(
             status="REJECT",
             reason="M08_UNVERIFIED_LOT_AND_SETTLEMENT",
             highest_net_tier=net.highest_reached_tier,
             hold_phase=time.phase,
-            protective_review_required=time.risk_review_priority == "URGENT",
+            protective_review_required=protective_reason is not None,
+            protective_reason=protective_reason,
         )
