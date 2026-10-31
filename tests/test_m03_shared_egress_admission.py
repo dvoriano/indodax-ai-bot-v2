@@ -322,5 +322,42 @@ class M03SharedEgressAdmissionTests(unittest.TestCase):
         self.assertIn("Restart=no", unit)
 
 
+    def test_original_scheduled_cli_active_peer_rejects_before_journal_or_http(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "owner.json"
+            write_policy(p, accepted_policy(external=10))
+            ws = root / "existing-ws.sqlite3"
+            ws.write_bytes(b"existing-public-ws-readonly")
+            journal = root / "would-be-journal.sqlite3"
+            rest = root / "would-be-rate.sqlite3"
+            out, err = StringIO(), StringIO()
+            with (patch.dict(os.environ, {
+                    "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
+                    "INDODAX_M03_REQUIRE_PEER_QUIET": "YES",
+                    "INDODAX_M03_EGRESS_ADMISSION_FILE": str(p),
+                    "INDODAX_PUBLIC_REST_RATE_DB": str(rest),
+                    "INDODAX_TRADING_ENABLED": "NO",
+                    "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+                    "INDODAX_EXECUTION_MODE": "DRY_RUN",
+                }),
+                patch("indodax_ai_bot.m03_egress_admission.time.time",
+                      return_value=NOW),
+                patch("indodax_ai_bot.m03_egress_admission._systemd_peer_quiet",
+                      side_effect=M03EgressAdmissionError(
+                          "M03_EGRESS_ACTIVE_UNCOORDINATED_PEER")),
+                patch("indodax_ai_bot.orchestrator.IndodaxPublicMarket",
+                      side_effect=AssertionError("NO_SCANNER_OR_HTTP")) as scanner,
+                redirect_stdout(out), redirect_stderr(err)):
+                rc = main(["--scheduled-public-scanner-once",
+                           "--ws-db", str(ws), "--db", str(journal)])
+            self.assertEqual(rc, 2)
+            self.assertEqual(out.getvalue(), "")
+            self.assertIn("M03_EGRESS_ACTIVE_UNCOORDINATED_PEER", err.getvalue())
+            self.assertFalse(journal.exists())
+            self.assertFalse(rest.exists())
+            scanner.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
