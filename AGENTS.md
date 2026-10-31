@@ -4,6 +4,19 @@ Berlaku untuk semua pekerjaan coding AI/agent dalam repository ini.
 
 **Satu referensi kanonis:** [docs/PROJECT_GUIDELINE.md](docs/PROJECT_GUIDELINE.md). Baca Bagian 0/0A/B/E/F guideline sebagai aturan, lalu [docs/ROADMAP.md](docs/ROADMAP.md) untuk milestone aktif, checklist, evidence dan handover. **Roadmap ini satu-satunya pelacak**; jangan membuat roadmap/status/handover kedua.
 
+## LOCK RUANG KERJA (KEPUTUSAN OWNER 31 OKTOBER 2026)
+
+**ALLOWLIST TUNGGAL:** seluruh pekerjaan pengembangan, pemeriksaan, perubahan kode, PR, audit acceptance, dan handover hanya pada **GitHub `dvoriano/indodax-ai-bot-v2`** (beserta branch/PR di repo yang SAMA). Pekerjaan diarahkan ke **SATU V2 `DailyScalpingOrchestrator` dan runtime V2 yang sama**, dengan `docs/ROADMAP.md` sebagai satu-satunya tracker.
+
+**DENY BY DEFAULT:**
+- Jangan membuka, membaca, mencari, mengubah, menyalin, mengimpor atau membangun ulang sumber dari repo **`dvoriano/crypto-bot` (V1)** ataupun repo lain, meskipun hanya untuk referensi; **jangan gunakan V1 sebagai basis fitur baru**. Kesepakatan historis migrasi sudah tercermin pada kode V2.
+- Jangan mengutak-atik proses/checkout/unit/database/secret **V1, Hermes, peer lain, atau proyek lain**; jangan menghentikan/menghapus layanan itu dari pekerjaan di V2.
+- Jangan membuat repo, master ledger, roadmap, scanner, AI orchestrator, Telegram poller, executor, atau ledger kedua. Modul baru **hanya jika** checklist V2 yang sudah ada memerlukan fungsi yang belum tersedia dan integrasinya ke caller asli dibuktikan.
+- Untuk tugas coding sekarang gunakan **GitHub V2 saja**. Jangan melakukan SSH/VPS deploy, restart, perubahan systemd, akun privat, paid AI, atau trading tanpa instruksi/GO owner **yang terpisah dan eksplisit**. Aktivitas public market yang memang sudah menjadi bagian bot V2 tidak otomatis dilarang oleh batas ruang kerja pengembangan ini, tetapi G1/permission tetap fail-closed.
+- Jangan menyebut aturan repo sebagai pengunci izin GitHub atau firewall secara teknis: ini **pembatasan tindakan agent**; izin konektor/platform dan service eksternal tidak otomatis berubah.
+
+**PENEGAKAN SETIAP GILIRAN:** sebelum memanggil tool atau membuat perubahan, pastikan **target repository persis `dvoriano/indodax-ai-bot-v2`**, target checklist asli V2, dan file V2 yang akan diubah. Bila permintaan mensyaratkan akses di luar allowlist, **STOP** pada batas itu dan minta izin owner untuk pengecualian spesifik. Jangan menganggap kata "lanjut" sebagai izin membuka V1. Jangan membuat migrasi ulang, jangan mengubah daftar `[x]/[ ]` tanpa acceptance baru.
+
 ## IRON RULES (instruksi tertinggi pengembangan repo)
 - **DAILY SCALPING HARIAN 24/7 adalah kemampuan utama bot.** Satu jalur nyata: closed 1m + 5m/15m/BTC → G1 scan/rank 20–40 top 1–2 → MARKET/RISK/STRATEGY → Final MANUAL/AUTO PASS/REJECT → last-moment preflight → BUY → managed SELL → IDR realized PnL WIB. Hindari overnight HOLD, no forced trade.
 - **MULAI IMPLEMENTASI setelah rencana disusun.** Arsitektur, kontrak, struktur repo dan modul harus segera ditindaklanjuti dengan vertical slice runnable, bukan audit/dokumen berulang.
@@ -19,7 +32,7 @@ Berlaku untuk semua pekerjaan coding AI/agent dalam repository ini.
 - Trading MAIN: IDR → BUY → SELL → IDR; 1–2 pair, ROI BUY diproyeksikan ≥2% bersih **dan** laba ≥Rp10.000 bersih; target SELL 2%/8%/11% netto. Target harian Rp100.000 netto terealisasi bukan jaminan.
 - FLOKI 25% trading / 75% reserve; PEPE 30% trading / 70% reserve; dana rebuy terproteksi.
 - No private GET/trade atau paid provider usage tanpa scope izin yang jelas. Order LIVE default OFF dan tidak pernah dinyalakan hanya karena tes PASS.
-- Repo lama dvoriano/crypto-bot **read-only reference**, bukan kode yang ditulis otomatis. Jangan menyentuh service atau secrets bot lama.
+- Repo lama `dvoriano/crypto-bot` **DI LUAR ALLOWLIST dan tidak boleh diakses**, termasuk sebagai referensi, kecuali owner memberikan pengecualian eksplisit untuk suatu tugas; service dan secrets lama tidak disentuh.
 - Uji hanya fungsi berubah dan acceptance yang belum terbukti; jangan ulang tes accepted PASS tanpa perubahan relevan.
 - Setelah menyelesaikan milestone, **update docs/ROADMAP.md saja untuk checklist, SHA, bukti, kekurangan dan satu next action**. Ubah guideline hanya jika kebijakan/spesifikasi disetujui berubah.
 - Dilarang menyatakan fitur LIVE jika hanya mock, offline, public VIEW atau read-only. Jaga keamanan credentials, ownership order, dan fail-closed.
