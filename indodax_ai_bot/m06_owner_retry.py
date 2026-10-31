@@ -59,7 +59,7 @@ def _read_connectbot_secret(label: str) -> str:
                 char = os.read(fd, 1)
                 if not char:
                     raise EOFError()
-                if char in (b"\\n", b"\\r"):
+                if char in (b"\${word}", b"\${word}"):
                     break
                 if len(raw) >= 256:
                     raise ValueError("M06_CREDENTIAL_TOO_LONG")
@@ -68,7 +68,7 @@ def _read_connectbot_secret(label: str) -> str:
             try:
                 return raw.decode("ascii", "strict")
             finally:
-                raw[:] = b"\\x00" * len(raw)
+                raw[:] = b"\${word}" * len(raw)
         finally:
             termios.tcsetattr(fd, termios.TCSAFLUSH, original)
     finally:
