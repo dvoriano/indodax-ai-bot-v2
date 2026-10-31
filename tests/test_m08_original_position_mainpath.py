@@ -74,5 +74,54 @@ class M08OriginalPositionMainpathTests(unittest.TestCase):
         self.assertIsNone(out.hold_phase)
 
 
+
+    def test_m08_stop_loss_and_trailing_only_review(self):
+        m = PositionManager()
+        base = dict(
+            actual_buy_fill_epoch=100, observed_epoch=110,
+            filled_buy_quantity=D("1"), filled_buy_notional_idr=D("1000"),
+            allocated_buy_fees_idr=D("1"), quantity_to_sell=D("1"),
+            expected_sell_notional_idr=D("960"), estimated_sell_fees_idr=D("1"),
+            incremental_slippage_idr=D("1"),
+            entry_price_idr=D("1000"), last_price_idr=D("960"),
+            peak_price_idr=D("1050"), stop_loss_percent=D("3"),
+            trailing_percent=D("2"),
+        )
+        loss = m.review_unverified_quote(**base)
+        self.assertEqual(loss.protective_reason, "STOP_LOSS_REVIEW")
+        self.assertTrue(loss.protective_review_required)
+        self.assertFalse(loss.execution_allowed)
+        self.assertFalse(loss.realized)
+        base.update(last_price_idr=D("1040"),
+                    expected_sell_notional_idr=D("1040"),
+                    peak_price_idr=D("1080"))
+        trailing = m.review_unverified_quote(**base)
+        self.assertEqual(trailing.protective_reason, "TRAILING_REVIEW")
+        self.assertFalse(trailing.bot_ownership_verified)
+
+    def test_m08_incomplete_spoofed_quote_fails_closed(self):
+        m = PositionManager()
+        base = dict(
+            actual_buy_fill_epoch=100, observed_epoch=110,
+            filled_buy_quantity=D("1"), filled_buy_notional_idr=D("1000"),
+            allocated_buy_fees_idr=D("0"), quantity_to_sell=D("1"),
+            expected_sell_notional_idr=D("1000"),
+            estimated_sell_fees_idr=D("0"),
+            incremental_slippage_idr=D("0"),
+        )
+        with self.assertRaisesRegex(ValueError, "M08_PROTECTIVE_QUOTE_INCOMPLETE"):
+            m.review_unverified_quote(**base, entry_price_idr=D("1000"))
+        with self.assertRaisesRegex(ValueError, "M08_PROTECTIVE_QUOTE_UNSAFE"):
+            m.review_unverified_quote(
+                **base, entry_price_idr=D("1000"), last_price_idr=D("1000"),
+                peak_price_idr=D("900"), stop_loss_percent=D("3"),
+                trailing_percent=D("2"))
+        with self.assertRaisesRegex(ValueError, "M08_PROTECTIVE_QUOTE_INCOMPLETE"):
+            m.review_unverified_quote(
+                **base, entry_price_idr=D("1000"), last_price_idr=D("900"),
+                peak_price_idr=D("1000"), stop_loss_percent=D("NaN"),
+                trailing_percent=D("2"))
+
+
 if __name__ == "__main__":
     unittest.main()
