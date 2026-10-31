@@ -22,6 +22,7 @@ from .m06_shadow_account import AccountObservation
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
+from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -212,6 +213,16 @@ class DailyScalpingOrchestrator:
             unlocked_commitments_idr=unlocked_commitments_idr,
             local_shadow_idr=local_shadow_idr,
             all_pairs_open_orders_complete=all_pairs_open_orders_complete,
+        )
+
+    def inspect_m06_private_readonly_once(self, *, approval: M06ScopedApproval,
+            budget: M06RequestBudget, api_key: str,
+            secret_key: str) -> M06PrivateProbeResult:
+        """Original orchestrator; explicit M06 GO, four GETs, no trade authority."""
+        self.settings.require_m01_safety()
+        return run_scoped_private_probe(
+            approval=approval, budget=budget,
+            api_key=api_key, secret_key=secret_key,
         )
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
