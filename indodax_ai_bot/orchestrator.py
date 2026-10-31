@@ -16,6 +16,7 @@ from .volume_screening import apply_deep_volume_floor
 from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research
 from .three_role_ai import ThreeRoleShadow
 from .position_manager import PositionManager
+from .execution_preflight import ExecutionPreflight
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -127,6 +128,7 @@ class CycleResult:
     public_research: dict | None = None
     research_archive: dict | None = None
     position_review: dict | None = None
+    preflight_review: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -151,6 +153,7 @@ class DailyScalpingOrchestrator:
         # One V2 position review: no second trading loop, no exchange GET.
         # Until verified owned fills are integrated, review() is fail-closed.
         self._position_manager = PositionManager()
+        self._execution_preflight = ExecutionPreflight()
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
         """One original orchestrator result, NO Telegram/order-side effects."""
@@ -164,13 +167,24 @@ class DailyScalpingOrchestrator:
             )
         position = self._position_manager.review()
         # Never invent fills, PnL or executable SELL from a public scanner.
-        return replace(cycle, position_review={
-            "status": position.status,
-            "reason": position.reason,
-            "bot_ownership_verified": position.bot_ownership_verified,
-            "execution_allowed": position.execution_allowed,
-            "realized": position.realized,
-        })
+        preflight = self._execution_preflight.assess_buy()
+        return replace(
+            cycle,
+            position_review={
+                "status": position.status,
+                "reason": position.reason,
+                "bot_ownership_verified": position.bot_ownership_verified,
+                "execution_allowed": position.execution_allowed,
+                "realized": position.realized,
+            },
+            preflight_review={
+                "status": preflight.status,
+                "reason": preflight.reason,
+                "risk_veto": preflight.risk_veto,
+                "execution_allowed": preflight.execution_allowed,
+                "exchange_order_request_created": preflight.exchange_order_request_created,
+            },
+        )
 
     def _scan_with_early_momentum(self, client: IndodaxPublicMarket):
         """One existing scanner. Persist first minute ticker quotes across cycles.
