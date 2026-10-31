@@ -148,3 +148,15 @@ def parse_fills(payload, *, expected_symbol: str) -> tuple[FillRecord, ...]:
              _decimal(r.get("price"),"FILL_PRICE",positive=True),
              _decimal(r.get("commission"),"FILL_COMMISSION")))
     return tuple(out)
+
+def parse_open_orders(payload, *, expected_symbol: str | None = None) -> tuple[OrderRecord, ...]:
+    """Official openOrders is a direct list, unlike order histories {data:[]}."""
+    if type(payload) is not list or len(payload)>1000:
+        raise M06PayloadError("M06_OPEN_ORDERS_SCHEMA_INVALID")
+    if expected_symbol is None:
+        if payload:
+            raise M06PayloadError("M06_ALL_PAIR_OPEN_ORDER_RECONCILIATION_REQUIRED")
+        return ()
+    if any(type(row) is not dict for row in payload):
+        raise M06PayloadError("M06_OPEN_ORDER_RECORD_INVALID")
+    return parse_orders({"data": payload}, expected_symbol=expected_symbol)
