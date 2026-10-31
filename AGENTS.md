@@ -17,6 +17,19 @@ Berlaku untuk semua pekerjaan coding AI/agent dalam repository ini.
 
 **PENEGAKAN SETIAP GILIRAN:** sebelum memanggil tool atau membuat perubahan, pastikan **target repository persis `dvoriano/indodax-ai-bot-v2`**, target checklist asli V2, dan file V2 yang akan diubah. Bila permintaan mensyaratkan akses di luar allowlist, **STOP** pada batas itu dan minta izin owner untuk pengecualian spesifik. Jangan menganggap kata "lanjut" sebagai izin membuka V1. Jangan membuat migrasi ulang, jangan mengubah daftar `[x]/[ ]` tanpa acceptance baru.
 
+## SOP PENERIMAAN LIMA TAHAP (KEPUTUSAN OWNER 31 OKTOBER 2026)
+
+**Scope tetap 98 checklist asli** di [docs/ROADMAP.md](docs/ROADMAP.md). **49 butir historis [x] dibiarkan tetap selesai untuk saat ini; jangan audit ulang atau mengubahnya sebelum pemeriksaan kesiapan gabungan menjelang LIVE.** Kerjakan 49 butir yang masih [ ] melalui [docs/OPEN_CHECKLIST_STAGES.md](docs/OPEN_CHECKLIST_STAGES.md), yang merupakan **tampilan tahapan dari checklist asli, bukan roadmap kedua atau scope baru**. Rekonsiliasikan statusnya dengan ROADMAP saat setiap acceptance tuntas.
+
+Untuk setiap checklist terbuka, gunakan lima gerbang:
+1. **Kode**: implementasikan semua fungsi checklist sampai utuh; jangan berhenti pada kerangka atau file terisolasi. Memerlukan identitas kode/commit.
+2. **Audit**: targeted positive/negative integration, kegagalan, replay/restart, invariant security bila relevan. Jangan ulang tes PASS yang sudah diterima tanpa perubahan substansial. Cantumkan SHA, suite, dan hasil.
+3. **Terhubung bot**: buktikan caller resmi (CLI/systemd/Telegram) melalui SATU DailyScalpingOrchestrator ke modul produksi dan output/ledger. Mock/fixture dan import terisolasi tidak cukup.
+4. **Deploy**: verifikasi exact pinned source, installed unit/config dan operasi VPS V2 yang sama. Staging/worktree/DRAFT PR bukan deploy. Untuk checklist yang secara inheren berupa dokumen/izin non-runtime, beri catatan N/A beralasan, bukan centang deploy palsu.
+5. **Selesai**: hanya ketika acceptance asli item terpenuhi dan bukti tercatat. Ubah checkbox asli [ ] menjadi [x] di ROADMAP dan tahap Selesai di tracker pada perubahan yang sama.
+
+**Urutan kerja**: tutaskan implementasi dan integrasi yang diizinkan untuk satu checklist, lakukan satu penerimaan gabungan yang tepat, baru lanjut checklist lain. Tidak meminta owner mengulang tes mikro berturut-turut untuk kode parsial. Jika izin private-account, paid AI, network atau LIVE diperlukan, STOP di gerbang itu; persiapan offline diperbolehkan tetapi tidak dianggap selesai. Tidak ada GO tersirat. Sebelum LIVE, periksa ulang kesiapan gabungan seluruh 98 item, termasuk 49 historis, tanpa mengubah status historis sekarang. 
+
 ## IRON RULES (instruksi tertinggi pengembangan repo)
 - **DAILY SCALPING HARIAN 24/7 adalah kemampuan utama bot.** Satu jalur nyata: closed 1m + 5m/15m/BTC → G1 scan/rank 20–40 top 1–2 → MARKET/RISK/STRATEGY → Final MANUAL/AUTO PASS/REJECT → last-moment preflight → BUY → managed SELL → IDR realized PnL WIB. Hindari overnight HOLD, no forced trade.
 - **MULAI IMPLEMENTASI setelah rencana disusun.** Arsitektur, kontrak, struktur repo dan modul harus segera ditindaklanjuti dengan vertical slice runnable, bukan audit/dokumen berulang.
