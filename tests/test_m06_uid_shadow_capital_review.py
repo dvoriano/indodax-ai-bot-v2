@@ -33,6 +33,7 @@ class M06UIDShadowCommitmentsTests(unittest.TestCase):
             self.uid,
         )
         self.ownership = M06OwnershipLedger(self.path)
+        self.path.chmod(0o600)
         self.ownership.protect_manual_asset_floor(
             account_key=self.scope, asset="FLOKI",
             minimum_qty=D("750"),
