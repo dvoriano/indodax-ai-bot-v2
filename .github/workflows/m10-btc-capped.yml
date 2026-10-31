@@ -1,0 +1,33 @@
+name: M10 BTC bounded operations offline
+
+on:
+  pull_request:
+    paths:
+      - "indodax_ai_bot/btc_ops_gate.py"
+      - "deploy/indodax-v2-public-ws-btc.capped-dropin.conf"
+      - "deploy/indodax-v2-public-ws-btc.timer"
+      - "tests/test_m10_btc_capped_ops.py"
+      - ".github/workflows/m10-btc-capped.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capped-public-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      INDODAX_TRADING_ENABLED: "NO"
+      INDODAX_ALLOW_LIVE_EXECUTION: "NO"
+      INDODAX_EXECUTION_MODE: "DRY_RUN"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile actual original BTC M10 gate and test
+        run: python -m py_compile indodax_ai_bot/btc_ops_gate.py tests/test_m10_btc_capped_ops.py
+      - name: M10 owner GO, gap failstop and original systemd wiring
+        run: python -m unittest discover -s tests -p 'test_m10_btc_capped_ops.py' -v
