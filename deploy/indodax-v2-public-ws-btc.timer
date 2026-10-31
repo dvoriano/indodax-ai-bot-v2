@@ -1,0 +1,17 @@
+# M10 STAGED ONLY, NOT installed or enabled by this commit.
+# Reuses the EXISTING original service/SQLite; no second collector.
+# Operator must disable the original always-on SERVICE autostart first,
+# install and verify capped drop-in, create owner 0600 expiring GO,
+# then explicitly enable this timer with separate operator consent.
+[Unit]
+Description=Indodax V2 bounded PUBLIC BTC WS original supervised collector timer
+
+[Timer]
+Unit=indodax-v2-public-ws-btc.service
+OnCalendar=*:0/15
+AccuracySec=1min
+RandomizedDelaySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

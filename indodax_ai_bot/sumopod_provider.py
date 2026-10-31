@@ -21,6 +21,13 @@ from .ai_budget import AiBudgetError, PersistentAiBudget
 ROLES = ("MARKET", "RISK", "STRATEGY")
 URL = "https://ai.sumopod.com/v1/chat/completions"
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:-]{0,127}$")
+
+# Owner selection, 2026-10-30: one base model for three DISTINCT AI roles.
+# Role prompts, ordered inputs, veto and schema remain independent.
+# Selection is NOT a provider availability, pricing, or paid-network GO.
+OWNER_SELECTED_MODEL = "glm-5.3-flash"
+DEFAULT_ROLE_MODELS = {role: OWNER_SELECTED_MODEL for role in ROLES}
+
 PAIR_RE = re.compile(r"^[a-z0-9]+_idr$")
 DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
 
@@ -182,9 +189,9 @@ class SumopodChatAdapter:
         return cls(
             api_key=env.get("SUMOPOD_API_KEY", ""),
             models={
-                "MARKET": env.get("SUMOPOD_MODEL_MARKET", ""),
-                "RISK": env.get("SUMOPOD_MODEL_RISK", ""),
-                "STRATEGY": env.get("SUMOPOD_MODEL_STRATEGY", ""),
+                "MARKET": env.get("SUMOPOD_MODEL_MARKET", DEFAULT_ROLE_MODELS["MARKET"]),
+                "RISK": env.get("SUMOPOD_MODEL_RISK", DEFAULT_ROLE_MODELS["RISK"]),
+                "STRATEGY": env.get("SUMOPOD_MODEL_STRATEGY", DEFAULT_ROLE_MODELS["STRATEGY"]),
             },
             transport=transport,
             # Never turn paid network on using an env flag. This stage is

@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from indodax_ai_bot.config import Settings
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
-from indodax_ai_bot.sumopod_provider import ROLES, SumopodChatAdapter, SumopodProviderError, URL
+from indodax_ai_bot.sumopod_provider import (ROLES, SumopodChatAdapter, SumopodProviderError, URL, OWNER_SELECTED_MODEL, DEFAULT_ROLE_MODELS)
 from indodax_ai_bot.three_role_ai import ThreeRoleShadow
 from test_m03g_bulk import FakeBulkMarket, fake_screen
 from test_m04a_three_role_shadow import RoleCaller, signed_role_run
@@ -71,8 +71,39 @@ class M04BSumopodTests(unittest.TestCase):
         adapter=SumopodChatAdapter.configured_from_env(env)
         with self.assertRaisesRegex(SumopodProviderError,"SUMOPOD_PAID_NETWORK_DISABLED"):
             adapter("RISK",evidence())
-        with self.assertRaises(SumopodProviderError):
-            SumopodChatAdapter.configured_from_env({"SUMOPOD_API_KEY":KEY})
+        # Owner-selected default uses ONE model for THREE separate roles.
+        # Explicitly empty env overrides are still invalid, not fallback.
+        self.assertEqual(OWNER_SELECTED_MODEL, "glm-5.3-flash")
+        self.assertEqual(DEFAULT_ROLE_MODELS,
+                         {role: OWNER_SELECTED_MODEL for role in ROLES})
+        default = SumopodChatAdapter.configured_from_env({"SUMOPOD_API_KEY":KEY})
+        self.assertEqual(default._models, DEFAULT_ROLE_MODELS)
+        with self.assertRaisesRegex(SumopodProviderError, "MODEL_ID"):
+            SumopodChatAdapter.configured_from_env(
+                {"SUMOPOD_API_KEY": KEY, "SUMOPOD_MODEL_RISK": ""}
+            )
+        with self.assertRaisesRegex(SumopodProviderError, "API_KEY"):
+            SumopodChatAdapter.configured_from_env({})
+
+    def test_owner_three_glm53_role_payloads_are_distinct_and_network_test_only(self):
+        # The same model ID does NOT collapse MARKET/RISK/STRATEGY into one
+        # decision or bypass the source-bound JSON response check.
+        calls = []
+        def fake(body, headers, timeout):
+            calls.append(body)
+            self.assertEqual(body["model"], "glm-5.3-flash")
+            self.assertEqual(body["stream"], False)
+            return result(ROLES[len(calls) - 1])
+        adapter = SumopodChatAdapter.configured_from_env(
+            {"SUMOPOD_API_KEY": KEY}, transport=fake
+        )
+        for role in ROLES:
+            self.assertEqual(adapter(role, evidence())["role"], role)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([x["model"] for x in calls],
+                         ["glm-5.3-flash"] * 3)
+        self.assertNotIn(KEY, repr(adapter))
+        self.assertEqual([e["role"] for e in adapter.usage_events], list(ROLES))
 
     def test_missing_role_invalid_model_and_key_fail_closed(self):
         with self.assertRaisesRegex(SumopodProviderError,"THREE_ROLE_MODELS"):
