@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .m06_private_payloads import OrderRecord, FillRecord
+from .m06_shadow_account import _amount
 
 
 class OwnershipConflict(ValueError):
@@ -28,6 +29,21 @@ class OwnershipReview:
     bot_owned_verified: bool = False
     execution_allowed: bool = False
     status: str = "UNVERIFIED_LOCAL_INTENT_ONLY"
+    protected_rebuy: ProtectedRebuyReview | None = None
+
+
+@dataclass(frozen=True)
+class ProtectedRebuyReview:
+    """Account-scoped LOCAL observation only; never proof of exchange funds."""
+    floki_idr_local_protected: Decimal
+    pepe_idr_local_protected: Decimal
+    total_idr_local_protected: Decimal
+    distinct_sell_fills: int
+    exchange_proceeds_verified: bool = False
+    rebuy_spending_allowed: bool = False
+    main_capital_spending_allowed: bool = False
+    execution_allowed: bool = False
+    status: str = "LOCAL_SPECIAL_SELL_PROCEEDS_REBUY_HOLD_UNVERIFIED"
 
 
 class M06OwnershipLedger:
@@ -50,6 +66,13 @@ class M06OwnershipLedger:
                 trade_id TEXT PRIMARY KEY, order_id TEXT NOT NULL,
                 symbol TEXT NOT NULL, qty TEXT NOT NULL,
                 price TEXT NOT NULL, fee TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_special_rebuy_observations (
+                trade_id TEXT PRIMARY KEY,
+                account_hash TEXT NOT NULL,
+                asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
+                order_id TEXT NOT NULL,
+                gross_idr TEXT NOT NULL
             )""")
 
     def _db(self):
@@ -83,6 +106,88 @@ class M06OwnershipLedger:
             except sqlite3.IntegrityError:
                 raise OwnershipConflict("M06_CLIENT_ID_REUSE_CONFLICT") from None
 
+    @staticmethod
+    def _read_rebuy_in_transaction(db, account_hash: str) -> ProtectedRebuyReview:
+        rows = db.execute(
+            "SELECT asset,gross_idr FROM m06_special_rebuy_observations "
+            "WHERE account_hash=? ORDER BY trade_id LIMIT 10001",
+            (account_hash,),
+        ).fetchall()
+        if len(rows) > 10000:
+            raise OwnershipConflict("M06_REBUY_LEDGER_LIMIT_EXCEEDED")
+        floki, pepe = Decimal("0"), Decimal("0")
+        for asset, raw in rows:
+            try:
+                value = _amount(Decimal(raw))
+            except (ValueError, ArithmeticError):
+                raise OwnershipConflict("M06_REBUY_LEDGER_AMOUNT_CORRUPT") from None
+            if asset == "FLOKI":
+                floki += value
+            elif asset == "PEPE":
+                pepe += value
+            else:
+                raise OwnershipConflict("M06_REBUY_LEDGER_ASSET_CORRUPT")
+        try:
+            _amount(floki)
+            _amount(pepe)
+            _amount(floki + pepe)
+        except ValueError:
+            raise OwnershipConflict("M06_REBUY_LEDGER_TOTAL_OUT_OF_RANGE") from None
+        return ProtectedRebuyReview(
+            floki, pepe, floki + pepe, len(rows),
+        )
+
+    def review_protected_rebuy(self, *, account_key: str) -> ProtectedRebuyReview:
+        """Read persisted conservative holds; NEVER claim actual wallet proceeds."""
+        account = self._identity(account_key)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            return self._read_rebuy_in_transaction(db, account)
+
+    @staticmethod
+    def _maybe_protect_special_sell(db, *, account_hash: str,
+                                    order: OrderRecord,
+                                    fill: FillRecord) -> None:
+        asset = {"flokiidr": "FLOKI", "pepeidr": "PEPE"}.get(order.symbol)
+        if asset is None or order.side != "SELL":
+            return
+        if fill.is_buyer is not None and fill.is_buyer is not False:
+            raise OwnershipConflict("M06_SPECIAL_FILL_SIDE_CONFLICT")
+        if (fill.client_order_id is not None
+                and fill.client_order_id != order.client_order_id):
+            raise OwnershipConflict("M06_SPECIAL_FILL_CLIENT_ID_CONFLICT")
+        try:
+            _amount(fill.quantity)
+            _amount(fill.price)
+            _amount(fill.commission)
+            if fill.quantity <= 0 or fill.price <= 0:
+                raise ValueError("M06_SPECIAL_FILL_NONPOSITIVE")
+            gross = _amount(fill.quantity * fill.price)
+            if fill.quote_quantity is not None:
+                gross = max(gross, _amount(fill.quote_quantity))
+            if gross <= 0:
+                raise ValueError("M06_SPECIAL_FILL_GROSS_NONPOSITIVE")
+        except ValueError:
+            raise OwnershipConflict("M06_SPECIAL_FILL_AMOUNT_INVALID") from None
+        # Conservatively hold GROSS quote IDR (no fee deduction); a locally
+        # observed rebuy BUY is not allowed to reduce this hold.
+        observed = (account_hash, asset, order.order_id, str(gross))
+        prior = db.execute(
+            "SELECT account_hash,asset,order_id,gross_idr "
+            "FROM m06_special_rebuy_observations WHERE trade_id=?",
+            (fill.trade_id,),
+        ).fetchone()
+        if prior is not None:
+            if prior != observed:
+                raise OwnershipConflict("M06_REBUY_TRADE_REPLAY_CONFLICT")
+        else:
+            db.execute(
+                "INSERT INTO m06_special_rebuy_observations "
+                "(trade_id,account_hash,asset,order_id,gross_idr) "
+                "VALUES(?,?,?,?,?)",
+                (fill.trade_id, *observed),
+            )
+
     def observe(self, *, account_key: str, order: OrderRecord,
                 fills: tuple[FillRecord, ...]) -> OwnershipReview:
         account=self._identity(account_key)
@@ -91,6 +196,15 @@ class M06OwnershipLedger:
         if any(type(f) is not FillRecord or f.order_id!=order.order_id
                or f.symbol!=order.symbol for f in fills):
             raise OwnershipConflict("M06_FOREIGN_FILL")
+        if (order.bot_owned_verified is not False
+                or any(f.bot_owned_verified is not False for f in fills)):
+            raise OwnershipConflict("M06_FORGED_OWNERSHIP_AUTHORITY")
+        if any(f.client_order_id is not None
+               and f.client_order_id != order.client_order_id for f in fills):
+            raise OwnershipConflict("M06_FOREIGN_CLIENT_FILL")
+        if any(f.is_buyer is not None
+               and f.is_buyer != (order.side == "BUY") for f in fills):
+            raise OwnershipConflict("M06_FILL_SIDE_MISMATCH")
         if len(set(f.trade_id for f in fills))!=len(fills):
             raise OwnershipConflict("M06_DUPLICATE_FILL_ID")
         with self._db() as db:
@@ -108,5 +222,27 @@ class M06OwnershipLedger:
                     raise OwnershipConflict("M06_FILL_REPLAY_CONFLICT")
                 if existing is None:
                     db.execute("INSERT INTO m06_observed_fills VALUES(?,?,?,?,?,?)",(fill.trade_id,*payload))
+                if matched:
+                    self._maybe_protect_special_sell(
+                        db, account_hash=account, order=order, fill=fill,
+                    )
+            if matched and order.symbol in ("flokiidr", "pepeidr") and fills:
+                # A partial snapshot cannot justify more observed fills than
+                # the reported cumulative exchange executed quantity.
+                prior_quantities = db.execute(
+                    "SELECT qty FROM m06_observed_fills WHERE order_id=?",
+                    (order.order_id,),
+                ).fetchall()
+                try:
+                    observed_quantity = sum(
+                        (_amount(Decimal(qty)) for (qty,) in prior_quantities),
+                        Decimal("0"),
+                    )
+                except ValueError:
+                    raise OwnershipConflict("M06_OBSERVED_FILL_QTY_INVALID") from None
+                if observed_quantity > order.executed_qty:
+                    raise OwnershipConflict("M06_SELL_FILL_EXCEEDS_ORDER")
+            protected = self._read_rebuy_in_transaction(db, account)
             return OwnershipReview(order.order_id,row is not None,matched,
-                                   tuple(f.trade_id for f in fills))
+                                   tuple(f.trade_id for f in fills),
+                                   protected_rebuy=protected)
