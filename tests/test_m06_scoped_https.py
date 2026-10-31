@@ -158,6 +158,73 @@ class M06PrivateGOTests(unittest.TestCase):
                 _read_json_over_verified_tls(prepared)
             https.assert_not_called()
 
+    def test_original_four_reads_reconcile_rebuy_and_ownership_as_blocked(self):
+        now = self.now
+        fixtures = {
+            "/api/v2/account": {
+                "uid": 123, "canTrade": False, "canWithdraw": False,
+                "canWithdrawFiat": False,
+                "balances": [
+                    {"asset": "IDR", "free": "750000", "locked": "100000"},
+                    {"asset": "FLOKI", "free": "1000000", "locked": "0"},
+                    {"asset": "PEPE", "free": "250000", "locked": "0"},
+                ],
+            },
+            "/api/v2/openOrders": [
+                {"orderId": 46, "fullOrderId": "injidr-limit-46",
+                 "clientOrderId": "other-owner-46", "symbol": "INJIDR",
+                 "side": "BUY", "status": "NEW", "origQty": "10",
+                 "executedQty": "0"},
+            ],
+            "/api/v2/order/histories": {"data": []},
+            "/api/v2/myTrades": {"data": []},
+        }
+        with patch("indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
+                   side_effect=lambda req: fixtures[req.path]):
+            result = run_scoped_private_probe(
+                approval=self.approval,
+                budget=M06RequestBudget(self.db),
+                api_key="fixture-key", secret_key="fixture-secret")
+        self.assertEqual(result.status, "M06_VIEW_ONLY_RECONCILED_REJECT")
+        self.assertEqual(result.pending_buy_orders, 1)
+        self.assertEqual(result.open_orders_count, 1)
+        self.assertFalse(result.capital_spendable_verified)
+        self.assertFalse(result.protected_rebuy_verified)
+        self.assertFalse(result.special_asset_ownership_verified)
+        self.assertFalse(result.cross_bot_ownership_verified)
+        self.assertFalse(result.execution_allowed)
+        self.assertIn("UNVERIFIED_REBUY", result.reconciliation_status)
+
+    def test_conflicting_private_fill_returns_safe_fixed_error(self):
+        fixtures = {
+            "/api/v2/account": {
+                "uid": 1, "canTrade": False, "canWithdraw": False,
+                "canWithdrawFiat": False,
+                "balances": [{"asset": "IDR", "free": "100", "locked": "0"}],
+            },
+            "/api/v2/openOrders": [{
+                "orderId": 46, "fullOrderId": "injidr-limit-46",
+                "symbol": "INJIDR", "side": "BUY", "status": "NEW",
+                "clientOrderId": "v2-46", "origQty": "1", "executedQty": "0.5",
+            }],
+            "/api/v2/order/histories": {"data": []},
+            "/api/v2/myTrades": {"data": [{
+                "tradeId": "t-1", "orderId": "injidr-limit-46",
+                "clientOrderId": "v2-46", "symbol": "injidr",
+                "qty": "0.6", "price": "100", "commission": "0",
+                "isBuyer": True,
+            }]},
+        }
+        with patch("indodax_ai_bot.m06_scoped_https._read_json_over_verified_tls",
+                   side_effect=lambda req: fixtures[req.path]):
+            with self.assertRaisesRegex(
+                M06ScopeDenied, "PRIVATE_DATA_RECONCILIATION_REJECT"
+            ):
+                run_scoped_private_probe(
+                    approval=self.approval,
+                    budget=M06RequestBudget(self.db),
+                    api_key="fixture-key", secret_key="fixture-secret")
+
     def test_unapproved_route_cannot_hit_https(self):
         with self.assertRaisesRegex(M06ScopeDenied, "ROUTE_DENIED"):
             _read_json_over_verified_tls(object())
