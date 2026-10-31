@@ -35,6 +35,12 @@ Rujukan: dokumentasi resmi Indodax Trade API V2 pada `INDODAX-TradeAPI-2.md`. `G
 
 `DailyScalpingOrchestrator.review_m06_local_intent_ownership` tetap caller asli, kini menghasilkan protected rebuy review; `review_m06_protected_rebuy_offline`, `protect_m06_manual_holding_floor_offline` dan `reconcile_m06_capital_with_local_rebuy_offline` menggunakan **database ownership yang sama**. Reconciliation dari ledger lokal sengaja selalu `all_pairs_open_orders_complete=False`, `calculated_available_idr=0`, dan `execution_allowed=False`. Nominal lokal bukan bukti IDR yang sudah settled atau seluruh FLOKI/PEPE dimiliki bot, dan bukan basis izin BUY ataupun SELL. Manual floor bukan bukti exchange ownership. M06-04 dan M06-05 tetap OPEN sampai actual authenticated fills, complete history, cross-bot ownership dan installed runtime diverifikasi.
 
+## UID-bound local evidence
+
+Original M06 private diagnostic now reads the existing V2 journal SQLite as a read-only local source. The lookup uses the account UID returned by the account parser; it does not accept an arbitrary user account label. The file must be private and already exist. Missing or incompatible local evidence is reported as unavailable, without creating new tables.
+
+This is **CODED only** until the new tests pass on pinned V2 source. A matching local ledger is not verified exchange ownership. All trade and capital permissions remain OFF. Historical data from another account or unbound local records must not be silently migrated.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
