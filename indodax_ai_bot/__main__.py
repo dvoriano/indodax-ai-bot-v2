@@ -28,6 +28,12 @@ from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
 
+def _m06_fixed_budget_db() -> str:
+    """Single V2 scope accounting path; cannot be reset via CLI arguments."""
+    return str(Path.home() / ".local" / "state" /
+               "indodax-ai-bot-v2" / "m06-readonly-go-20261031.sqlite3")
+
+
 def _m03_deep_compact_from_original(outcome) -> dict:
     """Only the original orchestrator's DEEP20 outcome can feed this view."""
     from .contracts import FinalDecision
@@ -135,23 +141,20 @@ def main(argv: list[str] | None = None) -> int:
                         help="Owner-created 0600 approval JSON, absolute path, <=15 min")
     parser.add_argument("--m06-credentials-file", default=None,
                         help="0600 view-only API key JSON, absolute path; never use trading key")
-    parser.add_argument("--m06-budget-db", default=None,
-                        help="Persistent budget SQLite in existing owner-private 0700 directory")
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_env()
         if args.m06_private_readonly_once:
             # No implicit GO from branch/owner PASS or presence of environment keys.
-            if not all((args.m06_go_file, args.m06_credentials_file,
-                        args.m06_budget_db)):
+            if not all((args.m06_go_file, args.m06_credentials_file)):
                 raise ConfigurationError("M06_EXPLICIT_GO_FILES_REQUIRED")
             settings.require_m01_safety()
             try:
                 approval = read_approval(args.m06_go_file)
                 api_key, secret_key = read_view_only_credentials(
                     args.m06_credentials_file)
-                budget = M06RequestBudget(args.m06_budget_db)
+                budget = M06RequestBudget(_m06_fixed_budget_db())
                 journal = DecisionJournal(args.db)
                 orchestrator = DailyScalpingOrchestrator(settings, journal)
                 result = orchestrator.inspect_m06_private_readonly_once(
