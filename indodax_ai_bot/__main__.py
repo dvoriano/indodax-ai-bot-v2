@@ -15,6 +15,7 @@ from .config import ConfigurationError, Settings
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
 from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
+from .m06_account_coverage import read_coverage_approval, COVERAGE_ID
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
 from .telegram_readonly_preflight import inspect_telegram_readonly
@@ -29,6 +30,9 @@ from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
 def _m06_fixed_budget_db() -> str:
     """Single V2 scope accounting path; cannot be reset via CLI arguments."""
+    if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") == COVERAGE_ID:
+        return str(Path.home() / ".local" / "state" /
+                   "indodax-ai-bot-v2" / "m06-account-coverage-20261101.sqlite3")
     if (os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO")
             == "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"):
         return str(Path.home() / ".local" / "state" /
@@ -46,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Original V2 offline M06 account review, always REJECT; no private keys/requests")
     group.add_argument("--m06-private-readonly-once", action="store_true",
                        help="EXPLICIT scoped M06 GO: view-only four private HTTPS GETs only, never trade")
+    group.add_argument("--m06-account-coverage-once", action="store_true",
+                        help="Owner approved ONE 18-GET four-pair private READ ONLY coverage, never orders")
     group.add_argument("--once", action="store_true")
     parser.add_argument("--public-scanner-mainpath", action="store_true",
                         help="With --once only: opt-in same M03 bulk+G1+M04 no-trade pipeline using an existing BTC WS DB")
@@ -112,10 +118,60 @@ def main(argv: list[str] | None = None) -> int:
                         help="Owner-created 0600 approval JSON, absolute path, <=15 min")
     parser.add_argument("--m06-credentials-file", default=None,
                         help="0600 view-only API key JSON, absolute path; never use trading key")
+    parser.add_argument("--m06-ownership-db", default=None,
+                        help="Optional existing UID-bound V2 ownership SQLite, read-only")
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_env()
+        if args.m06_account_coverage_once:
+            settings.require_m01_safety()
+            if not all((args.m06_go_file, args.m06_credentials_file)):
+                raise ConfigurationError("M06_COVERAGE_EXPLICIT_GO_FILES_REQUIRED")
+            try:
+                approval = read_coverage_approval(args.m06_go_file)
+                api_key, secret_key = read_view_only_credentials(
+                    args.m06_credentials_file
+                )
+                budget = M06RequestBudget(_m06_fixed_budget_db())
+                journal = DecisionJournal(args.db)
+                result = DailyScalpingOrchestrator(
+                    settings, journal,
+                ).inspect_m06_account_coverage_once(
+                    approval=approval, budget=budget,
+                    api_key=api_key, secret_key=secret_key,
+                    local_ownership_db=args.m06_ownership_db,
+                )
+                journal.record_reject(
+                    "M06_COVERAGE_" + uuid4().hex, result.status,
+                )
+            except (M06ScopeDenied, ValueError):
+                print(json.dumps({
+                    "stage":"M06_ACCOUNT_COVERAGE_SCOPED",
+                    "status":"REJECT",
+                    "reason":"M06_COVERAGE_NOT_ACCEPTED",
+                    "execution_allowed":False,
+                },sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "stage":"M06_ACCOUNT_COVERAGE_SCOPED",
+                "status":result.status,
+                "request_count":result.request_count,
+                "pairs_checked":result.checked_pairs,
+                "windows_per_pair":result.checked_windows_per_pair,
+                "open_orders_count":result.open_orders_count,
+                "history_orders_count":result.history_orders_count,
+                "trade_fills_count":result.trade_fills_count,
+                "local_receipts_matched":result.local_receipts_matched,
+                "local_receipts_unlinked":result.local_receipts_unlinked,
+                "unresolved_requirements":list(result.unresolved_requirements),
+                "full_account_history_verified":result.full_account_history_verified,
+                "external_peer_coverage_verified":result.external_peer_coverage_verified,
+                "spendable_idr_verified":result.spendable_idr_verified,
+                "bot_owned_sellable_verified":result.bot_owned_sellable_verified,
+                "execution_allowed":False,
+            },sort_keys=True))
+            return 0
         if args.m06_private_readonly_once:
             # No implicit GO from branch/owner PASS or presence of environment keys.
             if not all((args.m06_go_file, args.m06_credentials_file)):
