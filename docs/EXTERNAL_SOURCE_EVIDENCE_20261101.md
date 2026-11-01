@@ -18,6 +18,14 @@ Official current FAQ: https://help.indodax.com/hc/id/articles/4416646599705-Rinc
 
 Official Trade API V2 account GET `/api/v2/account` reports `uid`, `balances[].asset/free/locked` and permission flags `canTrade/canWithdraw/canWithdrawFiat`, but merely possessing the documented schema is not proof our key is valid. Official account permissions are also documented at https://help.indodax.com/hc/id/articles/5315217255833-Bagaimana-Cara-Mengintegrasikan-API-INDODAX . Historic single GET HTTP401 cannot be treated as a successful authenticated account observation. No private call authorized here.
 
+## Verified API contract update for account evidence
+
+Official Trade API V2 `/api/v2/myTrades` returns **only fills belonging to the authenticated account**, including `tradeId`, `orderId`, `clientOrderId`, `commission`, `commissionAsset`, `isBuyer`, `isMaker`, and execution `time`. The official `/api/v2/order/histories` endpoint returns order-side lifecycle and client order IDs for a given pair and date range. The newer trade history API supports **up to seven days per requested range** and `limit` 10..1000; default is 24h. These matter for bot-owned versus manual/family asset reconciliation, but cannot prove complete public G1 tape. Source: https://github.com/btcid/indodax-official-api-docs/blob/master/INDODAX-TradeAPI-2.md .
+
+The official private REST reference announces legacy `tradeHistory` and `orderHistory` decommissioning **April 7, 2026** and directs integrations to `/api/v2/myTrades` and `/api/v2/order/histories`: https://github.com/btcid/indodax-official-api-docs/blob/master/Private-RestAPI.md . V2 evidence collection therefore must target supported V2 endpoints, and never infer user order ownership from a public ticker or old endpoint response.
+
+**External gap still open:** the checked official public REST and WS specs do not document a trustworthy signed full-market 15m/1h trade-tape completeness endpoint. Additional provider or exchange confirmation is needed. No confidence rating or locally manufactured HMAC can fill that gap.
+
 ## Direct externally visible sample (not a full tape)
 
 On 2026-11-01 the public `https://indodax.com/api/server_time` returned `{"timezone":"UTC","server_time":1793532895855}` (UTC 2026-11-01 11:34:55.855), observed via a read-only public web fetch. This verifies the endpoint's JSON shape and accessibility FROM THAT retrieval surface only, NOT matching local VPS clock, actual 1m/15m/1h continuity, independent issuer authentication, private account identity, or current scanner readiness. A public `/api/trades/btcidr` endpoint was externally reachable as JSON, but its row body was not captured/validated in this evidence session. Other public endpoints were not consistently retrievable from that external web tool; no fabricated samples are present.
