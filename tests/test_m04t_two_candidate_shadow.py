@@ -148,16 +148,19 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         self.assertEqual(result["reason"], "G1_ISSUER_RECEIPT_UNVERIFIED")
         caller.assert_not_called()
 
-    def test_risk_veto_prevents_strategy_on_each_pair(self):
+    def test_risk_no_trade_keeps_strategy_advisory_on_each_pair(self):
         bulk, verifier = signed_two_pair_source()
         caller = RoleCaller(risk="NO_TRADE")
         result = ThreeRoleShadow(
             caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
         ).run("trace", bulk)
-        self.assertEqual(caller.calls, ["MARKET", "RISK"] * 2)
-        self.assertEqual(result["completed_role_calls"], 4)
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"] * 2)
+        self.assertEqual(result["completed_role_calls"], 6)
         self.assertTrue(all(
-            r["reason"] == "RISK_VETO_NO_TRADE" for r in result["candidate_reports"]
+            r["reason"] == "RISK_VETO_NO_TRADE"
+            and r["completed_roles"] == ["MARKET", "RISK", "STRATEGY"]
+            and r["role_results"][-1]["effective_action"] == "WAIT"
+            for r in result["candidate_reports"]
         ))
         self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
