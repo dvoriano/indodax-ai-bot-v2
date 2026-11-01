@@ -34,8 +34,9 @@ _ONE_SHOT_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031"  # spent/locke
 _RETRY_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"
 _COVERAGE_APPROVAL_ID = "M06_PRIVATE_ACCOUNT_COVERAGE_20261101"
 _MAX_BYTES = 1_000_000
-# Original one-shot is permanently disabled. Only this explicitly reapproved
-# retry, on its own nonrenewable budget, may access private HTTPS.
+# The historic four-GET one-shot remains spent. A separately approved
+# coverage ID uses a distinct fixed budget and a durable single-use claim.
+# Neither authorization grants trade or unlocks old one-shot budgets.
 _RELEASE_APPROVAL_ID = os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO")
 _NETWORK_RELEASE_GO = _RELEASE_APPROVAL_ID in (_RETRY_APPROVAL_ID, _COVERAGE_APPROVAL_ID)
 _SYMBOL = re.compile(r"^[a-z0-9]{2,24}idr$")
