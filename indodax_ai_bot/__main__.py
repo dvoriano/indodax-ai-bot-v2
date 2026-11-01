@@ -15,6 +15,7 @@ from .config import ConfigurationError, Settings
 from .m03_egress_admission import M03SharedEgressAdmission
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
+from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
 from .telegram_readonly_preflight import inspect_telegram_readonly
@@ -25,6 +26,16 @@ from .telegram_dedicated_inbound import (
 from .public_ws_health import public_ws_health
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
+
+
+def _m06_fixed_budget_db() -> str:
+    """Single V2 scope accounting path; cannot be reset via CLI arguments."""
+    if (os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO")
+            == "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"):
+        return str(Path.home() / ".local" / "state" /
+                   "indodax-ai-bot-v2" / "m06-owner-viewonly-retry-20261031.sqlite3")
+    return str(Path.home() / ".local" / "state" /
+               "indodax-ai-bot-v2" / "m06-owner-viewonly-one-shot-20261031.sqlite3")
 
 
 def _m03_deep_compact_from_original(outcome) -> dict:
@@ -64,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m06-account-review-once", action="store_true",
+                       help="Original V2 offline M06 account review, always REJECT; no private keys/requests")
+    group.add_argument("--m06-private-readonly-once", action="store_true",
+                       help="EXPLICIT scoped M06 GO: view-only four private HTTPS GETs only, never trade")
     group.add_argument("--once", action="store_true")
     parser.add_argument("--public-scanner-mainpath", action="store_true",
                         help="With --once only: opt-in same M03 bulk+G1+M04 no-trade pipeline using an existing BTC WS DB")
@@ -126,10 +141,84 @@ def main(argv: list[str] | None = None) -> int:
                         help="Opt-in OFFLINE owner REJECT audit DB (no Telegram transport or orders)")
     parser.add_argument("--m05-shadow-owner-id", type=int, default=None,
                         help="Opt-in numeric Telegram owner user ID, OFFLINE only")
+    parser.add_argument("--m06-go-file", default=None,
+                        help="Owner-created 0600 approval JSON, absolute path, <=15 min")
+    parser.add_argument("--m06-credentials-file", default=None,
+                        help="0600 view-only API key JSON, absolute path; never use trading key")
     args = parser.parse_args(argv)
 
     try:
         settings = Settings.from_env()
+        if args.m06_private_readonly_once:
+            # No implicit GO from branch/owner PASS or presence of environment keys.
+            if not all((args.m06_go_file, args.m06_credentials_file)):
+                raise ConfigurationError("M06_EXPLICIT_GO_FILES_REQUIRED")
+            settings.require_m01_safety()
+            try:
+                approval = read_approval(args.m06_go_file)
+                api_key, secret_key = read_view_only_credentials(
+                    args.m06_credentials_file)
+                budget = M06RequestBudget(_m06_fixed_budget_db())
+                journal = DecisionJournal(args.db)
+                orchestrator = DailyScalpingOrchestrator(settings, journal)
+                result = orchestrator.inspect_m06_private_readonly_once(
+                    approval=approval, budget=budget,
+                    api_key=api_key, secret_key=secret_key,
+                    local_ownership_db=args.db)
+                journal.record_reject("M06_PRIVATE_READONLY_" + uuid4().hex,
+                                      result.status)
+            except M06ScopeDenied as exc:
+                # Fixed error codes only; NEVER emit API response/keys/balance.
+                print(json.dumps({"status":"REJECT", "reason":str(exc),
+                    "execution_allowed":False}), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "status":result.status,
+                "view_only_permissions_verified":
+                    result.view_only_permissions_verified,
+                "reconciliation_status":result.reconciliation_status,
+                "capital_spendable_verified":result.capital_spendable_verified,
+                "protected_rebuy_verified":result.protected_rebuy_verified,
+                "special_asset_ownership_verified":
+                    result.special_asset_ownership_verified,
+                "local_ledger_account_bound":result.local_ledger_account_bound,
+                "local_rebuy_hold_present":result.local_rebuy_hold_present,
+                "local_manual_floor_present":result.local_manual_floor_present,
+                "local_shadow_reservations_present":result.local_shadow_reservations_present,
+                "local_shadow_coverage_complete":result.local_shadow_coverage_complete,
+                "local_rebuy_receipts_linked":result.local_rebuy_receipts_linked,
+                "local_other_account_records_present":result.local_other_account_records_present,
+                "local_orphan_fill_records_present":result.local_orphan_fill_records_present,
+                "external_peer_coverage_verified":result.external_peer_coverage_verified,
+                "special_pool_local_floors_complete":result.special_pool_local_floors_complete,
+                "pending_buy_orders":result.pending_buy_orders,
+                "unmatched_fills_in_window":result.unmatched_fills_in_window,
+                "open_orders_count":result.open_orders_count,
+                "order_history_count":result.order_history_count,
+                "fills_count":result.fills_count,
+                "history_complete":result.history_complete,
+                "bot_owned_fills_verified":result.bot_owned_fills_verified,
+                "cross_bot_ownership_verified":result.cross_bot_ownership_verified,
+                "execution_allowed":result.execution_allowed,
+            },sort_keys=True))
+            return 0
+        if args.m06_account_review_once:
+            settings.require_m01_safety()
+            journal = DecisionJournal(args.db)
+            orchestrator = DailyScalpingOrchestrator(settings, journal)
+            review = orchestrator.review_m06_account(now_epoch=int(time.time()))
+            journal.record_reject("M06_ACCOUNT_READONLY_NO_GO", review.reason)
+            print(json.dumps({
+                "stage": "M06_ACCOUNT_READONLY_ORIGINAL_MAINPATH",
+                "status": review.status,
+                "reason": review.reason,
+                "execution_allowed": review.execution_allowed,
+                "account_authenticated": review.account_authenticated,
+                "orders_complete": review.orders_complete,
+                "fills_complete": review.fills_complete,
+                "cross_bot_coexistence_verified": review.cross_bot_coexistence_verified,
+            }, sort_keys=True))
+            return 0
         if (args.m05_shadow_db is None) != (args.m05_shadow_owner_id is None):
             raise ConfigurationError("M05_REQUIRES_BOTH_SHADOW_OWNER_AND_DB")
         if args.m05_shadow_db is not None and not (

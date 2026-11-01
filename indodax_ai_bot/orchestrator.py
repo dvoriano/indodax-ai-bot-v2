@@ -17,6 +17,12 @@ from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_bac
 from .three_role_ai import ThreeRoleShadow
 from .position_manager import PositionManager
 from .execution_preflight import ExecutionPreflight
+from .m06_account_review import review_unverified_account, M06AccountDecision
+from .m06_shadow_account import AccountObservation
+from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
+from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, ProtectedRebuyReview
+from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
+from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
 from .owner_control import OwnerDecisionLedger
@@ -154,6 +160,110 @@ class DailyScalpingOrchestrator:
         # Until verified owned fills are integrated, review() is fail-closed.
         self._position_manager = PositionManager()
         self._execution_preflight = ExecutionPreflight()
+
+    def review_m06_account(self, *, observation: AccountObservation | None = None,
+                           now_epoch: int) -> M06AccountDecision:
+        """One original orchestrator, local offline account diagnostic only."""
+        self.settings.require_m01_safety()
+        return review_unverified_account(observation, now_epoch=now_epoch)
+
+    def inspect_m06_offline_private_fixtures(self, *, account_payload,
+            open_orders_payload, orders_payload, fills_payload,
+            symbol: str, now_epoch: int) -> dict:
+        """Original orchestrator parser path, untrusted fixtures, NO network."""
+        self.settings.require_m01_safety()
+        if type(now_epoch) is not int or now_epoch <= 0:
+            raise ValueError("M06_REVIEW_EPOCH_INVALID")
+        account = parse_account(account_payload)
+        open_orders = parse_open_orders(open_orders_payload, expected_symbol=symbol)
+        orders = parse_orders(orders_payload, expected_symbol=symbol)
+        fills = parse_fills(fills_payload, expected_symbol=symbol)
+        return {
+            "status": "REJECT",
+            "reason": "M06_PRIVATE_FIXTURE_UNTRUSTED_OR_INCOMPLETE",
+            "observed_uid_present": account.uid > 0,
+            "free_idr_unverified": str(account.free_idr),
+            "locked_idr_unverified": str(account.locked_idr),
+            "open_orders_seen": len(open_orders),
+            "historical_orders_seen": len(orders),
+            "fills_seen": len(fills),
+            "account_authenticated": False,
+            "orders_complete": False,
+            "fills_complete": False,
+            "bot_ownership_verified": False,
+            "cross_bot_coexistence_verified": False,
+            "execution_allowed": False,
+        }
+
+    def review_m06_local_intent_ownership(self, *, db_path: str,
+            account_key: str, order, fills) -> OwnershipReview:
+        """One original V2 orchestrator: persisted local evidence, never authenticated."""
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger(db_path).observe(
+            account_key=account_key, order=order, fills=fills)
+
+    def protect_m06_manual_holding_floor_offline(self, *, db_path: str,
+            account_key: str, asset: str,
+            minimum_qty: Decimal) -> ProtectedRebuyReview:
+        """Original V2 caller protects manual FLOKI/PEPE local floor."""
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger(db_path).protect_manual_asset_floor(
+            account_key=account_key, asset=asset, minimum_qty=minimum_qty,
+        )
+
+    def review_m06_protected_rebuy_offline(self, *, db_path: str,
+            account_key: str) -> ProtectedRebuyReview:
+        """Same M06 ownership database; local gross SELL proceeds stay locked."""
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger(db_path).review_protected_rebuy(
+            account_key=account_key,
+        )
+
+    def reconcile_m06_capital_with_local_rebuy_offline(self, *,
+            db_path: str, account_key: str, account, open_orders,
+            unlocked_commitments_idr: Decimal,
+            local_shadow_idr: Decimal) -> CapitalReconciliation:
+        """Original V2 capital calculator fed by local rebuy ledger, never LIVE.
+
+        A local-only ledger cannot prove exchange-wide coverage, prior sales
+        or external commitments. Always force all_pairs complete=False.
+        """
+        self.settings.require_m01_safety()
+        rebuy = self.review_m06_protected_rebuy_offline(
+            db_path=db_path, account_key=account_key,
+        )
+        return reconcile_unverified_capital(
+            account=account, open_orders=open_orders,
+            rebuy_idr=rebuy.total_idr_local_protected,
+            unlocked_commitments_idr=unlocked_commitments_idr,
+            local_shadow_idr=local_shadow_idr,
+            all_pairs_open_orders_complete=False,
+        )
+
+    def reconcile_m06_capital_offline(self, *, account, open_orders,
+            rebuy_idr: Decimal, unlocked_commitments_idr: Decimal,
+            local_shadow_idr: Decimal,
+            all_pairs_open_orders_complete: bool = False) -> CapitalReconciliation:
+        """One original orchestrator boundary; NEVER authenticated account authority."""
+        self.settings.require_m01_safety()
+        return reconcile_unverified_capital(
+            account=account, open_orders=open_orders, rebuy_idr=rebuy_idr,
+            unlocked_commitments_idr=unlocked_commitments_idr,
+            local_shadow_idr=local_shadow_idr,
+            all_pairs_open_orders_complete=all_pairs_open_orders_complete,
+        )
+
+    def inspect_m06_private_readonly_once(self, *, approval: M06ScopedApproval,
+            budget: M06RequestBudget, api_key: str,
+            secret_key: str,
+            local_ownership_db: str | None = None) -> M06PrivateProbeResult:
+        """Original orchestrator; explicit M06 GO, four GETs, no trade authority."""
+        self.settings.require_m01_safety()
+        return run_scoped_private_probe(
+            approval=approval, budget=budget,
+            api_key=api_key, secret_key=secret_key,
+            local_ownership_db=local_ownership_db,
+        )
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
         """One original orchestrator result, NO Telegram/order-side effects."""
