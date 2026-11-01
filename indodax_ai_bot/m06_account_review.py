@@ -129,6 +129,7 @@ class M06ReadOnlyReconciliation:
     local_manual_floor_present: bool = False
     local_shadow_reservations_present: bool = False
     local_shadow_coverage_complete: bool = False
+    local_rebuy_receipts_linked: bool = False
     special_pool_local_floors_complete: bool = False
     protected_rebuy_ledger_verified: bool = False
     manual_asset_ownership_verified: bool = False
@@ -223,6 +224,8 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
             and local_rebuy.local_shadow_commitments_idr > 0),
         local_shadow_coverage_complete=(local_rebuy is not None
             and local_rebuy.local_shadow_coverage_complete is True),
+        local_rebuy_receipts_linked=(local_rebuy is not None
+            and local_rebuy.local_rebuy_receipts_linked is True),
         special_pool_local_floors_complete=all(
             p.local_manual_floor_recorded for p in pool_previews
         ),
