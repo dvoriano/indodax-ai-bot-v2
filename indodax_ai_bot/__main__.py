@@ -165,6 +165,14 @@ def main(argv: list[str] | None = None) -> int:
                 "local_receipts_matched":result.local_receipts_matched,
                 "local_receipts_unlinked":result.local_receipts_unlinked,
                 "unresolved_requirements":list(result.unresolved_requirements),
+                "m06_02_balance_and_open_orders_observed":
+                    result.m06_02_balance_and_open_orders_observed,
+                "m06_03_special_pool_ratio_observed":
+                    result.m06_03_special_pool_ratio_observed,
+                "m06_04_local_fill_receipts_in_window_matched":
+                    result.m06_04_local_fill_receipts_in_window_matched,
+                "m06_05_local_account_conflict_free":
+                    result.m06_05_local_account_conflict_free,
                 "full_account_history_verified":result.full_account_history_verified,
                 "external_peer_coverage_verified":result.external_peer_coverage_verified,
                 "spendable_idr_verified":result.spendable_idr_verified,
