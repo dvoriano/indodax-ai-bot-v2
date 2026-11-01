@@ -157,8 +157,9 @@ def main(argv: list[str] | None = None) -> int:
                     approval=approval, budget=budget,
                     api_key=api_key, secret_key=secret_key,
                 )
-                journal.record_reject(
-                    "M06_ACCOUNT_DIAG_" + uuid4().hex, result.status,
+                journal.record_stage_observation(
+                    "M06_ACCOUNT_DIAG_" + uuid4().hex,
+                    "M06_PRIVATE_ACCOUNT_DIAGNOSTIC", result.status,
                 )
             except (M06ScopeDenied, ValueError) as exc:
                 print(json.dumps({
@@ -199,8 +200,9 @@ def main(argv: list[str] | None = None) -> int:
                     api_key=api_key, secret_key=secret_key,
                     local_ownership_db=args.m06_ownership_db,
                 )
-                journal.record_reject(
-                    "M06_COVERAGE_" + uuid4().hex, result.status,
+                journal.record_stage_observation(
+                    "M06_COVERAGE_" + uuid4().hex,
+                    "M06_ACCOUNT_COVERAGE", result.status,
                 )
             except (M06ScopeDenied, ValueError) as exc:
                 print(json.dumps({
@@ -253,8 +255,10 @@ def main(argv: list[str] | None = None) -> int:
                     approval=approval, budget=budget,
                     api_key=api_key, secret_key=secret_key,
                     local_ownership_db=args.db)
-                journal.record_reject("M06_PRIVATE_READONLY_" + uuid4().hex,
-                                      result.status)
+                journal.record_stage_observation(
+                    "M06_PRIVATE_READONLY_" + uuid4().hex,
+                    "M06_PRIVATE_READONLY", result.status,
+                )
             except M06ScopeDenied as exc:
                 # Fixed error codes only; NEVER emit API response/keys/balance.
                 print(json.dumps({"status":"REJECT", "reason":str(exc),
@@ -298,7 +302,10 @@ def main(argv: list[str] | None = None) -> int:
             journal = DecisionJournal(args.db)
             orchestrator = DailyScalpingOrchestrator(settings, journal)
             review = orchestrator.review_m06_account(now_epoch=int(time.time()))
-            journal.record_reject("M06_ACCOUNT_READONLY_NO_GO", review.reason)
+            journal.record_stage_observation(
+                "M06_ACCOUNT_READONLY_NO_GO",
+                "M06_LOCAL_ACCOUNT_PREVIEW", review.reason,
+            )
             print(json.dumps({
                 "stage": "M06_ACCOUNT_READONLY_ORIGINAL_MAINPATH",
                 "status": review.status,
