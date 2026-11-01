@@ -22,6 +22,18 @@ Official Trade API V2 account GET `/api/v2/account` reports `uid`, `balances[].a
 
 On 2026-11-01 the public `https://indodax.com/api/server_time` returned `{"timezone":"UTC","server_time":1793532895855}` (UTC 2026-11-01 11:34:55.855), observed via a read-only public web fetch. This verifies the endpoint's JSON shape and accessibility FROM THAT retrieval surface only, NOT matching local VPS clock, actual 1m/15m/1h continuity, independent issuer authentication, private account identity, or current scanner readiness. A public `/api/trades/btcidr` endpoint was externally reachable as JSON, but its row body was not captured/validated in this evidence session. Other public endpoints were not consistently retrievable from that external web tool; no fabricated samples are present.
 
+## Original VPS BTC WebSocket measured evidence (owner proof 2026-11-01)
+
+**Pinned source**: branch commit `341c3f526263f0a7a407af073fec95c39a8b3c12`; source-only read-only inspector `indodax_ai_bot.m04_existing_ws_evidence` executed against `/home/ubuntu/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3` through original V2 worktree. **5/5 focused offline SQLite inspector tests PASS (0.162s)** and owner marker `V2_EXISTING_PUBLIC_EVIDENCE_INSPECTED`. No newly fetched public HTTP data or new stream session, no private credentials, paid AI or trading.
+
+- `stream_epoch=1633996541`, last recorded offset `14668280`, stream status **DISCONNECTED**.
+- **16,247** persisted BTC publications, **27,171** valid locally parsed rows, **0** invalid rows and **0** local SHA-256 publication mismatches. A local hash is integrity checking, not an upstream signature.
+- **5** recorded WS discontinuities, **5** jumps between stored publication offsets, **5** jumps in observed trade sequence. The latter are diagnostics only; neither timestamp nor sequence completeness is independently attested.
+- First observed trade: **2026-10-27 10:52:15 WIB** (`1793073135`); last observed trade: **2026-11-01 00:01:58 WIB** (`1793466118`). The dataset is **historical**, not a live market source for the evening of November 1.
+- Closed 15m UTC-aligned observed window **2026-10-31 23:45 – 2026-11-01 00:00 WIB**, `116` visible trades and `15/15` minutes with some trade data. Closed 1h window **2026-10-31 23:00 – 2026-11-01 00:00 WIB**, `696` visible trades and `60/60` minutes with some trade data. **Every minute having at least one row is NOT proof that all trades in that minute were captured.**
+- `g1_authenticated=false`, `complete_public_15m_1h_tape_proven=false`, `execution_allowed=false`. Independent issuer/complete market tape remains unresolved; **M04-S/M02 G1 STRICT stays [ ]**.
+- Further source-dependent engineering must use explicit read-only historical mode or a demonstrably fresh collector source; do not automatically restart the collector or enable M03 timer merely to make this evidence appear fresh.
+
 ## Required real data and acceptance by milestone
 
 | Stage | Exact evidence required | Can collect now? | Acceptance |
