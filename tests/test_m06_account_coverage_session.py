@@ -79,6 +79,11 @@ class M06NewPrivateCoverageTests(unittest.TestCase):
         self.assertEqual(outcome.checked_pairs,4)
         self.assertEqual(outcome.checked_windows_per_pair,2)
         self.assertEqual(outcome.status,"M06_COVERAGE_SCOPED_READONLY_REJECT")
+        self.assertTrue(outcome.m06_02_balance_and_open_orders_observed)
+        self.assertTrue(outcome.m06_03_special_pool_ratio_observed)
+        self.assertFalse(outcome.m06_04_local_fill_receipts_in_window_matched)
+        self.assertFalse(outcome.m06_05_local_account_conflict_free)
+        # Source observation is not equivalent to an owned budget.
         self.assertFalse(outcome.spendable_idr_verified)
         self.assertFalse(outcome.external_peer_coverage_verified)
         self.assertFalse(outcome.full_account_history_verified)
