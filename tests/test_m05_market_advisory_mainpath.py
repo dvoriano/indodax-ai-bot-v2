@@ -17,7 +17,9 @@ from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from indodax_ai_bot.owner_control import OwnerDecisionLedger
 from indodax_ai_bot.three_role_ai import ThreeRoleShadow as RealThreeRoleShadow
-from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient
+from indodax_ai_bot.telegram_bot_api import (
+    TelegramBotApiClient, TelegramOwnerPoller as RealTelegramOwnerPoller,
+)
 from indodax_ai_bot.telegram_dedicated_inbound import (
     dedicated_owner_poll_once,
 )
@@ -131,9 +133,14 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
 
     def dedicated_tick(self, fake):
         api = TelegramBotApiClient(token=TOKEN, transport=fake)
-        with patch(
-            "indodax_ai_bot.telegram_dedicated_inbound.time.time",
-            return_value=NOW + 3,
+        with (
+            patch(
+                "indodax_ai_bot.telegram_dedicated_inbound.time.time",
+                return_value=NOW + 3,
+            ),
+            patch("indodax_ai_bot.telegram_dedicated_inbound.TelegramOwnerPoller",
+                  side_effect=lambda **kw: RealTelegramOwnerPoller(
+                      clock=lambda: NOW + 3, **kw)),
         ):
             return dedicated_owner_poll_once(
                 api=api, ledger=self.ledger,
