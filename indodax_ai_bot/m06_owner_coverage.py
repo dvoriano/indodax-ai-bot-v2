@@ -76,7 +76,64 @@ def _existing_v2_credentials() -> Path | None:
         raise ValueError("M06_EXISTING_V2_CREDENTIALS_NOT_SAFE") from None
 
 
+def _one_account_diagnostic_main() -> int:
+    """Owner-approved separate 1-GET scope, original V2 CLI only."""
+    from .m06_account_coverage import ACCOUNT_DIAG_ID
+    from .config import Settings
+
+    diagnostic_budget = (Path.home() / ".local" / "state" /
+                         "indodax-ai-bot-v2" /
+                         "m06-account-diagnostic-20261101.sqlite3")
+    if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") != ACCOUNT_DIAG_ID:
+        print("M06_ACCOUNT_DIAG_FRESH_OWNER_GO_REQUIRED_NO_API", file=sys.stderr)
+        return 3
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("M06_ACCOUNT_DIAG_INTERACTIVE_OWNER_TTY_REQUIRED_NO_API",
+              file=sys.stderr)
+        return 3
+    if os.path.lexists(diagnostic_budget):
+        print("M06_ACCOUNT_DIAG_ALREADY_ATTEMPTED_NO_API", file=sys.stderr)
+        return 3
+    try:
+        Settings.from_env().require_m01_safety()
+        credentials = _existing_v2_credentials()
+        if credentials is None:
+            print("M06_ACCOUNT_DIAG_V2_CREDENTIALS_NOT_FOUND_NO_API",
+                  file=sys.stderr)
+            return 3
+    except (ValueError, OSError):
+        print("M06_ACCOUNT_DIAG_SAFETY_OR_CREDENTIAL_STOP_NO_API",
+              file=sys.stderr)
+        return 3
+    try:
+        with tempfile.TemporaryDirectory(prefix="m06-account-one-get-") as d:
+            td = Path(d)
+            issued = int(time.time() * 1000)
+            _put_private_json(td / "go.json", {
+                "approval_id": ACCOUNT_DIAG_ID,
+                "issued_ms": issued, "expires_ms": issued + 900000,
+                "max_requests": 1, "symbol": "injidr",
+            })
+            print("M06_ACCOUNT_ONE_GET_ONLY_TRADE_AND_WITHDRAW_DISABLED",
+                  flush=True)
+            from .__main__ import main as original_main
+            return original_main([
+                "--db", str(td / "decisions.sqlite3"),
+                "--m06-account-diagnostic-once",
+                "--m06-go-file", str(td / "go.json"),
+                "--m06-credentials-file", str(credentials),
+            ])
+    except (OSError, ValueError):
+        print("M06_ACCOUNT_DIAG_SESSION_LOCAL_STOP_NO_API", file=sys.stderr)
+        return 3
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--account-diagnostic-once"]:
+        return _one_account_diagnostic_main()
+    if sys.argv[1:]:
+        print("M06_OWNER_COVERAGE_ARGUMENT_DENIED_NO_API", file=sys.stderr)
+        return 3
     # Import signed transport only AFTER the owner provides exact fresh GO.
     if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") != COVERAGE_ID:
         print("M06_COVERAGE_OWNER_GO_REQUIRED", file=sys.stderr)
