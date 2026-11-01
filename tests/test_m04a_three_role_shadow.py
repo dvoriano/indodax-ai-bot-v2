@@ -160,14 +160,20 @@ class M04AShadowTests(unittest.TestCase):
         self.assertEqual(len({x["source"]["closed_1m_epoch"] for x in caller.inputs}),1)
         self.assertTrue(all(x["role_order"]==list(ROLES) for x in caller.inputs))
 
-    def test_risk_veto_never_calls_strategy(self):
+    def test_risk_no_trade_still_collects_strategy_advice_without_order(self):
         for decision in ("NO_TRADE","EXIT_REVIEW"):
             with self.subTest(decision=decision):
                 caller=RoleCaller(risk=decision)
                 out=signed_role_run(caller)
-                self.assertEqual(caller.calls,["MARKET","RISK"])
+                self.assertEqual(caller.calls,["MARKET","RISK","STRATEGY"])
+                self.assertEqual(out["completed_roles"],list(ROLES))
                 self.assertEqual(out["reason"],"RISK_VETO_"+decision)
+                self.assertEqual(out["role_results"][1]["decision"], decision)
+                self.assertEqual(out["role_results"][2]["action"],"BUY")
+                self.assertEqual(out["role_results"][2]["effective_action"],"WAIT")
+                self.assertIsNone(out["final_decision"])
                 self.assertFalse(out["risk_veto_bypass_allowed"])
+                self.assertFalse(out["g2_candidate_authorized"])
                 self.assertFalse(out["execution_allowed"])
 
     def test_role_hash_mismatch_rejected_not_retried_or_promoted(self):
