@@ -53,6 +53,8 @@ class ProtectedRebuyReview:
     # Additional account-specific LOCAL SQLite observations, never wallet proof.
     local_shadow_commitments_idr: Decimal = Decimal("0")
     local_shadow_coverage_complete: bool = False
+    floki_manual_floor_recorded: bool = False
+    pepe_manual_floor_recorded: bool = False
 
 
 class M06OwnershipLedger:
@@ -284,6 +286,8 @@ class M06OwnershipLedger:
             floki, pepe, floki + pepe, len(rows),
             floki_manual_qty_local_floor=floki_floor,
             pepe_manual_qty_local_floor=pepe_floor,
+            floki_manual_floor_recorded="FLOKI" in floors,
+            pepe_manual_floor_recorded="PEPE" in floors,
         )
 
     def review_protected_rebuy(self, *, account_key: str) -> ProtectedRebuyReview:
