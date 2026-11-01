@@ -189,5 +189,70 @@ class M06NewPrivateCoverageTests(unittest.TestCase):
             self.budget.claim_fresh_coverage_once(COVERAGE_ID)
 
 
+
+
+class M06ReuseStoredViewOnlyCredentialsTests(unittest.TestCase):
+    """V2-only secure on-disk credential reuse without TTY reprompt or GET."""
+
+    def setUp(self):
+        self.t = tempfile.TemporaryDirectory()
+        self.addCleanup(self.t.cleanup)
+        self.home = Path(self.t.name)
+        self.state = self.home / ".local" / "state" / "indodax-ai-bot-v2"
+        self.state.mkdir(parents=True, mode=0o700)
+        self.path = self.state / "viewonly-credentials.json"
+        self.data = {"api_key":"synthetic-key", "secret_key":"synthetic-secret"}
+
+    def stored(self, *, mode=0o600):
+        self.path.write_text(json.dumps(self.data))
+        self.path.chmod(mode)
+
+    def read(self, choice=None):
+        from indodax_ai_bot.m06_owner_coverage import _existing_v2_credentials
+        environ = {} if choice is None else {
+            "M06_V2_VIEWONLY_CREDENTIALS_FILE":choice
+        }
+        with patch("pathlib.Path.home", return_value=self.home), \
+             patch.dict(os.environ, environ, clear=True):
+            return _existing_v2_credentials()
+
+    def test_reuses_canonical_v2_file_without_any_new_api_input(self):
+        self.stored()
+        self.assertEqual(self.read(), self.path)
+        self.assertEqual(self.path.read_text(), json.dumps(self.data))
+
+    def test_historical_temp_credential_file_missing_fails_closed(self):
+        self.assertIsNone(self.read())
+
+    def test_fails_closed_when_existing_file_is_world_readable(self):
+        self.stored(mode=0o644)
+        with self.assertRaisesRegex(ValueError,"NOT_SAFE"):
+            self.read()
+
+    def test_explicit_existing_v2_path_works_no_v1_or_other_roots(self):
+        self.stored()
+        self.assertEqual(self.read(str(self.path)),self.path)
+        outside=self.home/"other-bot"/"credentials.json"
+        outside.parent.mkdir()
+        outside.write_text(json.dumps(self.data))
+        outside.chmod(0o600)
+        with self.assertRaisesRegex(ValueError,"NOT_SAFE"):
+            self.read(str(outside))
+
+    def test_symlinked_v2_viewonly_file_denied(self):
+        real = self.state/"original.json"
+        real.write_text(json.dumps(self.data))
+        real.chmod(0o600)
+        self.path.symlink_to(real)
+        with self.assertRaisesRegex(ValueError,"NOT_SAFE"):
+            self.read()
+
+    def test_existing_invalid_secret_shape_denied(self):
+        self.stored()
+        self.path.write_text(json.dumps({"api_key":"test", "secret_key":""}))
+        self.path.chmod(0o600)
+        with self.assertRaisesRegex(ValueError,"NOT_SAFE"):
+            self.read()
+
 if __name__=="__main__":
     unittest.main()
