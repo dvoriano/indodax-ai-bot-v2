@@ -88,6 +88,9 @@ class M06PrivateProbeResult:
     execution_allowed: bool = False
     # Read-only diagnostic only; never serialized or used as spending authority.
     account_preview: M06SingleAccountPreview | None = field(default=None, repr=False)
+    local_exchange_receipts_linked: int = 0
+    local_exchange_receipts_unlinked: int = 0
+    unresolved_requirements: tuple[str, ...] = ()
 
 
 def _owner_private_file(path: str, *, max_bytes: int = 8192) -> dict:
@@ -386,21 +389,37 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         )
         if len(order_history) == 1000 or len(fills) == 1000:
             raise M06ScopeDenied("M06_PRIVATE_HISTORY_POSSIBLY_TRUNCATED")
+        receipt_window = None
+        if local_rebuy is not None:
+            receipt_window = M06OwnershipLedger.match_exchange_window_to_local_receipts_readonly(
+                db_path=local_ownership_db, account_uid=account.uid,
+                orders=order_history, fills=fills, symbol=approval.symbol,
+            )
         capital_review = reconcile_readonly_private_snapshot(
             account=account, open_orders=all_orders,
             order_history=order_history, fills=fills,
             symbol=approval.symbol, local_rebuy=local_rebuy,
         )
     except (M06PayloadError, M06ConsistencyBlocked,
-            M06ReconciliationBlocked, ValueError):
+            M06ReconciliationBlocked, OwnershipConflict, ValueError):
         # Do not print API response bodies, raw wallet amounts or identifiers.
         raise M06ScopeDenied("M06_PRIVATE_DATA_RECONCILIATION_REJECT") from None
     if (capital_review.status != "REJECT"
             or capital_review.spendable_capital_verified
             or capital_review.execution_allowed):
         raise M06ScopeDenied("M06_CAPITAL_AUTHORITY_PROMOTION_DENIED")
+    # One redacted checklist. A matched receipt proves local continuity only,
+    # never exchange-wide ownership, permission to SELL or wallet spendability.
+    unresolved = list(capital_review.unresolved_requirements)
+    if receipt_window is None and fills:
+        unresolved.append("M06_EXCHANGE_WINDOW_LEDGER_UNBOUND")
+    if receipt_window is not None and receipt_window.unlinked_fills:
+        unresolved.append("M06_EXCHANGE_WINDOW_RECEIPTS_UNLINKED")
     return M06PrivateProbeResult(
         status="M06_VIEW_ONLY_RECONCILED_REJECT",
+        unresolved_requirements=tuple(unresolved),
+        local_exchange_receipts_linked=(receipt_window.matched_local_receipts if receipt_window is not None else 0),
+        local_exchange_receipts_unlinked=(receipt_window.unlinked_fills if receipt_window is not None else len(fills)),
         request_count_this_run=4,
         open_orders_count=len(all_orders),
         order_history_count=len(order_history),
