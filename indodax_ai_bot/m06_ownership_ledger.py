@@ -446,13 +446,13 @@ class M06OwnershipLedger:
                     "FROM m06_local_fill_receipts WHERE trade_id=?",
                     (fill.trade_id,),
                 ).fetchone()
-                if receipt_row is not None and tuple(receipt_row) != receipt:
-                    raise OwnershipConflict("M06_FILL_RECEIPT_REPLAY_CONFLICT")
                 payload=(fill.order_id,fill.symbol,str(fill.quantity),str(fill.price),str(fill.commission))
                 existing=db.execute("SELECT order_id,symbol,qty,price,fee FROM m06_observed_fills WHERE trade_id=?",
                                     (fill.trade_id,)).fetchone()
                 if existing is not None and existing!=payload:
                     raise OwnershipConflict("M06_FILL_REPLAY_CONFLICT")
+                if receipt_row is not None and tuple(receipt_row) != receipt:
+                    raise OwnershipConflict("M06_FILL_RECEIPT_REPLAY_CONFLICT")
                 if existing is not None and receipt_row is None:
                     # Legacy row is not silently claimed as original V2
                     # provenance by attaching new metadata after the fact.
