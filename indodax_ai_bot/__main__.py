@@ -17,6 +17,7 @@ from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
 from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
 from .m06_account_coverage import read_coverage_approval, COVERAGE_ID
+from .m06_account_coverage import read_account_diagnostic_approval, ACCOUNT_DIAG_ID
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
 from .telegram_readonly_preflight import inspect_telegram_readonly
@@ -31,6 +32,9 @@ from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
 def _m06_fixed_budget_db() -> str:
     """Single V2 scope accounting path; cannot be reset via CLI arguments."""
+    if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") == ACCOUNT_DIAG_ID:
+        return str(Path.home() / ".local" / "state" /
+                   "indodax-ai-bot-v2" / "m06-account-diagnostic-20261101.sqlite3")
     if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") == COVERAGE_ID:
         return str(Path.home() / ".local" / "state" /
                    "indodax-ai-bot-v2" / "m06-account-coverage-20261101.sqlite3")
@@ -62,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="EXPLICIT scoped M06 GO: view-only four private HTTPS GETs only, never trade")
     group.add_argument("--m06-account-coverage-once", action="store_true",
                         help="Owner approved ONE 18-GET four-pair private READ ONLY coverage, never orders")
+    group.add_argument("--m06-account-diagnostic-once", action="store_true",
+                       help="Owner approved ONE signed GET account; original V2, no orders")
     group.add_argument("--once", action="store_true")
     parser.add_argument("--public-scanner-mainpath", action="store_true",
                         help="With --once only: opt-in same M03 bulk+G1+M04 no-trade pipeline using an existing BTC WS DB")
@@ -134,6 +140,47 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m06_account_diagnostic_once:
+            settings.require_m01_safety()
+            if not all((args.m06_go_file, args.m06_credentials_file)):
+                raise ConfigurationError("M06_ACCOUNT_DIAG_FILES_REQUIRED")
+            try:
+                approval = read_account_diagnostic_approval(args.m06_go_file)
+                api_key, secret_key = read_view_only_credentials(
+                    args.m06_credentials_file
+                )
+                budget = M06RequestBudget(_m06_fixed_budget_db())
+                journal = DecisionJournal(args.db)
+                result = DailyScalpingOrchestrator(
+                    settings, journal
+                ).inspect_m06_account_diagnostic_once(
+                    approval=approval, budget=budget,
+                    api_key=api_key, secret_key=secret_key,
+                )
+                journal.record_reject(
+                    "M06_ACCOUNT_DIAG_" + uuid4().hex, result.status,
+                )
+            except (M06ScopeDenied, ValueError) as exc:
+                print(json.dumps({
+                    "stage": "M06_ACCOUNT_DIAGNOSTIC_ONE_GET",
+                    "status": "REJECT",
+                    "reason": _m06_redacted_error_code(exc),
+                    "execution_allowed": False,
+                }, sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "stage": "M06_ACCOUNT_DIAGNOSTIC_ONE_GET",
+                "status": result.status,
+                "request_count": result.request_count,
+                "view_only_permissions_verified":
+                    result.view_only_permissions_verified,
+                "balances_schema_observed": result.balances_schema_observed,
+                "spendable_idr_verified": False,
+                "manual_asset_ownership_verified": False,
+                "external_peer_coverage_verified": False,
+                "execution_allowed": False,
+            }, sort_keys=True))
+            return 0
         if args.m06_account_coverage_once:
             settings.require_m01_safety()
             if not all((args.m06_go_file, args.m06_credentials_file)):
