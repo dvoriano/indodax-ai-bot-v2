@@ -78,6 +78,20 @@ class OwnerDecisionLedger:
                     execution_allowed INTEGER NOT NULL DEFAULT 0
                         CHECK(execution_allowed = 0)
                 );
+                CREATE TABLE IF NOT EXISTS m05_market_advisory_outbox (
+                    proposal_id TEXT PRIMARY KEY,
+                    pair TEXT NOT NULL,
+                    closed_1m_epoch INTEGER NOT NULL,
+                    expires_epoch INTEGER NOT NULL,
+                    message_text TEXT NOT NULL,
+                    pass_callback TEXT NOT NULL,
+                    reject_callback TEXT NOT NULL,
+                    delivery_state TEXT NOT NULL
+                        CHECK(delivery_state IN ('QUEUED','CLAIMED','SENT','EXPIRED')),
+                    sent_message_id INTEGER,
+                    UNIQUE(pair,closed_1m_epoch),
+                    FOREIGN KEY(proposal_id) REFERENCES m05_proposals(proposal_id)
+                );
                 CREATE TABLE IF NOT EXISTS m05_audit (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_epoch INTEGER NOT NULL,
@@ -243,6 +257,168 @@ class OwnerDecisionLedger:
             },
             "final_decision": None, "execution_allowed": False,
         }
+
+    def issue_market_advisory_proposal(
+        self, *, pair: str, digest: str, closed_1m_epoch: int,
+        now_epoch: int, source_expires_epoch: int, setup: str,
+        market_status: str, risk_status: str,
+    ) -> dict[str, Any]:
+        """Original public M03/M04 observation -> owner MANUAL review, NO order.
+
+        Zero price and quantity mean NO executable order was constructed.
+        Only current, source-fingerprinted closed-minute observations are
+        eligible for an inline-button review. This is NOT G1 authentication.
+        """
+        if (not isinstance(pair, str) or not PAIR.fullmatch(pair)
+                or pair in ("usdt_idr", "usdc_idr", "floki_idr", "pepe_idr")
+                or not isinstance(digest, str) or not DIGEST.fullmatch(digest)
+                or type(closed_1m_epoch) is not int or closed_1m_epoch <= 0
+                or type(now_epoch) is not int or now_epoch <= 0
+                or type(source_expires_epoch) is not int
+                or not closed_1m_epoch <= now_epoch < source_expires_epoch
+                or source_expires_epoch > closed_1m_epoch + TTL_MAX):
+            return _blocked("INVALID_MARKET_ADVISORY_SOURCE_OR_TTL")
+        labels = (setup, market_status, risk_status)
+        if any(not isinstance(v, str) or not 1 <= len(v) <= 100
+               or not v.isascii() or any(ch not in
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_:-."
+                   for ch in v) for v in labels):
+            return _blocked("INVALID_MARKET_ADVISORY_LABEL")
+        expires = min(now_epoch + TTL_MAX, source_expires_epoch)
+        proposal_id = secrets.token_hex(12)
+        secret = secrets.token_hex(16)
+        pass_cb = f"m5:{proposal_id}:P:{secret}"
+        reject_cb = f"m5:{proposal_id}:R:{secret}"
+        message = (
+            "Indodax V2 | M03/M04 public advisory\\n"
+            "Pair: " + pair.upper() + "\\n"
+            "Closed 1m (epoch): " + str(closed_1m_epoch) + "\\n"
+            "Setup M03: " + setup + "\\n"
+            "Analisis M04: " + market_status + "\\n"
+            "RISK: " + risk_status + "\\n"
+            "Fingerprint: " + digest[:16] + "\\n"
+            "G1/account/order: UNVERIFIED. Harga dan jumlah order belum "
+            "diotorisasi. PASS/REJECT hanya keputusan review owner; "
+            "TIDAK mengirim BUY atau SELL."
+        )
+        with self._tx() as db:
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if mode != "MANUAL":
+                return _blocked("M05_MANUAL_MODE_REQUIRED")
+            if db.execute(
+                """SELECT 1 FROM m05_market_advisory_outbox
+                   WHERE pair=? AND closed_1m_epoch=?""",
+                (pair, closed_1m_epoch),
+            ).fetchone():
+                return _blocked("M05_ADVISORY_ALREADY_QUEUED_THIS_CANDLE")
+            db.execute(
+                """INSERT INTO m05_proposals(
+                   proposal_id,owner_user_id,pair,digest,closed_1m_epoch,
+                   entry_price_idr,quantity,created_epoch,expires_epoch,
+                   token_hash,mode_at_create,state,execution_allowed)
+                   VALUES (?,?,?,?,?,'0','0',?,?,?,'MANUAL','PENDING',0)""",
+                (proposal_id, self.owner_user_id, pair, digest,
+                 closed_1m_epoch, now_epoch, expires,
+                 sha256(secret.encode()).hexdigest()),
+            )
+            db.execute(
+                """INSERT INTO m05_market_advisory_outbox(
+                   proposal_id,pair,closed_1m_epoch,expires_epoch,
+                   message_text,pass_callback,reject_callback,delivery_state)
+                   VALUES (?,?,?,?,?,?,?,'QUEUED')""",
+                (proposal_id, pair, closed_1m_epoch, expires,
+                 message, pass_cb, reject_cb),
+            )
+            db.execute(
+                """INSERT INTO m05_audit
+                   (event_epoch,owner_user_id,proposal_id,event,detail)
+                   VALUES (?,?,?,?,?)""",
+                (now_epoch, self.owner_user_id, proposal_id,
+                 "MARKET_ADVISORY_QUEUED", "NO_PRICE_NO_QUANTITY_NO_ORDER"),
+            )
+        return {
+            "accepted": True, "proposal_id": proposal_id, "pair": pair,
+            "source_digest_sha256": digest, "expires_epoch": expires,
+            "outbox_delivery": "QUEUED", "owner_mode": "MANUAL",
+            "shadow_only": True, "final_decision": None,
+            "execution_allowed": False,
+        }
+
+    def claim_market_advisory_delivery(self, *, now_epoch: int) -> dict[str, Any] | None:
+        """At most one owner-private message, claimed BEFORE network send.
+
+        A crashed or uncertain send is NEVER automatically retried.
+        """
+        if type(now_epoch) is not int or now_epoch <= 0:
+            raise ValueError("M05_ADVISORY_INVALID_CLOCK")
+        with self._tx() as db:
+            if db.execute(
+                """SELECT 1 FROM m05_market_advisory_outbox
+                   WHERE delivery_state='CLAIMED' LIMIT 1"""
+            ).fetchone():
+                raise ValueError("M05_ADVISORY_INCOMPLETE_DELIVERY_REVIEW")
+            db.execute(
+                """UPDATE m05_market_advisory_outbox SET delivery_state='EXPIRED'
+                   WHERE delivery_state='QUEUED' AND expires_epoch<=?""",
+                (now_epoch,),
+            )
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if mode != "MANUAL":
+                return None
+            row = db.execute(
+                """SELECT o.proposal_id,o.message_text,o.pass_callback,
+                          o.reject_callback,o.expires_epoch
+                   FROM m05_market_advisory_outbox o
+                   JOIN m05_proposals p ON p.proposal_id=o.proposal_id
+                   WHERE o.delivery_state='QUEUED' AND p.state='PENDING'
+                     AND o.expires_epoch>? AND p.mode_at_create='MANUAL'
+                   ORDER BY p.created_epoch,o.proposal_id LIMIT 1""",
+                (now_epoch,),
+            ).fetchone()
+            if row is None:
+                return None
+            if db.execute(
+                """UPDATE m05_market_advisory_outbox
+                   SET delivery_state='CLAIMED'
+                   WHERE proposal_id=? AND delivery_state='QUEUED'""",
+                (row[0],),
+            ).rowcount != 1:
+                raise ValueError("M05_ADVISORY_CLAIM_CONFLICT")
+        return {
+            "proposal_id": row[0], "message_text": row[1],
+            "pass_callback": row[2], "reject_callback": row[3],
+            "expires_epoch": row[4],
+        }
+
+    def confirm_market_advisory_delivery(
+        self, *, proposal_id: str, message_id: int,
+    ) -> None:
+        if (not isinstance(proposal_id, str)
+                or not PROPOSAL_ID.fullmatch(proposal_id)
+                or type(message_id) is not int or message_id <= 0):
+            raise ValueError("M05_ADVISORY_INVALID_DELIVERY_ACK")
+        with self._tx() as db:
+            if db.execute(
+                """UPDATE m05_market_advisory_outbox
+                   SET delivery_state='SENT',sent_message_id=?
+                   WHERE proposal_id=? AND delivery_state='CLAIMED'""",
+                (message_id, proposal_id),
+            ).rowcount != 1:
+                raise ValueError("M05_ADVISORY_DELIVERY_ACK_CONFLICT")
+
+    def market_advisory_delivery_status(self, proposal_id: str) -> str | None:
+        if not isinstance(proposal_id, str) or not PROPOSAL_ID.fullmatch(proposal_id):
+            raise ValueError("M05_ADVISORY_INVALID_ID")
+        with self._tx() as db:
+            row = db.execute(
+                """SELECT delivery_state FROM m05_market_advisory_outbox
+                   WHERE proposal_id=?""", (proposal_id,),
+            ).fetchone()
+        return row[0] if row else None
 
     def apply_callback(self, *, user_id: int, chat_id: int, callback_data: str,
                        now_epoch: int, chat_type: str = "private") -> dict[str, Any]:
