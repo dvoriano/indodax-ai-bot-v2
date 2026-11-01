@@ -13,6 +13,7 @@ import fcntl
 import os
 from pathlib import Path
 import stat
+import time
 from typing import Any, Iterator
 
 from .owner_control import OwnerDecisionLedger
@@ -60,6 +61,59 @@ def dedicated_poller_lock(path: str | Path) -> Iterator[None]:
             os.close(fd)
 
 
+def _send_one_queued_market_advisory(
+    *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
+) -> dict[str, Any]:
+    """Owner-private inline buttons, original M05 DB and Bot API transport.
+
+    A CLAIMED message must never be retried on uncertain network delivery.
+    No order or private exchange request exists on this sender path.
+    """
+    try:
+        claim = ledger.claim_market_advisory_delivery(
+            now_epoch=int(time.time()),
+        )
+    except ValueError:
+        raise TelegramTransportError(
+            "M05_ADVISORY_DELIVERY_REVIEW_REQUIRED"
+        ) from None
+    if claim is None:
+        return {"delivery": "NOT_QUEUED", "messages_sent": 0}
+    msg = api.call("sendMessage", {
+        "chat_id": ledger.owner_user_id,
+        "text": claim["message_text"],
+        "reply_markup": {
+            "inline_keyboard": [[
+                {"text": "PASS (review only)",
+                 "callback_data": claim["pass_callback"]},
+                {"text": "REJECT",
+                 "callback_data": claim["reject_callback"]},
+            ]],
+        },
+        "disable_notification": False,
+    })
+    if (not isinstance(msg, dict)
+            or type(msg.get("message_id")) is not int
+            or msg["message_id"] <= 0
+            or not isinstance(msg.get("chat"), dict)
+            or type(msg["chat"].get("id")) is not int
+            or msg["chat"]["id"] != ledger.owner_user_id
+            or msg["chat"].get("type") != "private"):
+        raise TelegramTransportError(
+            "M05_ADVISORY_SEND_UNCERTAIN_REVIEW_REQUIRED"
+        )
+    try:
+        ledger.confirm_market_advisory_delivery(
+            proposal_id=claim["proposal_id"],
+            message_id=msg["message_id"],
+        )
+    except ValueError:
+        raise TelegramTransportError(
+            "M05_ADVISORY_ACK_UNCERTAIN_REVIEW_REQUIRED"
+        ) from None
+    return {"delivery": "SENT_OWNER_PRIVATE", "messages_sent": 1}
+
+
 def dedicated_owner_poll_once(
     *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
     expected_bot_id: int, lock_path: str | Path, limit: int = 10,
@@ -90,6 +144,9 @@ def dedicated_owner_poll_once(
                 "READONLY_PREFLIGHT_OK_POLLING_NOT_AUTHORIZED"):
             raise TelegramTransportError("M05_DEDICATED_PREFLIGHT_UNSAFE")
 
+        outbound = _send_one_queued_market_advisory(
+            api=api, ledger=ledger,
+        )
         result = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
         ).poll_once(limit=limit)
@@ -107,6 +164,7 @@ def dedicated_owner_poll_once(
         "inbound_owner_identity": "BOT_API_ENVELOPE_FILTERED_ONLY",
         "human_owner_verified": False,
         "handler": result,
+        "owner_market_advisory_delivery": outbound,
         "automatic_polling_enabled": False,
         "live_execution_authorized": False,
         "final_decision": None,
