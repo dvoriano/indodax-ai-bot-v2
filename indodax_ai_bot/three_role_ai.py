@@ -618,8 +618,10 @@ class ThreeRoleShadow:
         roles: list[str] = []
         validated: list[dict[str, Any]] = []
         for role in ROLES:
-            if role == "STRATEGY" and validated[1]["decision"] != "ALLOW":
-                break
+            # Owner policy: RISK is an advisory analysis, not the owner Final.
+            # An effective NO_TRADE/EXIT_REVIEW must reach STRATEGY so owner
+            # can inspect a complete three-role explanation. It remains a
+            # binding mechanical no-order condition, never an executor pass.
             try:
                 # Each model receives an isolated view reconstructed from
                 # the SAME once-captured candidate+BTC public source bytes.
@@ -754,30 +756,33 @@ class ThreeRoleShadow:
                                roles=roles, candidate_pair=source["pair"])
             validated.append(parsed)
             roles.append(role)
-            if role == "STRATEGY" and parsed["action"] == "BUY":
-                # M04-U: BOTH thresholds are mandatory for any prospective
-                # profitable entry, but estimates are NOT executable facts.
-                # M06 authenticated spendable balance and M07 fee/slippage
-                # preflight have not been connected. A synthetic signed G1
-                # receipt + positive model PnL must never become BUY-ready.
-                if (Decimal(parsed["projected_net_profit_idr"]) < Decimal("10000")
-                        or Decimal(parsed["projected_net_roi_percent"]) < Decimal("2")):
+            if role == "STRATEGY":
+                risk = validated[1]
+                if risk["decision"] != "ALLOW":
+                    # Preserve the effective RISK finding after STRATEGY is
+                    # recorded. A proposed BUY is diagnostic only; the
+                    # published effective_action is always WAIT.
                     return {
-                        **_reject("STRATEGY_BUY_NET_TARGET_UNMET", digest=digest,
+                        **_reject("RISK_VETO_" + risk["decision"], digest=digest,
                                   roles=roles, candidate_pair=source["pair"]),
                         "role_results": validated,
                     }
-                return {
-                    **_reject("STRATEGY_BUY_PREFLIGHT_UNVERIFIED", digest=digest,
-                              roles=roles, candidate_pair=source["pair"]),
-                    "role_results": validated,
-                }
-            if role == "RISK" and parsed["decision"] != "ALLOW":
-                return {
-                    **_reject("RISK_VETO_" + parsed["decision"], digest=digest,
-                              roles=roles, candidate_pair=source["pair"]),
-                    "role_results": validated,
-                }
+                if parsed["action"] == "BUY":
+                    # M04-U: BOTH net thresholds are mandatory. Synthetic
+                    # signed receipts, private account and M07 preflight are
+                    # still NOT proof of real order eligibility.
+                    if (Decimal(parsed["projected_net_profit_idr"]) < Decimal("10000")
+                            or Decimal(parsed["projected_net_roi_percent"]) < Decimal("2")):
+                        return {
+                            **_reject("STRATEGY_BUY_NET_TARGET_UNMET", digest=digest,
+                                      roles=roles, candidate_pair=source["pair"]),
+                            "role_results": validated,
+                        }
+                    return {
+                        **_reject("STRATEGY_BUY_PREFLIGHT_UNVERIFIED", digest=digest,
+                                  roles=roles, candidate_pair=source["pair"]),
+                        "role_results": validated,
+                    }
         return {
             **_reject("M04_SHADOW_ONLY_FINAL_AND_PREFLIGHT_ABSENT",
                       digest=digest, roles=roles, candidate_pair=source["pair"]),
