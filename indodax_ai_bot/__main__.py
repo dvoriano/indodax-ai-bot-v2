@@ -157,8 +157,9 @@ def main(argv: list[str] | None = None) -> int:
                     approval=approval, budget=budget,
                     api_key=api_key, secret_key=secret_key,
                 )
-                journal.record_reject(
-                    "M06_ACCOUNT_DIAG_" + uuid4().hex, result.status,
+                journal.record_stage_observation(
+                    "M06_ACCOUNT_DIAG_" + uuid4().hex,
+                    "M06_PRIVATE_ACCOUNT_DIAGNOSTIC", result.status,
                 )
             except (M06ScopeDenied, ValueError) as exc:
                 print(json.dumps({
@@ -199,8 +200,9 @@ def main(argv: list[str] | None = None) -> int:
                     api_key=api_key, secret_key=secret_key,
                     local_ownership_db=args.m06_ownership_db,
                 )
-                journal.record_reject(
-                    "M06_COVERAGE_" + uuid4().hex, result.status,
+                journal.record_stage_observation(
+                    "M06_COVERAGE_" + uuid4().hex,
+                    "M06_ACCOUNT_COVERAGE", result.status,
                 )
             except (M06ScopeDenied, ValueError) as exc:
                 print(json.dumps({
@@ -253,8 +255,10 @@ def main(argv: list[str] | None = None) -> int:
                     approval=approval, budget=budget,
                     api_key=api_key, secret_key=secret_key,
                     local_ownership_db=args.db)
-                journal.record_reject("M06_PRIVATE_READONLY_" + uuid4().hex,
-                                      result.status)
+                journal.record_stage_observation(
+                    "M06_PRIVATE_READONLY_" + uuid4().hex,
+                    "M06_PRIVATE_READONLY", result.status,
+                )
             except M06ScopeDenied as exc:
                 # Fixed error codes only; NEVER emit API response/keys/balance.
                 print(json.dumps({"status":"REJECT", "reason":str(exc),
@@ -298,7 +302,10 @@ def main(argv: list[str] | None = None) -> int:
             journal = DecisionJournal(args.db)
             orchestrator = DailyScalpingOrchestrator(settings, journal)
             review = orchestrator.review_m06_account(now_epoch=int(time.time()))
-            journal.record_reject("M06_ACCOUNT_READONLY_NO_GO", review.reason)
+            journal.record_stage_observation(
+                "M06_ACCOUNT_READONLY_NO_GO",
+                "M06_LOCAL_ACCOUNT_PREVIEW", review.reason,
+            )
             print(json.dumps({
                 "stage": "M06_ACCOUNT_READONLY_ORIGINAL_MAINPATH",
                 "status": review.status,
@@ -355,12 +362,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.public_scanner_mainpath:
             if not args.once:
                 raise ConfigurationError("M03_MAINPATH_REQUIRES_ONCE")
-            if not args.ws_db:
-                raise ConfigurationError("M03_MAINPATH_REQUIRES_BTC_WS_DB")
-            if Path(args.ws_db).resolve() == Path(args.db).resolve():
+            if args.ws_db and Path(args.ws_db).resolve() == Path(args.db).resolve():
                 raise ConfigurationError("M03_MAINPATH_WS_DB_MUST_BE_SEPARATE")
-            if not Path(args.ws_db).is_file():
-                raise ConfigurationError("M03_MAINPATH_WS_DB_NOT_FOUND")
+            # Optional public BTC WS source: missing/not-running WS becomes an
+            # explicit diagnostic, not a pre-final owner REJECT. Do not invent
+            # a source receipt or promote candidate trust.
         if args.scheduled_public_scanner_once:
             # Require BTC source even on light minutes so the same service
             # cannot silently run without its planned M04 read-only join.
@@ -398,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "m05_telegram_owner_outbound": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -426,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "m05_telegram_readonly_preflight": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -466,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "m05_telegram_dedicated_poll": summary,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -481,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             report = inspect_public_ws_systemd_unit()
             print(json.dumps({
                 "public_ws_unit_status": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -499,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "public_ws_health": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -603,7 +609,11 @@ def main(argv: list[str] | None = None) -> int:
                 outcome = app.run_cycle(uuid4().hex)
             result = {
                 "trace_id": outcome.trace_id,
-                "final_decision": outcome.final_decision.value,
+                "final_decision": (
+                    outcome.final_decision.value
+                    if outcome.final_decision is not None else None
+                ),
+                "stage_disposition": outcome.stage_disposition,
                 "reason": outcome.reason,
                 "execution_allowed": outcome.execution_allowed,
                 "public_market": outcome.market,
@@ -622,10 +632,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.bulk_deep_once or args.public_scanner_mainpath:
                 result["public_bulk"] = outcome.bulk
                 if args.public_scanner_mainpath:
-                    result["mainpath_mode"] = "M03_PUBLIC_SCANNER_TO_M04_REJECT_ONLY"
+                    result["mainpath_mode"] = "M03_PUBLIC_SCANNER_TO_M04_OWNER_ADVISORY"
                     result["public_24h_volume_floor_idr"] = str(max(
                         bulk_min_volume_idr, Decimal("150000000")))
-                    result["btc_ws_existing_journal_readonly"] = True
+                    result["btc_ws_existing_journal_readonly"] = bool(
+                        args.ws_db and Path(args.ws_db).is_file()
+                    )
                 result["ai_shadow"] = outcome.ai_shadow
                 # Never show API credentials, request/response bodies or
                 # transport internals; readiness is not provider inference.

@@ -35,9 +35,9 @@ class M06OriginalMainpathTests(unittest.TestCase):
             self.assertFalse(report["execution_allowed"])
             self.assertFalse(report["account_authenticated"])
             with sqlite3.connect(path) as db:
-                row=db.execute("SELECT final_decision, reason FROM decisions WHERE trace_id=?",
+                row=db.execute("SELECT stage, reason FROM pipeline_stage_observations WHERE trace_id=?",
                      ("M06_ACCOUNT_READONLY_NO_GO",)).fetchone()
-            self.assertEqual(row,("REJECT","M06_PRIVATE_ACCOUNT_GO_ABSENT"))
+            self.assertEqual(row,("M06_LOCAL_ACCOUNT_PREVIEW","M06_PRIVATE_ACCOUNT_GO_ABSENT"))
 
     def test_original_orchestrator_capital_with_incomplete_orders_stays_zero(self):
         from indodax_ai_bot.m06_private_payloads import AccountBalances

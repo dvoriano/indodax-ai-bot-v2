@@ -43,7 +43,7 @@ def send_owner_safe_status_once(
     )
     if (state.get("accepted") is not True
             or state.get("owner_mode") not in ("MANUAL", "AUTO")
-            or state.get("final_decision") != "REJECT"
+            or state.get("final_decision") is not None
             or state.get("execution_allowed") is not False):
         raise TelegramTransportError("M05_OUTBOUND_OWNER_STATE_UNSAFE")
 
@@ -53,7 +53,7 @@ def send_owner_safe_status_once(
         "Indodax AI Bot V2 | Status M05\n"
         "Mode owner: " + mode + "\n"
         "Telegram: notifikasi satu arah; balasan/tombol belum terhubung.\n"
-        "Final Decision: REJECT. Eksekusi trading: OFF.\n"
+        "Final Decision: belum ada keputusan owner. Eksekusi trading: OFF.\n"
         "Tidak ada proposal BUY/SELL atau data akun live terverifikasi."
     )
     sent = api.call("sendMessage", {
@@ -85,6 +85,6 @@ def send_owner_safe_status_once(
         "owner_identity_verified_by_incoming_update": False,
         "inbound_polling_authorized": False,
         "account_data_connected": False,
-        "final_decision": "REJECT",
+        "final_decision": None,
         "execution_allowed": False,
     }

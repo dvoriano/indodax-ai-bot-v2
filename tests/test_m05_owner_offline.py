@@ -89,7 +89,7 @@ class M05OwnerOfflineTests(unittest.TestCase):
             callback_data=p["callbacks"]["PASS"], now_epoch=NOW + 30)
         self.assertEqual(response["reason"], "EXPIRED_OR_MODE_CHANGED")
         self.assertFalse(response["accepted"])
-        self.assertEqual(response["final_decision"], "REJECT")
+        self.assertIsNone(response["final_decision"])
 
     def test_pass_consumes_once_but_cannot_authorize_execution(self):
         p = self.proposal()
@@ -98,7 +98,7 @@ class M05OwnerOfflineTests(unittest.TestCase):
             callback_data=p["callbacks"]["PASS"])
         self.assertTrue(result["accepted"])
         self.assertEqual(result["owner_decision"], "PASS")
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertEqual(result["final_decision"], "PASS")
         self.assertFalse(result["execution_allowed"])
         replay = self.store.apply_callback(
             user_id=OWNER, chat_id=OWNER, now_epoch=NOW+3,
@@ -227,12 +227,10 @@ class M05OwnerOfflineTests(unittest.TestCase):
             response = app.run_bulk_deep_cycle(
                 "m05-bulk", market=FakeBulkMarket()
             )
-        self.assertEqual(response.final_decision.value, "REJECT")
+        self.assertIsNone(response.final_decision)
         self.assertFalse(response.execution_allowed)
-        self.assertEqual(self.store.observed_cycle("m05-bulk"), {
-            "reason": response.reason,
-            "final_decision": "REJECT", "execution_allowed": False,
-        })
+        self.assertIsNone(self.store.observed_cycle("m05-bulk"))
+        self.assertEqual(journal.stage_observation_count(), 1)
         self.assertEqual(self.store.audit_count(), 0)
 
     def test_cli_optin_wires_original_mainpath_without_telegram_or_orders(self):

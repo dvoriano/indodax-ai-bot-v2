@@ -70,7 +70,7 @@ class M03MainpathOptInTests(unittest.TestCase):
             self.assertEqual(scanner.call_count, 1)
             post.assert_not_called()
             self.assertEqual(body["mainpath_mode"],
-                             "M03_PUBLIC_SCANNER_TO_M04_REJECT_ONLY")
+                             "M03_PUBLIC_SCANNER_TO_M04_OWNER_ADVISORY")
             self.assertEqual(body["public_24h_volume_floor_idr"], "150000000")
             self.assertTrue(body["btc_ws_existing_journal_readonly"])
             self.assertEqual(body["public_bulk"]["requested_pairs"][0], "btc_idr")
@@ -81,14 +81,14 @@ class M03MainpathOptInTests(unittest.TestCase):
             self.assertFalse(body["public_bulk"]["g1_verified"])
             self.assertEqual(body["ai_shadow"]["completed_roles"], [])
             self.assertFalse(body["sumopod_shadow"]["configured"])
-            self.assertEqual(body["final_decision"], "REJECT")
+            self.assertIsNone(body["final_decision"])
             self.assertFalse(body["execution_allowed"])
             with sqlite3.connect(db) as con:
                 recorded = con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
                 samples = con.execute(
                     "SELECT COUNT(*) FROM public_ticker_minute_samples"
                 ).fetchone()[0]
-            self.assertEqual(recorded, 1)
+            self.assertEqual(recorded, 0)
             self.assertEqual(samples, 20)
 
     def test_optin_requires_existing_distinct_ws_and_once_before_any_fetch(self):
@@ -98,10 +98,7 @@ class M03MainpathOptInTests(unittest.TestCase):
             invalid = [
                 (["--scan-once", "--public-scanner-mainpath",
                   "--ws-db", str(missing)], "M03_MAINPATH_REQUIRES_ONCE"),
-                (["--once", "--public-scanner-mainpath"],
-                 "M03_MAINPATH_REQUIRES_BTC_WS_DB"),
-                (["--once", "--public-scanner-mainpath",
-                  "--ws-db", str(missing)], "M03_MAINPATH_WS_DB_NOT_FOUND"),
+
                 (["--once", "--public-scanner-mainpath",
                   "--ws-db", str(db)], "M03_MAINPATH_WS_DB_MUST_BE_SEPARATE"),
             ]

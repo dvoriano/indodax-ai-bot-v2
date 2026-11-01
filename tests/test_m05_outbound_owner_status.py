@@ -95,7 +95,7 @@ class M05OutboundOwnerStatusTests(unittest.TestCase):
         self.assertEqual(res["callbacks_processed"], 0)
         self.assertFalse(res["execution_allowed"])
         self.assertFalse(res["inbound_polling_authorized"])
-        self.assertEqual(res["final_decision"], "REJECT")
+        self.assertIsNone(res["final_decision"])
 
     def test_existing_auto_owner_mode_still_cannot_trade(self):
         updated = self.ledger.switch_mode(
@@ -216,7 +216,7 @@ class M05OutboundOwnerStatusTests(unittest.TestCase):
         self.assertEqual([x[0] for x in calls], ["getMe", "sendMessage"])
         report = json.loads(out.getvalue())
         self.assertFalse(report["execution_allowed"])
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
         self.assertEqual(report["m05_telegram_owner_outbound"]["messages_sent"], 1)
         self.assertNotIn(TOKEN, out.getvalue())
         self.assertNotIn(str(OWNER_ID), out.getvalue())

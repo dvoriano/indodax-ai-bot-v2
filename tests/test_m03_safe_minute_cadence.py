@@ -36,11 +36,11 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
             if args is not None:
                 argv = args + ["--db", str(db)]
             out, err = StringIO(), StringIO()
-            scan = CycleResult("scan", FinalDecision.REJECT,
+            scan = CycleResult("scan", None,
                                "G1_DEEP_ANALYSIS_AND_RISK_NOT_CONNECTED",
                                screening={"all_idr_pairs": 40})
             deep = CycleResult(
-                "deep", FinalDecision.REJECT,
+                "deep", None,
                 "G1_PUBLIC_BULK_SOURCE_UNVERIFIED",
                 bulk={"coverage_status": "PARTIAL_INVALID_PAIR_EVIDENCE",
                       "g1_verified": False, "execution_allowed": False},
@@ -75,7 +75,7 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
         self.assertEqual(body["ai_shadow"]["completed_roles"], [])
         self.assertFalse(body["paid_network_allowed"])
         self.assertFalse(body["live_trading_authorized"])
-        self.assertEqual(body["final_decision"], "REJECT")
+        self.assertIsNone(body["final_decision"])
         self.assertFalse(body["execution_allowed"])
 
     def test_other_minutes_only_one_light_scan_and_no_deep(self):
@@ -91,7 +91,7 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                                  "LIGHT_ALL_IDR_EVERY_MINUTE")
                 self.assertEqual(body["public_scanner"]["all_idr_pairs"], 40)
                 self.assertIsNone(body["public_bulk"])
-                self.assertEqual(body["final_decision"], "REJECT")
+                self.assertIsNone(body["final_decision"])
                 self.assertFalse(body["execution_allowed"])
 
     def test_late_or_early_tick_never_scans_or_catches_up(self):

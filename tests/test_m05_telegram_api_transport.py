@@ -109,7 +109,7 @@ class M05TelegramApiTransportTests(unittest.TestCase):
         fake = FakeBotApi([message(100, "/status")])
         report = self.poller(fake).poll_once()
         self.assertEqual(report["handled"], 1)
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
         self.assertFalse(report["execution_allowed"])
         self.assertEqual(report["next_offset"], 101)
         self.assertEqual([call[0] for call in fake.calls],
@@ -160,7 +160,7 @@ class M05TelegramApiTransportTests(unittest.TestCase):
         fake = FakeBotApi([callback(200, "cq-pass", p["callbacks"]["PASS"])])
         report = self.poller(fake).poll_once()
         self.assertEqual(report["next_offset"], 201)
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
         self.assertFalse(report["execution_allowed"])
         self.assertEqual([c[0] for c in fake.calls],
                          ["getUpdates", "answerCallbackQuery"])
@@ -193,7 +193,7 @@ class M05TelegramApiTransportTests(unittest.TestCase):
             ledger=self.ledger, clock=lambda: NOW+1,
         )
         out = poller.poll_once()
-        self.assertEqual(out["final_decision"], "REJECT")
+        self.assertIsNone(out["final_decision"])
         self.assertFalse(out["execution_allowed"])
         self.assertEqual(fake.calls[-1][0], "answerCallbackQuery")
         self.assertEqual(self.ledger.telegram_next_offset(), 9)

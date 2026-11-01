@@ -32,7 +32,7 @@ class M04UStrategySafetyTests(unittest.TestCase):
         self.assertEqual(calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "STRATEGY_BUY_NET_TARGET_UNMET")
         self.assertEqual(report["completed_roles"], calls)
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
         self.assertFalse(report["execution_allowed"])
 
     def test_roi_only_met_rejects_buy(self):
@@ -47,7 +47,7 @@ class M04UStrategySafetyTests(unittest.TestCase):
         report = signed_role_run(caller)
         self.assertEqual(report["reason"], "STRATEGY_BUY_PREFLIGHT_UNVERIFIED")
         self.assertEqual(report["role_results"][-1]["action"], "BUY")
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
         self.assertFalse(report["g2_candidate_authorized"])
         self.assertFalse(report["execution_allowed"])
         self.assertFalse(report["live_trading_authorized"])
@@ -65,7 +65,7 @@ class M04UStrategySafetyTests(unittest.TestCase):
         self.assertEqual(report["reason"], "M04_SHADOW_ONLY_FINAL_AND_PREFLIGHT_ABSENT")
         self.assertEqual(calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["role_results"][-1]["action"], "WAIT")
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
 
     def test_two_candidates_separate_buy_evaluations_both_non_executable(self):
         bulk, verifier = signed_two_pair_source()
@@ -78,14 +78,16 @@ class M04UStrategySafetyTests(unittest.TestCase):
         self.assertEqual([x["pair"] for x in report["candidate_reports"]], list(PAIRS))
         self.assertEqual([x["reason"] for x in report["candidate_reports"]],
                          ["STRATEGY_BUY_PREFLIGHT_UNVERIFIED"] * 2)
-        self.assertEqual(report["final_decision"], "REJECT")
+        self.assertIsNone(report["final_decision"])
         self.assertFalse(report["execution_allowed"])
 
-    def test_risk_veto_still_stops_before_strategy(self):
+    def test_risk_no_trade_completes_strategy_but_never_trades(self):
         caller = RoleCaller(risk="NO_TRADE")
         report = signed_role_run(caller)
-        self.assertEqual(caller.calls, ["MARKET", "RISK"])
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "RISK_VETO_NO_TRADE")
+        self.assertEqual(report["role_results"][-1]["effective_action"], "WAIT")
+        self.assertIsNone(report["final_decision"])
         self.assertFalse(report["execution_allowed"])
 
 

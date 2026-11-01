@@ -1,6 +1,9 @@
 # PROJECT GUIDELINE & MASTER CHECKPOINT
 ## INDODAX AI BOT V2
 
+**KEPUTUSAN OWNER 1 NOVEMBER 2026 (menggantikan veto pre-final lama):** M03, M04, M06 dan stage lain tidak diperkenankan menciptakan `FinalDecision.REJECT` atas nama owner sebelum M05 MANUAL/AUTO memutuskan proposal. Source yang belum lengkap, AI belum aktif, spread buruk dan RISK negatif dilaporkan sebagai observasi/peringatan; bukan otorisasi untuk memalsukan evidence atau mengirim order. Hanya keputusan M05 yang menghasilkan `PASS` atau `REJECT` diskresioner. Validitas data, otentikasi akun, kuantitas terverifikasi, idempotensi, precision exchange dan ketersediaan executor tetap syarat mekanis untuk sebuah order agar benar-benar dapat dikirim. Kode M01 saat ini belum mengimplementasikan LIVE executor; jangan memalsukan trading. Ketentuan lama tentang pre-final `Final REJECT` dan RISK sebagai keputusan owner dinyatakan tidak berlaku untuk implementasi baru, sedangkan batas fisik/keuangan exchange tetap berlaku. Pertahankan satu V2 mainpath, pisahkan pre-final observations dari keputusan M05, dan jangan mengubah acceptance M06 tanpa bukti riil.
+
+
 **Repository:** dvoriano/indodax-ai-bot-v2 (PRIVATE)  
 **Baseline:** 26 Oktober 2026  
 **Canonical policy/specification:** dokumen ini. **Canonical execution tracker:** [ROADMAP.md](ROADMAP.md). **GitHub = source of truth; VPS = environment pengujian/runtime; Indodax = sumber data saldo, order, dan fill nyata.**

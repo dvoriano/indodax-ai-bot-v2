@@ -93,7 +93,9 @@ def dedicated_owner_poll_once(
         result = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
         ).poll_once(limit=limit)
-    if result.get("final_decision") != "REJECT" or (
+    # The poll summary is not an owner trade proposal. Each individual
+    # callback is durably recorded in the owner ledger; batch has no Final.
+    if result.get("final_decision") is not None or (
             result.get("execution_allowed") is not False):
         raise TelegramTransportError("M05_DEDICATED_OWNER_GATE_CHANGED")
     return {
@@ -107,6 +109,6 @@ def dedicated_owner_poll_once(
         "handler": result,
         "automatic_polling_enabled": False,
         "live_execution_authorized": False,
-        "final_decision": "REJECT",
+        "final_decision": None,
         "execution_allowed": False,
     }

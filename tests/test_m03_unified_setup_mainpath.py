@@ -214,7 +214,7 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
             role_caller.inputs[0]["market_evidence"]["scalp_setup_stage"]["stage"],
             "PULLBACK_REBOUND_WATCH",
         )
-        self.assertEqual(out["final_decision"], "REJECT")
+        self.assertIsNone(out["final_decision"])
         self.assertFalse(out["execution_allowed"])
         self.assertFalse(out["g2_candidate_authorized"])
 
@@ -245,7 +245,7 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
                 p in {f"m{i:03d}_idr" for i in range(22)}
                 for p in result.bulk["requested_pairs"]
             ))
-            self.assertEqual(result.final_decision.value, "REJECT")
+            self.assertIsNone(result.final_decision)
             self.assertFalse(result.execution_allowed)
             self.assertFalse(result.bulk["g1_verified"])
             self.assertFalse(result.ai_shadow["execution_allowed"])
