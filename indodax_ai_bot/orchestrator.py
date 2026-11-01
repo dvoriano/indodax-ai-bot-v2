@@ -121,7 +121,7 @@ def _btc_rest_ws_observability(rest: dict | None, ws: dict | None) -> dict:
 @dataclass(frozen=True)
 class CycleResult:
     trace_id: str
-    final_decision: FinalDecision
+    final_decision: FinalDecision | None
     reason: str
     execution_allowed: bool = False
     market: dict[str, str | int | bool] | None = None
@@ -133,6 +133,7 @@ class CycleResult:
     public_ws: dict | None = None
     public_research: dict | None = None
     research_archive: dict | None = None
+    stage_disposition: str = "LEGACY_DIAGNOSTIC"
 
 
 class DailyScalpingOrchestrator:
@@ -327,12 +328,9 @@ class DailyScalpingOrchestrator:
         executable proposal. Legacy --once performs ZERO public GETs.
         """
         if public_scanner:
-            if not ws_db_path:
-                reason = "M03_MAINPATH_REQUIRES_BTC_WS_SOURCE"
-                self.journal.record_reject(trace_id, reason)
-                return self._record_m05_reject(
-                    CycleResult(trace_id, FinalDecision.REJECT, reason)
-                )
+            # Missing BTC WS is a recorded source-quality warning, not
+            # permission for M03/M04 to issue a Final REJECT for the owner.
+            # No WS evidence is fabricated; any actual order remains disabled.
             return self.run_bulk_deep_cycle(
                 trace_id, ws_db_path=ws_db_path,
                 min_volume_idr=min_volume_idr, deep_limit=deep_limit,
@@ -664,17 +662,21 @@ class DailyScalpingOrchestrator:
                     result.get("btc_rest_ws_observability"),
                 )
             )
-        # One G2 boundary, in the already accepted bulk mainpath. No provider
-        # object is configured, no billable requests, no trading permission.
+        # M03/M04 observations must not claim that the owner rejected a
+        # proposal. This path has no executable proposal or owner callback yet.
+        # Three-role provider permissions stay unchanged; no invented AI data.
         ai_shadow = ThreeRoleShadow(
             caller=self._ai_role_caller,
             source_verifier=self._source_verifier,
         ).run(trace_id, result)
-        self.journal.record_reject(trace_id, reason)
-        return self._record_m05_reject(CycleResult(
-            trace_id, FinalDecision.REJECT, reason, False,
+        self.journal.record_stage_observation(
+            trace_id, "M03_M04_PRE_FINAL", reason,
+        )
+        return CycleResult(
+            trace_id, None, reason, False,
             None, None, None, None, result, ai_shadow,
-        ))
+            stage_disposition="ADVISORY_ONLY_NO_OWNER_DECISION",
+        )
 
     def run_public_ws_cycle(self, trace_id: str, *, db_path: str,
                             pair: str = "btc_idr",
