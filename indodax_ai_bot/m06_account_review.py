@@ -130,6 +130,9 @@ class M06ReadOnlyReconciliation:
     local_shadow_reservations_present: bool = False
     local_shadow_coverage_complete: bool = False
     local_rebuy_receipts_linked: bool = False
+    local_other_account_records_present: bool = False
+    local_orphan_fill_records_present: bool = False
+    external_peer_coverage_verified: bool = False
     special_pool_local_floors_complete: bool = False
     protected_rebuy_ledger_verified: bool = False
     manual_asset_ownership_verified: bool = False
@@ -167,7 +170,11 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
                 or local_rebuy.manual_holding_verified is not False
                 or local_rebuy.execution_allowed is not False
                 or local_rebuy.rebuy_spending_allowed is not False
-                or local_rebuy.main_capital_spending_allowed is not False):
+                or local_rebuy.main_capital_spending_allowed is not False
+                or local_rebuy.external_peer_coverage_verified is not False
+                or type(local_rebuy.local_other_account_records_present) is not bool
+                or type(local_rebuy.local_orphan_fill_records_present) is not bool):
+
             raise ValueError("M06_LOCAL_REBUY_AUTHORITY_FORGED")
         for number in (
                 local_rebuy.floki_idr_local_protected,
@@ -226,6 +233,13 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
             and local_rebuy.local_shadow_coverage_complete is True),
         local_rebuy_receipts_linked=(local_rebuy is not None
             and local_rebuy.local_rebuy_receipts_linked is True),
+        local_other_account_records_present=(local_rebuy is not None
+            and local_rebuy.local_other_account_records_present is True),
+        local_orphan_fill_records_present=(local_rebuy is not None
+            and local_rebuy.local_orphan_fill_records_present is True),
+        # Only local evidence is observed; absence never implies exclusive
+        # ownership of exchange wallet or other processes' balances.
+        external_peer_coverage_verified=False,
         special_pool_local_floors_complete=all(
             p.local_manual_floor_recorded for p in pool_previews
         ),
