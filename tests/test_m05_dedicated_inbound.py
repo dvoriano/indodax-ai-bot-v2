@@ -120,7 +120,7 @@ class M05DedicatedInboundTests(unittest.TestCase):
         self.assertFalse(result["old_caipiti_bot_used"])
         self.assertFalse(result["human_owner_verified"])
         self.assertFalse(result["execution_allowed"])
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertEqual(self.ledger.telegram_next_offset(), 16)
 
     def test_mode_auto_command_is_persisted_but_not_order(self):
@@ -202,7 +202,7 @@ class M05DedicatedInboundTests(unittest.TestCase):
                          ["getMe", "getWebhookInfo", "getUpdates",
                           "answerCallbackQuery"])
         self.assertEqual(self.ledger.telegram_next_offset(), 8)
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
 
     def test_foreign_chat_and_group_get_no_reply(self):
@@ -335,7 +335,7 @@ class M05DedicatedInboundTests(unittest.TestCase):
                          ["getMe", "getWebhookInfo", "getUpdates", "sendMessage"])
         data = json.loads(out.getvalue())
         self.assertFalse(data["execution_allowed"])
-        self.assertEqual(data["final_decision"], "REJECT")
+        self.assertIsNone(data["final_decision"])
         self.assertFalse(data["m05_telegram_dedicated_poll"]["human_owner_verified"])
         self.assertNotIn(TOKEN, out.getvalue())
         self.assertNotIn(str(OWNER), out.getvalue())
