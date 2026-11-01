@@ -78,6 +78,9 @@ class M06PrivateProbeResult:
     local_shadow_reservations_present: bool = False
     local_shadow_coverage_complete: bool = False
     local_rebuy_receipts_linked: bool = False
+    local_other_account_records_present: bool = False
+    local_orphan_fill_records_present: bool = False
+    external_peer_coverage_verified: bool = False
     special_pool_local_floors_complete: bool = False
     history_complete: bool = False
     cross_bot_ownership_verified: bool = False
@@ -413,5 +416,8 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         local_shadow_reservations_present=capital_review.local_shadow_reservations_present,
         local_shadow_coverage_complete=capital_review.local_shadow_coverage_complete,
         local_rebuy_receipts_linked=capital_review.local_rebuy_receipts_linked,
+        local_other_account_records_present=capital_review.local_other_account_records_present,
+        local_orphan_fill_records_present=capital_review.local_orphan_fill_records_present,
+        external_peer_coverage_verified=False,
         special_pool_local_floors_complete=capital_review.special_pool_local_floors_complete,
     )
