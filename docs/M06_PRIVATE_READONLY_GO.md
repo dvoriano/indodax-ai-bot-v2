@@ -79,6 +79,14 @@ An existing legacy fill without a local receipt cannot silently acquire a new id
 
 This is durable **LOCAL evidence only**. A receipt is not an exchange-signed fill or a verified bot-owned position: `bot_owned_fills_verified=false`, `protected_rebuy_verified=false`, `capital_spendable_verified=false` and `execution_allowed=false`. Original V2 CLI emits only `local_rebuy_receipts_linked` (Boolean); no trade IDs, token amounts or account identifiers. Eight new isolated offline regression tests are **CODED, not yet VPS-PASS**; no new API request, credentials, BUY/SELL or trading mode change is required.
 
+## M06-05 local account coexistence diagnostic (coded, not yet VPS tested)
+
+The original `M06OwnershipLedger.inspect_existing_account_readonly` checks, inside the **same** owner-only SQLite `mode=ro` UID-bound transaction, for records belonging to another account hash in existing V2 `m06_intents`, `m06_special_rebuy_observations`, `m06_manual_asset_floors`, `m06_local_fill_receipts` and (if present) `m06_shadow_reserve`. It also flags legacy `m06_observed_fills` with no corresponding local receipt; those fills cannot be attributed to a bot on the basis of this ledger alone. Findings flow through original `m06_account_review`, the V2 scoped private reader and CLI as **Boolean-only** fields `local_other_account_records_present` and `local_orphan_fill_records_present`.
+
+**Crucial limitation:** a clean single-UID V2 SQLite cannot demonstrate that all outside account users, manual portfolio activity, old bots, other VPS processes, peers on the same egress IP, or outside exchange sessions have been reconciled or stopped. `external_peer_coverage_verified=false` and `cross_bot_ownership_verified=false` always remain, regardless of local flags; `execution_allowed=false` and `capital_spendable_verified=false` are unchanged. A fabricated `external_peer_coverage_verified=true` in local input is rejected as forged authority. This change **never** opens the V1 repository, reads V1 process metadata, invokes external connectors, sends private API GETs or attempts trade authorization.
+
+Seven new scoped offline tests cover single-UID unknown peer coverage, foreign UID intent, separate account local shadow commitments, orphan/unlinked legacy fill, foreign UID fill receipts, forged external attestation and the **original V2 orchestrator** four synthetic GETs with safe final REJECT. These tests are **CODED but not yet owner VPS verified**. No live shared-account coexistence or independent ownership has been accepted.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
