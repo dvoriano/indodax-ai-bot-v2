@@ -12,9 +12,18 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+import time
 
 
-def inspect_existing_btc_ws(path: str, *, max_publications: int = 200000) -> dict:
+def inspect_existing_btc_ws(
+    path: str, *, max_publications: int = 200000,
+    now_epoch: int | None = None,
+) -> dict:
+    """Only inventory historical observations; no G1 or live authorization."""
+    if now_epoch is None:
+        now_epoch = int(time.time())
+    if type(now_epoch) is not int or now_epoch <= 0:
+        raise ValueError("WS_EVIDENCE_INVALID_NOW_EPOCH")
     db_path = Path(path)
     if not db_path.is_absolute() or not db_path.is_file():
         raise ValueError("WS_EVIDENCE_DB_NOT_FOUND_ABSOLUTE")
@@ -102,6 +111,10 @@ def inspect_existing_btc_ws(path: str, *, max_publications: int = 200000) -> dic
                     "total_publications": total,
                     "g1_authenticated": False, "execution_allowed": False}
         newest = max(times)
+        # A healthy-looking historical hour must never be treated as a
+        # fresh market feed by a downstream scanner or owner proposal.
+        observed_lag_seconds = now_epoch - newest
+        observed_recent = 0 <= observed_lag_seconds <= 120
         newest_closed = newest // 60 * 60
         windows = {}
         for seconds, key in ((900, "last_closed_15m"), (3600, "last_closed_1h")):
@@ -126,6 +139,11 @@ def inspect_existing_btc_ws(path: str, *, max_publications: int = 200000) -> dic
             "total_publications": total, "observed_trade_rows": observed_trade_rows,
             "first_trade_epoch": min(times),
             "last_trade_epoch": newest,
+            "inspection_as_of_epoch": now_epoch,
+            "latest_observed_trade_lag_seconds": observed_lag_seconds,
+            "latest_observed_trade_recent_120s": observed_recent,
+            "stream_is_currently_connected": state[2] == "CONTIGUOUS_OBSERVED",
+            "source_eligible_for_live_decision": False,
             "distinct_stream_epochs": len(seen_epoch),
             "discontinuities_recorded": gaps,
             "offset_jumps_between_stored_publications": offset_gaps,
