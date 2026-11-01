@@ -201,15 +201,22 @@ class TelegramOwnerPoller:
             user_id=from_user["id"], chat_id=chat["id"],
             data=data, now_epoch=now_epoch, chat_type="private",
         )
-        # Even a successful shadow PASS has Final REJECT.
-        if result.get("execution_allowed") is not False or (
-                result.get("final_decision") != "REJECT"):
+        # A successful owner PASS is stored as PASS, not rewritten to
+        # REJECT. This is a consent-only shadow: execution remains OFF.
+        if result.get("execution_allowed") is not False:
             raise TelegramTransportError("M05_TELEGRAM_OWNER_GATE_CHANGED")
-        return (
-            "OWNER_CALLBACK_HANDLED" if result.get("accepted") else
-            "OWNER_CALLBACK_REJECTED",
-            "answerCallbackQuery", "Simulasi tercatat. Trading tetap OFF.",
-        )
+        choice = result.get("owner_decision")
+        if result.get("accepted") is True:
+            if choice not in ("PASS", "REJECT") or result.get("final_decision") != choice:
+                raise TelegramTransportError("M05_TELEGRAM_OWNER_DECISION_MISMATCH")
+            outcome = "OWNER_CALLBACK_" + choice + "_RECORDED"
+            reply = "Owner " + choice + " dicatat. Simulasi saja, order OFF."
+        else:
+            if choice is not None or result.get("final_decision") is not None:
+                raise TelegramTransportError("M05_TELEGRAM_UNAUTHORIZED_FINAL")
+            outcome = "OWNER_CALLBACK_INVALID_OR_EXPIRED"
+            reply = "Proposal tidak berlaku. Tidak ada order."
+        return (outcome, "answerCallbackQuery", reply)
 
     def poll_once(self, *, limit: int = 10) -> dict[str, Any]:
         if type(limit) is not int or not 1 <= limit <= 20:
@@ -289,6 +296,6 @@ class TelegramOwnerPoller:
         return {
             "handled": handled, "ignored": ignored,
             "next_offset": self._ledger.telegram_next_offset(),
-            "final_decision": "REJECT", "execution_allowed": False,
+            "final_decision": None, "execution_allowed": False,
             "telegram_network_default_off": True,
         }
