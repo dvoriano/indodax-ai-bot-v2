@@ -4,7 +4,7 @@ This is not a substitute for an authenticated private source. No pretend fills,
 ownership attribution, free-wallet promotion, private API, or LIVE authority.
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from .policy import ScalpingPolicy
 from .m06_shadow_account import AccountObservation, M06ShadowCapital, _amount
@@ -205,7 +205,7 @@ class M06ReadOnlyReconciliation:
     spendable_capital_verified: bool = False
     execution_allowed: bool = False
     # One diagnostic observation, not a second authorization gate.
-    account_preview: M06SingleAccountPreview | None = None
+    account_preview: M06SingleAccountPreview | None = field(default=None, repr=False)
 
 
 def reconcile_readonly_private_snapshot(*, account: AccountBalances,
