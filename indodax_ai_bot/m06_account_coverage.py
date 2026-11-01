@@ -119,6 +119,105 @@ def read_coverage_approval(path: str, *, now_ms: int | None = None) -> M06Covera
     return approval
 
 
+# Separate one-GET owner GO. This never renews 20261101 18-GET coverage.
+ACCOUNT_DIAG_ID = "M06_PRIVATE_ACCOUNT_DIAGNOSTIC_20261101"
+
+
+@dataclass(frozen=True, repr=False)
+class M06AccountDiagnosticResult:
+    status: str = "M06_ACCOUNT_DIAGNOSTIC_READONLY_OK"
+    request_count: int = 1
+    view_only_permissions_verified: bool = True
+    balances_schema_observed: bool = True
+    spendable_idr_verified: bool = False
+    manual_asset_ownership_verified: bool = False
+    external_peer_coverage_verified: bool = False
+    execution_allowed: bool = False
+
+    def __repr__(self):
+        return "<M06AccountDiagnosticResult REDACTED NOT_TRADABLE>"
+
+
+def read_account_diagnostic_approval(
+        path: str, *, now_ms: int | None = None
+        ) -> boundary.M06ScopedApproval:
+    """Validate a fresh explicit GO for exactly ONE account GET."""
+    raw = boundary._owner_private_file(path)
+    if set(raw) != {"approval_id", "issued_ms", "expires_ms",
+                    "max_requests", "symbol"}:
+        raise boundary.M06ScopeDenied("M06_ACCOUNT_DIAG_GO_SCHEMA_INVALID")
+    approval = boundary.M06ScopedApproval(**raw)
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    if (approval.approval_id != ACCOUNT_DIAG_ID
+            or type(approval.issued_ms) is not int
+            or type(approval.expires_ms) is not int
+            or type(now) is not int
+            or not approval.issued_ms <= now < approval.expires_ms
+            or approval.expires_ms - approval.issued_ms > 900000
+            or approval.max_requests != 1
+            or type(approval.max_requests) is not int
+            or approval.symbol != "injidr"):
+        raise boundary.M06ScopeDenied("M06_ACCOUNT_DIAG_GO_INVALID")
+    return approval
+
+
+def run_account_diagnostic_readonly_once(*,
+        approval: boundary.M06ScopedApproval,
+        budget: boundary.M06RequestBudget,
+        api_key: str, secret_key: str) -> M06AccountDiagnosticResult:
+    """Only GET /api/v2/account; no order history, balance values or LIVE."""
+    if (type(approval) is not boundary.M06ScopedApproval
+            or type(budget) is not boundary.M06RequestBudget
+            or type(api_key) is not str or type(secret_key) is not str
+            or approval.approval_id != ACCOUNT_DIAG_ID
+            or approval.max_requests != 1 or approval.symbol != "injidr"
+            or boundary._RELEASE_APPROVAL_ID != ACCOUNT_DIAG_ID
+            or boundary._NETWORK_RELEASE_GO is not True):
+        raise boundary.M06ScopeDenied("M06_ACCOUNT_DIAG_RELEASE_DENIED")
+    now = int(time.time() * 1000)
+    if not approval.issued_ms <= now < approval.expires_ms:
+        raise boundary.M06ScopeDenied("M06_ACCOUNT_DIAG_GO_EXPIRED")
+    # Burn before preparing/sending the single authenticated request.
+    budget.claim_fresh_account_diagnostic_once(ACCOUNT_DIAG_ID)
+    budget.debit(approval, api_key=api_key, now_ms=now)
+    try:
+        signed = prepare_signed_get(
+            path="/api/v2/account", api_key=api_key,
+            secret_key=secret_key, timestamp_ms=now,
+        )
+    except (ValueError, UnicodeError):
+        raise boundary.M06ScopeDenied("M06_ACCOUNT_DIAG_SIGNING_FAILED") from None
+    token = boundary._BUDGET_DEBITED_FOR_THIS_GET.set(True)
+    try:
+        payload = boundary._read_json_over_verified_tls(signed)
+    finally:
+        boundary._BUDGET_DEBITED_FOR_THIS_GET.reset(token)
+    # Indodax may return an error JSON even with HTTP 200.
+    if type(payload) is dict and type(payload.get("code")) is int:
+        known = {
+            -1002: "M06_ACCOUNT_DIAG_API_CREDENTIAL_REJECTED",
+            -1021: "M06_ACCOUNT_DIAG_API_TIMESTAMP_REJECTED",
+            -1022: "M06_ACCOUNT_DIAG_API_SIGNATURE_REJECTED",
+            -2015: "M06_ACCOUNT_DIAG_API_ACCESS_REJECTED",
+            -1003: "M06_ACCOUNT_DIAG_API_RATE_LIMIT_REJECTED",
+        }
+        raise boundary.M06ScopeDenied(
+            known.get(payload["code"], "M06_ACCOUNT_DIAG_API_ERROR")
+        )
+    boundary.enforce_view_only_permissions(payload)
+    from .m06_private_payloads import M06PayloadError
+    try:
+        parsed = parse_account(payload)
+    except (M06PayloadError, ValueError):
+        raise boundary.M06ScopeDenied(
+            "M06_ACCOUNT_DIAG_BALANCE_SCHEMA_REJECTED"
+        ) from None
+    # Even a valid account with IDR free balance proves NO bot ownership.
+    if parsed.uid <= 0:
+        raise boundary.M06ScopeDenied("M06_ACCOUNT_DIAG_UID_INVALID")
+    return M06AccountDiagnosticResult()
+
+
 def run_coverage_readonly_once(*, approval: M06CoverageApproval,
         budget: boundary.M06RequestBudget, api_key: str,
         secret_key: str, local_ownership_db: str | None = None
