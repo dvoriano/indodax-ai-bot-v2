@@ -4,6 +4,9 @@ Berlaku untuk semua pekerjaan coding AI/agent dalam repository ini.
 
 **Satu referensi kanonis:** [docs/PROJECT_GUIDELINE.md](docs/PROJECT_GUIDELINE.md). Baca Bagian 0/0A/B/E/F guideline sebagai aturan, lalu [docs/ROADMAP.md](docs/ROADMAP.md) untuk milestone aktif, checklist, evidence dan handover. **Roadmap ini satu-satunya pelacak**; jangan membuat roadmap/status/handover kedua.
 
+**OWNER DECISION 1 NOV 2026 (NEWER; SUPERSEDES EARLIER PRE-FINAL REJECT POLICY):** Hanya M05 Final Decision MANUAL/AUTO yang boleh memutuskan PASS/REJECT atas proposal perdagangan. M03 scanner, M04 data/G1/AI/RISK/STRATEGY, M06 account observations, dan modul lainnya mengeluarkan fakta, rekomendasi, keterbatasan atau status UNAVAILABLE sebagai *advisory*, bukan membuat keputusan owner REJECT atau memalsukan penerimaan. Jangan membuat bypass palsu: data yang tidak ada tetap UNKNOWN; API HTTP401 tetap gagal autentikasi; nominal free yang belum terbaca tidak menjadi modal; order duplikat/overbalance/SELL foreign tetap dilarang secara mekanis. M07 belum mempunyai executor valid di main; jangan mengaktifkan LIVE atau paid service melalui perubahan kebijakan ini. Terapkan perubahan melalui satu original V2 mainpath, satu jurnal pre-final terpisah dari final owner, dan targeted tests. M06 tetap 1/5 sampai bukti akun nyata dan ownership acceptance terpenuhi; jangan ubah centang karena hanya ganti terminologi.
+
+
 ## LOCK RUANG KERJA (KEPUTUSAN OWNER 31 OKTOBER 2026)
 
 **ALLOWLIST TUNGGAL:** seluruh pekerjaan pengembangan, pemeriksaan, perubahan kode, PR, audit acceptance, dan handover hanya pada **GitHub `dvoriano/indodax-ai-bot-v2`** (beserta branch/PR di repo yang SAMA). Pekerjaan diarahkan ke **SATU V2 `DailyScalpingOrchestrator` dan runtime V2 yang sama**, dengan `docs/ROADMAP.md` sebagai satu-satunya tracker.
