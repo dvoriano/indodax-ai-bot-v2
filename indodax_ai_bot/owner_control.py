@@ -360,6 +360,19 @@ class OwnerDecisionLedger:
                    WHERE delivery_state='CLAIMED' LIMIT 1"""
             ).fetchone():
                 raise ValueError("M05_ADVISORY_INCOMPLETE_DELIVERY_REVIEW")
+            # Expire unsent review-only items atomically in BOTH existing
+            # M05 tables, so /status cannot report old PENDING proposals.
+            # This is expiry metadata, NOT a human Final REJECT.
+            db.execute(
+                """UPDATE m05_proposals
+                   SET state='REJECT',reason='EXPIRED_UNSENT',
+                       decision_epoch=?
+                   WHERE state='PENDING' AND proposal_id IN (
+                       SELECT proposal_id FROM m05_market_advisory_outbox
+                       WHERE delivery_state='QUEUED' AND expires_epoch<=?
+                   )""",
+                (now_epoch, now_epoch),
+            )
             db.execute(
                 """UPDATE m05_market_advisory_outbox SET delivery_state='EXPIRED'
                    WHERE delivery_state='QUEUED' AND expires_epoch<=?""",
