@@ -404,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "m05_telegram_owner_outbound": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -432,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "m05_telegram_readonly_preflight": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -472,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "m05_telegram_dedicated_poll": summary,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -487,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             report = inspect_public_ws_systemd_unit()
             print(json.dumps({
                 "public_ws_unit_status": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
@@ -505,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({
                 "public_ws_health": report,
-                "final_decision": "REJECT",
+                "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
