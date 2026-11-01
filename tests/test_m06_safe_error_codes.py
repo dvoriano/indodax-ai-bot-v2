@@ -2,7 +2,7 @@
 import unittest
 
 from indodax_ai_bot.__main__ import _m06_redacted_error_code
-from indodax_ai_bot.m06_scoped_https import M06ScopeDenied
+from indodax_ai_bot.m06_scoped_https import M06ScopeDenied, _m06_safe_http_status
 
 
 class M06SafeErrorReasonTests(unittest.TestCase):
@@ -35,6 +35,20 @@ class M06SafeErrorReasonTests(unittest.TestCase):
             _m06_redacted_error_code(M06ScopeDenied("HTTP 403: sensitive response")),
             "M06_COVERAGE_NOT_ACCEPTED",
         )
+
+
+    def test_safe_http_status_401_credentials_class_only(self):
+        self.assertEqual(_m06_safe_http_status(401), "M06_PRIVATE_HTTP_401")
+
+    def test_safe_http_status_403_permission_class_only(self):
+        self.assertEqual(_m06_safe_http_status(403), "M06_PRIVATE_HTTP_403")
+
+    def test_safe_http_status_400_clock_or_signature_not_overdiagnosed(self):
+        self.assertEqual(_m06_safe_http_status(400), "M06_PRIVATE_HTTP_400")
+
+    def test_unknown_http_status_is_redacted(self):
+        self.assertEqual(_m06_safe_http_status("401 SECRET=bad"), "M06_PRIVATE_HTTP_NON_200")
+        self.assertEqual(_m06_safe_http_status(777), "M06_PRIVATE_HTTP_NON_200")
 
 
 if __name__ == "__main__":
