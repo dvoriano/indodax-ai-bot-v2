@@ -1,5 +1,8 @@
 # ROADMAP & EXECUTION CHECKLIST | INDODAX AI BOT V2
 
+> **Perubahan owner 1 November 2026, fase implementasi belum accepted:** M03/M04/M06 tidak boleh mencatat penilaian sumber, RISK atau saldo yang tidak tersedia sebagai keputusan Final REJECT owner. Output pre-final harus advisory (dengan evidence/warnings); hanya M05 menerima keputusan final PASS/REJECT. Ini bukan persetujuan order tanpa data valid. Implementasi awal berada di branch `feat/owner-final-only-mainpath-advisory-20261101`, belum dianggap PASS sebelum pengujian original mainpath dan integrasi. `main`/runtime VPS tidak berubah dengan dibuatnya branch. Angka M06 tetap 1/5 dan master 50 selesai/48 terbuka sampai acceptance semula terbukti.
+
+
 > **Satu-satunya tracker dan handover proyek.** Aturan normatif tetap di [PROJECT_GUIDELINE.md](PROJECT_GUIDELINE.md) bagian 0/0A/B/E/F serta [AGENTS.md](../AGENTS.md). **Rekonsiliasi evidensi: 31 Oktober 2026 (WIB)**. Seluruh 50 butir selesai, 48 butir terbuka dan register PASS historis dipertahankan, bukan mengganti roadmap atau mengulang pengujian.
 >
 > **Skala angka:** 50/48 menghitung butir besar CHECKLIST, bukan 49 hasil teknis dan bukan persentase bot yang sudah hidup. M06 punya **15/15 centang kode/audit/terhubung dan 5/5 source utama dipasang**, tetapi kelima gerbang acceptance utama masih `[ ]` karena modal dan kepemilikan akun belum terbukti. Semua subtask yang PASS tetap disimpan di **register bukti Bagian 4** dan matriks integrasi Bagian 2A. M10 `ExecCondition` PASS tetap tercatat sebagai sub-bukti, bukan checklist selesai tambahan.
