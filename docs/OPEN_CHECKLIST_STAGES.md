@@ -110,20 +110,20 @@
 - [ ] Selesai. Capital spendability, local rebuy ownership, account-wide history, bot-owned fills and cross-bot attribution remain unverified; M06-02 to -05 open.
 
 ### M06-02 · Verify fresh free IDR minus locked/unsettled commitment; atomic reserve, avoid double-spend.
-Evidence 1 Nov 2026: original V2 `reconcile_unverified_capital` + same-SQLite UID-bound local active `m06_shadow_reserve` path accepted **6/6 specific tests** on owner VPS pinned `13ae5de746065763c97977cb28d6cd0756c022fe`; concurrency/replay/released holds/corruption/foreign UID/mocked four-GET REJECT. The separate ConnectBot TTY test failed at that source SHA and was fixed on `8329af1db18cce374b84ad5a1e4c83988befeffe`; narrow regression **6/6 PASS** on owner VPS with `M06_CONNECTBOT_ENTER_FIX_PASS`. **This does not establish authenticated account-wide unlocked obligations, cross-bot ownership or positive spendable IDR**. The stage requirements below remain OPEN pending those missing grounds.
-- [ ] Kode
-- [ ] Audit
-- [ ] Terhubung bot
-- [ ] Deploy
-- [ ] Selesai
+Evidence 1 November 2026: owner VPS pinned `13ae5de746065763c97977cb28d6cd0756c022fe`, six new M06 UID-bound local shadow commitments tests all PASS, including local atomic replay/release, three-way concurrent reserve, invalid ledger fail-closed and original V2 four-mocked-GET route. The one unrelated ConnectBot Enter regression was corrected at `8329af1db18cce374b84ad5a1e4c83988befeffe` and owner VPS accepted **6/6 PASS** (`M06_CONNECTBOT_ENTER_FIX_PASS`). Local capital accounting is integrated into original V2; it still **does not prove exchange-wide unsettled commitments**, other bots' balance liabilities or true spendable wallet IDR. Only the limited code/audit/wiring acceptance is checked; actual deployment and full M06-02 acceptance remain open.
+- [x] Kode. Existing V2 SQLite account-hash-scoped `m06_shadow_reserve` is read in one read-only UID snapshot; active sums are fed to capital diagnostics, missing table means coverage unknown.
+- [x] Audit. Six new capital tests PASS at owner VPS (among the earlier 39 successful tests), and related ConnectBot input regression independently 6/6 PASS.
+- [x] Terhubung bot. Original `DailyScalpingOrchestrator` four-mocked-GET source → `m06_account_review` → `reconcile_unverified_capital` still REJECTs with no exchange authorization.
+- [ ] Deploy. Source is in draft PR#29, no merged/installed mainline runtime evidence.
+- [ ] Selesai. Fresh, complete real exchange and cross-bot obligations/ownership and safe true available IDR are NOT verified.
 
 ### M06-03 · FLOKI 25% trading/75% reserve; PEPE 30% trading/70% reserve; manual holding exclusions.
-Evidence source-only: [DRAFT PR#29](https://github.com/dvoriano/indodax-ai-bot-v2/pull/29) now includes original `m06_account_review` non-executable partition previews for fixed **25/75 FLOKI** and **30/70 PEPE**, combined with previously persisted account-UID manual quantity floors. Missing floors remain UNKNOWN; floor larger than observed wallet rejects; even a theoretical trading cap does not produce bot-owned SELL availability. Seven scoped offline tests added, **not yet owner VPS tested**. Actual bot-owned lot provenance and protected rebuy settlement still absent, so no completed milestone check.
-- [ ] Kode
-- [ ] Audit
-- [ ] Terhubung bot
-- [ ] Deploy
-- [ ] Selesai
+Owner VPS scoped `M06_SPECIAL_POOL_ORIGINAL_MAINPATH_PASS`, exact source SHA `a8a275974ea3703e7822fbecac3101cf57f2018d`, **28/28 tests PASS in 2.429s** on 1 November 2026. Seven M06-03 tests plus six UID shadow, six UID binding, nine protected rebuy ownership. FLOKI 25/75 and PEPE 30/70 quantities are enforced as theoretical ceilings, account-UID-bound manual floors can only tighten reserves, over-wallet manual floor rejects, absent manual coverage never proves ownership. **Actual bot-owned sellable quantity remains ZERO**; no SELL rights and no deployment inferred. Only scoped code/audit/wiring acceptance is checked.
+- [x] Kode. Original V2 `m06_account_review.review_m06_special_partitions` builds fixed protected ratios and applies UID/manual floor monotonicity.
+- [x] Audit. Owner VPS 28/28 scoped source and regressions PASS at exact SHA `a8a275974ea3703e7822fbecac3101cf57f2018d`.
+- [x] Terhubung bot. Original V2 `DailyScalpingOrchestrator` mocked four GETs reaches the same account review, emits only redacted Boolean coverage and final REJECT.
+- [ ] Deploy. Source is in draft PR#29 and not installed into original V2 runtime.
+- [ ] Selesai. No real bot-owned lot provenance, authorized special SELL or rebuy settlement evidence.
 
 ### M06-04 · Protect rebuy bucket proceeds and bot-owned lot/fill attribution across restarts.
 - [ ] Kode
