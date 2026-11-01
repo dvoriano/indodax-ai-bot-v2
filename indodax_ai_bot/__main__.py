@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 import sys
 import time
 import os
@@ -19,6 +20,7 @@ from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, 
 from .m06_account_coverage import read_coverage_approval, COVERAGE_ID
 from .m06_account_coverage import read_account_diagnostic_approval, ACCOUNT_DIAG_ID
 from .owner_control import OwnerDecisionLedger
+from .telegram_service_tick import _private_file as _existing_private_owner_file
 from .telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError
 from .telegram_readonly_preflight import inspect_telegram_readonly
 from .telegram_owner_outbound import send_owner_safe_status_once
@@ -129,7 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--m05-shadow-db", default=None,
                         help="Opt-in OFFLINE owner REJECT audit DB (no Telegram transport or orders)")
     parser.add_argument("--m05-shadow-owner-id", type=int, default=None,
-                        help="Opt-in numeric Telegram owner user ID, OFFLINE only")
+                        help="Opt-in numeric original V2 Telegram owner user ID")
+    parser.add_argument("--m05-market-advisory-queue", action="store_true",
+                        help="Only on scheduled M03: explicitly authorized no-order owner advisory queue, existing 0600 M05 ledger required")
     parser.add_argument("--m06-go-file", default=None,
                         help="Owner-created 0600 approval JSON, absolute path, <=15 min")
     parser.add_argument("--m06-credentials-file", default=None,
@@ -319,10 +323,35 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if (args.m05_shadow_db is None) != (args.m05_shadow_owner_id is None):
             raise ConfigurationError("M05_REQUIRES_BOTH_SHADOW_OWNER_AND_DB")
+        if args.m05_market_advisory_queue:
+            # Explicitly opt in ONLY the original scheduled M03 -> M05
+            # no-order queue. No Telegram call or owner-mode change here.
+            if not args.scheduled_public_scanner_once:
+                raise ConfigurationError("M05_QUEUE_REQUIRES_SCHEDULED_M03")
+            if args.m05_shadow_db is None:
+                raise ConfigurationError("M05_QUEUE_REQUIRES_EXISTING_OWNER_DB")
+            if environ.get("M05_MARKET_ADVISORY_QUEUE_GO") != "YES":
+                raise ConfigurationError("M05_QUEUE_SEPARATE_GO_REQUIRED")
+            owner_path = _existing_private_owner_file(args.m05_shadow_db)
+            try:
+                with sqlite3.connect(owner_path.as_uri() + "?mode=ro",
+                                     uri=True, timeout=5) as owner_readonly:
+                    owner_readonly.execute("PRAGMA query_only=ON")
+                    bound = owner_readonly.execute(
+                        "SELECT owner_user_id FROM m05_config WHERE singleton=1"
+                    ).fetchone()
+                if bound != (args.m05_shadow_owner_id,):
+                    raise ConfigurationError("M05_QUEUE_OWNER_ID_MISMATCH")
+            except sqlite3.Error:
+                raise ConfigurationError("M05_QUEUE_ORIGINAL_OWNER_DB_UNAVAILABLE") from None
+        elif args.scheduled_public_scanner_once and args.m05_shadow_db is not None:
+            raise ConfigurationError("M05_SCHEDULED_QUEUE_OPTIN_REQUIRED")
         if args.m05_shadow_db is not None and not (
                 args.once or args.bulk_deep_once or args.m05_telegram_poll_once
                 or args.m05_telegram_readonly_preflight_once
-                or args.m05_telegram_owner_safe_status_once):
+                or args.m05_telegram_owner_safe_status_once
+                or (args.scheduled_public_scanner_once
+                    and args.m05_market_advisory_queue)):
             raise ConfigurationError("M05_SHADOW_ONLY_ON_MAINPATH")
         if ((args.m05_telegram_poll_once
              or args.m05_telegram_readonly_preflight_once
@@ -626,6 +655,8 @@ def main(argv: list[str] | None = None) -> int:
                 result["public_scanner"] = outcome.screening
                 result["public_bulk"] = outcome.bulk
                 result["ai_shadow"] = outcome.ai_shadow
+                if args.m05_market_advisory_queue:
+                    result["owner_market_advisory"] = outcome.owner_advisory
                 result["g1_source_policy"] = "A_STRICT_NO_PUBLIC_PROMOTION"
                 result["paid_network_allowed"] = False
                 result["live_trading_authorized"] = False
