@@ -1,7 +1,8 @@
 """M04 RISK source-bound veto, synthetic fixtures only, zero real order authority.
 
 The source-claim examples below are NOT private exchange proofs; all role
-calls are injected local test callers and all results remain Final REJECT.
+calls are injected local test callers, no owner Final exists, and all
+results remain non-executable.
 """
 from __future__ import annotations
 
@@ -71,7 +72,7 @@ class M04RiskSourceBoundVetoTests(unittest.TestCase):
             caller.inputs[1]["risk_source_report"],
             risk["risk_source_report"],
         )
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
 
     def test_missing_balance_claim_forces_no_trade_even_if_model_allows(self):
@@ -82,9 +83,9 @@ class M04RiskSourceBoundVetoTests(unittest.TestCase):
         report = ThreeRoleShadow(
             caller=caller, source_verifier=verifier, clock=lambda: CLOCK,
         ).run("trace", bulk)
-        self.assertEqual(caller.calls, ["MARKET", "RISK"])
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "RISK_VETO_NO_TRADE")
-        risk = report["role_results"][-1]
+        risk = report["role_results"][1]
         self.assertEqual(risk["model_decision"], "ALLOW")
         self.assertEqual(risk["decision"], "NO_TRADE")
         self.assertIn(
@@ -92,8 +93,10 @@ class M04RiskSourceBoundVetoTests(unittest.TestCase):
             risk["risk_source_report"]["blockers"],
         )
         self.assertFalse(report["execution_allowed"])
+        self.assertEqual(report["role_results"][-1]["effective_action"], "WAIT")
+        self.assertIsNone(report["final_decision"])
 
-    def test_wide_spread_forces_risk_veto_before_strategy(self):
+    def test_wide_spread_warning_reaches_strategy_advisory(self):
         bulk, verifier = signed_variant(
             lambda data: market_row(data).update(spread_bps="120")
         )
@@ -101,11 +104,11 @@ class M04RiskSourceBoundVetoTests(unittest.TestCase):
         report = ThreeRoleShadow(
             caller=caller, source_verifier=verifier, clock=lambda: CLOCK
         ).run("trace", bulk)
-        self.assertEqual(caller.calls, ["MARKET", "RISK"])
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "RISK_VETO_NO_TRADE")
         self.assertIn(
             "SPREAD_MISSING_OR_TOO_WIDE",
-            report["role_results"][-1]["risk_source_report"]["blockers"],
+            report["role_results"][1]["risk_source_report"]["blockers"],
         )
 
     def test_anomalous_pair_forces_risk_veto(self):
@@ -116,11 +119,11 @@ class M04RiskSourceBoundVetoTests(unittest.TestCase):
         report = ThreeRoleShadow(
             caller=caller, source_verifier=verifier, clock=lambda: CLOCK
         ).run("trace", bulk)
-        self.assertEqual(caller.calls, ["MARKET", "RISK"])
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "RISK_VETO_NO_TRADE")
         self.assertIn(
             "ANOMALY_OR_MAINTENANCE_REVIEW",
-            report["role_results"][-1]["risk_source_report"]["blockers"],
+            report["role_results"][1]["risk_source_report"]["blockers"],
         )
 
     def test_forged_risk_report_is_rejected_without_strategy(self):
@@ -163,7 +166,7 @@ class M04RiskSourceBoundVetoTests(unittest.TestCase):
             [caller.inputs[i]["risk_source_report"]["pair"] for i in (1, 4)],
             list(PAIRS),
         )
-        self.assertEqual(out["final_decision"], "REJECT")
+        self.assertIsNone(out["final_decision"])
         self.assertFalse(out["execution_allowed"])
 
     def test_plain_public_source_is_still_blocked_before_market(self):
