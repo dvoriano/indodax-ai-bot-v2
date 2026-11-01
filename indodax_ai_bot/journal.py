@@ -41,6 +41,13 @@ class DecisionJournal:
                 )"""
             )
             con.execute(
+                """CREATE TABLE IF NOT EXISTS pipeline_stage_observations (
+                    trace_id TEXT PRIMARY KEY,
+                    stage TEXT NOT NULL,
+                    reason TEXT NOT NULL
+                )"""
+            )
+            con.execute(
                 """CREATE TABLE IF NOT EXISTS deep_scan_cursor (
                     lane TEXT PRIMARY KEY,
                     next_index INTEGER NOT NULL,
@@ -178,6 +185,35 @@ class DecisionJournal:
             ).fetchone()
             if row != (FinalDecision.REJECT.value, reason):
                 raise DecisionConflictError("conflicting replay for trace_id")
+
+    def record_stage_observation(self, trace_id: str, stage: str,
+                                 reason: str) -> None:
+        """Record a pre-final observation without inventing an owner decision.
+
+        Idempotent by trace ID. REJECT/PASS is reserved for a real Final
+        Decision; a missing or degraded stage remains a diagnostic fact.
+        """
+        if (not trace_id or not trace_id.strip() or not stage
+                or not stage.strip() or not reason or not reason.strip()):
+            raise ValueError("trace_id, stage and reason required")
+        with self._connect() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO pipeline_stage_observations"
+                "(trace_id,stage,reason) VALUES (?,?,?)",
+                (trace_id, stage, reason),
+            )
+            row = con.execute(
+                "SELECT stage,reason FROM pipeline_stage_observations "
+                "WHERE trace_id=?", (trace_id,),
+            ).fetchone()
+            if row != (stage, reason):
+                raise DecisionConflictError("conflicting stage observation replay")
+
+    def stage_observation_count(self) -> int:
+        with self._connect() as con:
+            return int(con.execute(
+                "SELECT COUNT(*) FROM pipeline_stage_observations"
+            ).fetchone()[0])
 
     def count(self) -> int:
         with self._connect() as con:
