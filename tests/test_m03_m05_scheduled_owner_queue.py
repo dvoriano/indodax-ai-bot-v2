@@ -65,6 +65,8 @@ class M03ScheduledOwnerQueueTests(unittest.TestCase):
                 patch.object(DailyScalpingOrchestrator,
                              "_scan_with_early_momentum",
                              return_value=object()),
+                patch("indodax_ai_bot.orchestrator.apply_deep_volume_floor",
+                      return_value=object()),
                 patch("indodax_ai_bot.orchestrator.bulk_public_deep_scan",
                       return_value=self.market),
                 redirect_stdout(out),
