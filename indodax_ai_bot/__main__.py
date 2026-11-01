@@ -639,6 +639,10 @@ def main(argv: list[str] | None = None) -> int:
                         args.ws_db and Path(args.ws_db).is_file()
                     )
                 result["ai_shadow"] = outcome.ai_shadow
+                if owner_control is not None:
+                    # Safe summary only: callback secrets remain in the
+                    # persistent M05 ledger and are sent via Telegram sender.
+                    result["owner_market_advisory"] = outcome.owner_advisory
                 # Never show API credentials, request/response bodies or
                 # transport internals; readiness is not provider inference.
                 result["sumopod_shadow"] = {
