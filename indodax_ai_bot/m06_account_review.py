@@ -113,6 +113,70 @@ def review_m06_special_partitions(*, account: AccountBalances,
     return tuple(out)
 
 
+@dataclass(frozen=True, repr=False)
+class M06SingleAccountPreview:
+    """One consolidated observation; never an exchange-spendable budget.
+
+    'upper_bound' can be LESS than free IDR, but unknown external commitments
+    may reduce true spendable IDR further. It is NOT safe BUY sizing.
+    """
+    observed_free_idr: Decimal
+    observed_locked_idr: Decimal
+    known_local_protected_idr: Decimal
+    known_local_pending_idr: Decimal
+    candidate_budget_upper_bound_idr: Decimal
+    pending_buy_orders: int
+    local_ledger_present: bool
+    external_obligations_complete: bool = False
+    spendable_verified: bool = False
+    execution_allowed: bool = False
+
+    def __repr__(self) -> str:
+        return "<M06SingleAccountPreview REDACTED>"
+
+
+def observe_m06_account_preview(*, account: AccountBalances,
+        open_orders: tuple[OrderRecord, ...],
+        local_rebuy: ProtectedRebuyReview | None) -> M06SingleAccountPreview:
+    """One automatic M06 observation, no second owner decision and no I/O.
+
+    Current free IDR ALREADY EXCLUDES exchange-locked IDR. Only subtract
+    independently recorded local rebuy holds and pending shadow liabilities.
+    A missing local ledger or outside-account debts are UNKNOWN, not zero.
+    The result is diagnostic only and can never grant BUY or SELL.
+    """
+    if type(account) is not AccountBalances or type(open_orders) is not tuple:
+        raise ValueError("M06_PREVIEW_SOURCE_INVALID")
+    if any(type(o) is not OrderRecord for o in open_orders):
+        raise ValueError("M06_PREVIEW_ORDERS_INVALID")
+    if local_rebuy is not None and type(local_rebuy) is not ProtectedRebuyReview:
+        raise ValueError("M06_PREVIEW_LEDGER_INVALID")
+    free = _amount(account.free_idr)
+    locked = _amount(account.locked_idr)
+    protected = _amount(
+        local_rebuy.total_idr_local_protected if local_rebuy is not None
+        else Decimal("0")
+    )
+    pending = _amount(
+        local_rebuy.local_shadow_commitments_idr if local_rebuy is not None
+        else Decimal("0")
+    )
+    cap = max(Decimal("0"), free - protected - pending)
+    _amount(cap)
+    return M06SingleAccountPreview(
+        observed_free_idr=free,
+        observed_locked_idr=locked,
+        known_local_protected_idr=protected,
+        known_local_pending_idr=pending,
+        candidate_budget_upper_bound_idr=cap,
+        pending_buy_orders=sum(
+            order.side == "BUY" and order.executed_qty < order.original_qty
+            for order in open_orders
+        ),
+        local_ledger_present=local_rebuy is not None,
+    )
+
+
 @dataclass(frozen=True)
 class M06ReadOnlyReconciliation:
     """Original V2 M06: diagnostics are not source or wallet authority."""
@@ -140,6 +204,8 @@ class M06ReadOnlyReconciliation:
     cross_bot_ownership_verified: bool = False
     spendable_capital_verified: bool = False
     execution_allowed: bool = False
+    # One diagnostic observation, not a second authorization gate.
+    account_preview: M06SingleAccountPreview | None = None
 
 
 def reconcile_readonly_private_snapshot(*, account: AccountBalances,
@@ -206,6 +272,11 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
     )
     if calculated.calculated_available_idr != Decimal("0"):
         raise ValueError("M06_UNVERIFIED_CAPITAL_NONZERO")
+    # One local diagnostic view only. Owner PASS/REJECT remains downstream;
+    # M06 preview can NEVER be sent to the order executor as spendable cash.
+    account_preview = observe_m06_account_preview(
+        account=account, open_orders=open_orders, local_rebuy=local_rebuy,
+    )
     pool_previews = review_m06_special_partitions(
         account=account, local_rebuy=local_rebuy,
     )
@@ -215,6 +286,7 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
     return M06ReadOnlyReconciliation(
         status="REJECT",
         reason="M06_UNVERIFIED_REBUY_OWNERSHIP_AND_ACCOUNT_COVERAGE",
+        account_preview=account_preview,
         observed_idr_balance=True,
         all_pair_open_orders_seen=len(open_orders),
         pending_buy_orders=pending_buy,
