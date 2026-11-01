@@ -5,6 +5,7 @@ reconciled before an owned position can be declared. No network or trading.
 """
 from __future__ import annotations
 import hashlib
+import json
 import sqlite3
 import os
 import stat
@@ -55,6 +56,9 @@ class ProtectedRebuyReview:
     local_shadow_coverage_complete: bool = False
     floki_manual_floor_recorded: bool = False
     pepe_manual_floor_recorded: bool = False
+    # Local immutability coverage only, NEVER exchange provenance.
+    local_rebuy_receipts_linked: bool = False
+    local_fill_receipt_count: int = 0
 
 
 class M06OwnershipLedger:
@@ -90,6 +94,15 @@ class M06OwnershipLedger:
                 asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
                 minimum_qty TEXT NOT NULL,
                 PRIMARY KEY (account_hash, asset)
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_local_fill_receipts (
+                trade_id TEXT PRIMARY KEY,
+                account_hash TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),
+                client_id TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL
             )""")
 
     def _db(self):
@@ -282,12 +295,45 @@ class M06OwnershipLedger:
             pepe_floor = _amount(Decimal(floors.get("PEPE", "0")))
         except (ValueError, ArithmeticError):
             raise OwnershipConflict("M06_MANUAL_FLOOR_CORRUPT") from None
+        # Legacy local fill rows do not acquire provenance retroactively.
+        # Read-only inspection of older SQLite must still preserve their
+        # conservative rebuy holds, but flag receipt linkage as unproven.
+        has_receipts = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='m06_local_fill_receipts'"
+        ).fetchone() is not None
+        linked = has_receipts
+        receipt_count = 0
+        if has_receipts:
+            receipt_rows = db.execute(
+                "SELECT trade_id,order_id,symbol,side,client_id,content_sha256 "
+                "FROM m06_local_fill_receipts WHERE account_hash=? LIMIT 10001",
+                (account_hash,),
+            ).fetchall()
+            if len(receipt_rows) > 10000:
+                raise OwnershipConflict("M06_LOCAL_RECEIPTS_LIMIT_EXCEEDED")
+            receipt_count = len(receipt_rows)
+            receipt_map = {row[0]: row for row in receipt_rows}
+            for asset, tid, oid in db.execute(
+                "SELECT asset,trade_id,order_id FROM "
+                "m06_special_rebuy_observations WHERE account_hash=?",
+                (account_hash,),
+            ):
+                linked_row = receipt_map.get(tid)
+                if linked_row is None:
+                    linked = False
+                elif (linked_row[1] != oid
+                        or linked_row[2] != asset.lower() + "idr"
+                        or linked_row[3] != "SELL"):
+                    raise OwnershipConflict("M06_SPECIAL_RECEIPT_CONFLICT")
         return ProtectedRebuyReview(
             floki, pepe, floki + pepe, len(rows),
             floki_manual_qty_local_floor=floki_floor,
             pepe_manual_qty_local_floor=pepe_floor,
             floki_manual_floor_recorded="FLOKI" in floors,
             pepe_manual_floor_recorded="PEPE" in floors,
+            local_rebuy_receipts_linked=linked,
+            local_fill_receipt_count=receipt_count,
         )
 
     def review_protected_rebuy(self, *, account_key: str) -> ProtectedRebuyReview:
@@ -368,13 +414,56 @@ class M06OwnershipLedger:
             if not matched and fills:
                 raise OwnershipConflict("M06_UNATTRIBUTED_FILL")
             for fill in fills:
+                # Immutable local provenance receipt ties a previously
+                # recorded V2 intent, specific UID, full fill economics and
+                # direction. It does NOT attest actual exchange ownership.
+                _amount(fill.quantity)
+                _amount(fill.price)
+                _amount(fill.commission)
+                if fill.quantity <= 0 or fill.price <= 0:
+                    raise OwnershipConflict("M06_FILL_NONPOSITIVE")
+                if fill.quote_quantity is not None:
+                    _amount(fill.quote_quantity)
+                if fill.commission_asset is not None and (
+                        type(fill.commission_asset) is not str
+                        or not 2 <= len(fill.commission_asset) <= 20):
+                    raise OwnershipConflict("M06_FILL_FEE_ASSET_INVALID")
+                evidence = [
+                    account, order.order_id, order.symbol, order.side,
+                    order.client_order_id, fill.trade_id, fill.order_id,
+                    fill.symbol, str(fill.quantity), str(fill.price),
+                    str(fill.commission), fill.is_buyer,
+                    str(fill.quote_quantity) if fill.quote_quantity is not None else None,
+                    fill.commission_asset,
+                ]
+                digest = hashlib.sha256(json.dumps(
+                    evidence, separators=(",", ":"), ensure_ascii=True,
+                ).encode("ascii")).hexdigest()
+                receipt = (account, order.order_id, order.symbol,
+                           order.side, order.client_order_id, digest)
+                receipt_row = db.execute(
+                    "SELECT account_hash,order_id,symbol,side,client_id,content_sha256 "
+                    "FROM m06_local_fill_receipts WHERE trade_id=?",
+                    (fill.trade_id,),
+                ).fetchone()
+                if receipt_row is not None and tuple(receipt_row) != receipt:
+                    raise OwnershipConflict("M06_FILL_RECEIPT_REPLAY_CONFLICT")
                 payload=(fill.order_id,fill.symbol,str(fill.quantity),str(fill.price),str(fill.commission))
                 existing=db.execute("SELECT order_id,symbol,qty,price,fee FROM m06_observed_fills WHERE trade_id=?",
                                     (fill.trade_id,)).fetchone()
                 if existing is not None and existing!=payload:
                     raise OwnershipConflict("M06_FILL_REPLAY_CONFLICT")
+                if existing is not None and receipt_row is None:
+                    # Legacy row is not silently claimed as original V2
+                    # provenance by attaching new metadata after the fact.
+                    raise OwnershipConflict("M06_LEGACY_FILL_RECEIPT_ABSENT")
                 if existing is None:
                     db.execute("INSERT INTO m06_observed_fills VALUES(?,?,?,?,?,?)",(fill.trade_id,*payload))
+                if matched and receipt_row is None:
+                    db.execute(
+                        "INSERT INTO m06_local_fill_receipts VALUES(?,?,?,?,?,?,?)",
+                        (fill.trade_id, *receipt),
+                    )
                 if matched:
                     self._maybe_protect_special_sell(
                         db, account_hash=account, order=order, fill=fill,
