@@ -110,6 +110,7 @@
 - [ ] Selesai. Capital spendability, local rebuy ownership, account-wide history, bot-owned fills and cross-bot attribution remain unverified; M06-02 to -05 open.
 
 ### M06-02 · Verify fresh free IDR minus locked/unsettled commitment; atomic reserve, avoid double-spend.
+Evidence 1 Nov 2026: original V2 `reconcile_unverified_capital` + same-SQLite UID-bound local active `m06_shadow_reserve` path accepted **6/6 specific tests** on owner VPS pinned `13ae5de746065763c97977cb28d6cd0756c022fe`; concurrency/replay/released holds/corruption/foreign UID/mocked four-GET REJECT. The separate ConnectBot TTY test failed at that source SHA and was fixed on `8329af1db18cce374b84ad5a1e4c83988befeffe`; narrow regression **6/6 PASS** on owner VPS with `M06_CONNECTBOT_ENTER_FIX_PASS`. **This does not establish authenticated account-wide unlocked obligations, cross-bot ownership or positive spendable IDR**. The stage requirements below remain OPEN pending those missing grounds.
 - [ ] Kode
 - [ ] Audit
 - [ ] Terhubung bot
@@ -117,6 +118,7 @@
 - [ ] Selesai
 
 ### M06-03 · FLOKI 25% trading/75% reserve; PEPE 30% trading/70% reserve; manual holding exclusions.
+Evidence source-only: [DRAFT PR#29](https://github.com/dvoriano/indodax-ai-bot-v2/pull/29) now includes original `m06_account_review` non-executable partition previews for fixed **25/75 FLOKI** and **30/70 PEPE**, combined with previously persisted account-UID manual quantity floors. Missing floors remain UNKNOWN; floor larger than observed wallet rejects; even a theoretical trading cap does not produce bot-owned SELL availability. Seven scoped offline tests added, **not yet owner VPS tested**. Actual bot-owned lot provenance and protected rebuy settlement still absent, so no completed milestone check.
 - [ ] Kode
 - [ ] Audit
 - [ ] Terhubung bot
