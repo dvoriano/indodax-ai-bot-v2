@@ -27,7 +27,7 @@ TTL_MAX = 90
 def _blocked(reason: str) -> dict[str, Any]:
     return {
         "accepted": False, "reason": reason,
-        "owner_decision": None, "final_decision": "REJECT",
+        "owner_decision": None, "final_decision": None,
         "execution_allowed": False,
     }
 
@@ -153,7 +153,7 @@ class OwnerDecisionLedger:
             ).fetchone()[0]
         return {
             "accepted": True, "owner_mode": mode, "pending_shadow_proposals": pending,
-            "final_decision": "REJECT", "execution_allowed": False,
+            "final_decision": None, "execution_allowed": False,
             "telegram_network_connected": False,
             "live_execution_authorized": False,
         }
@@ -183,7 +183,7 @@ class OwnerDecisionLedger:
                 )
         return {
             "accepted": True, "owner_mode": mode,
-            "final_decision": "REJECT",
+            "final_decision": None,
             "auto_order_authorized": False, "execution_allowed": False,
         }
 
@@ -241,7 +241,7 @@ class OwnerDecisionLedger:
                 "PASS": f"m5:{proposal}:P:{secret}",
                 "REJECT": f"m5:{proposal}:R:{secret}",
             },
-            "final_decision": "REJECT", "execution_allowed": False,
+            "final_decision": None, "execution_allowed": False,
         }
 
     def apply_callback(self, *, user_id: int, chat_id: int, callback_data: str,
@@ -298,7 +298,7 @@ class OwnerDecisionLedger:
             )
         return {
             "accepted": True, "proposal_id": proposal,
-            "owner_decision": choice, "final_decision": "REJECT",
+            "owner_decision": choice, "final_decision": choice,
             "reason": "SHADOW_CONSENT_RECORDED_NO_EXECUTOR",
             "execution_allowed": False,
         }
