@@ -56,6 +56,10 @@ class ProtectedRebuyReview:
     local_shadow_coverage_complete: bool = False
     floki_manual_floor_recorded: bool = False
     pepe_manual_floor_recorded: bool = False
+    # Local evidence of coexistence conflicts, never complete peer coverage.
+    local_other_account_records_present: bool = False
+    local_orphan_fill_records_present: bool = False
+    external_peer_coverage_verified: bool = False
     # Local immutability coverage only, NEVER exchange provenance.
     local_rebuy_receipts_linked: bool = False
     local_fill_receipt_count: int = 0
@@ -160,6 +164,17 @@ class M06OwnershipLedger:
                 if not bound:
                     raise OwnershipConflict("M06_LOCAL_ACCOUNT_UNBOUND")
                 protected = cls._read_rebuy_in_transaction(db, account_hash)
+                foreign, orphan = cls._inspect_local_coexistence(
+                    db, account_hash=account_hash,
+                )
+                protected = replace(
+                    protected,
+                    local_other_account_records_present=foreign,
+                    local_orphan_fill_records_present=orphan,
+                    # Local SQLite cannot prove V1, other hosts or outside
+                    # clients have stopped accessing this Indodax account.
+                    external_peer_coverage_verified=False,
+                )
                 # Read existing shadow holds in the SAME immutable SQLite
                 # snapshot. The table may be absent on older V2 installs.
                 # Absence means UNKNOWN, never an assumed zero liability.
@@ -193,6 +208,63 @@ class M06OwnershipLedger:
             raise
         except (OSError, sqlite3.Error, ValueError):
             raise OwnershipConflict("M06_LOCAL_LEDGER_UNAVAILABLE") from None
+
+    @staticmethod
+    def _inspect_local_coexistence(db, *, account_hash: str) -> tuple[bool, bool]:
+        """Local conflict hints inside the current immutable read-only snapshot.
+
+        An empty result is NOT evidence no other process uses the exchange
+        account. Never use this method to grant LIVE or exclusive ownership.
+        """
+        local_sources = (
+            "m06_intents",
+            "m06_special_rebuy_observations",
+            "m06_manual_asset_floors",
+            "m06_local_fill_receipts",
+            "m06_shadow_reserve",
+        )
+        foreign = False
+        for table in local_sources:
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if exists is None:
+                continue
+            column = ("account_key_hash" if table == "m06_shadow_reserve"
+                      else "account_hash")
+            # Both the table and column come from fixed source constants.
+            found = db.execute(
+                "SELECT 1 FROM " + table + " WHERE " + column
+                + " != ? LIMIT 1", (account_hash,),
+            ).fetchone()
+            foreign = foreign or found is not None
+
+        # Local fill tables do not carry an account column. A fill without a
+        # receipt cannot be attributed from the current V2 SQLite alone.
+        have_fills = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='m06_observed_fills'",
+        ).fetchone() is not None
+        have_receipts = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='m06_local_fill_receipts'",
+        ).fetchone() is not None
+        orphan = False
+        if have_fills:
+            if not have_receipts:
+                orphan = db.execute(
+                    "SELECT 1 FROM m06_observed_fills LIMIT 1",
+                ).fetchone() is not None
+            else:
+                orphan = db.execute(
+                    "SELECT 1 FROM m06_observed_fills AS f "
+                    "WHERE NOT EXISTS ("
+                    "SELECT 1 FROM m06_local_fill_receipts AS r "
+                    "WHERE r.trade_id=f.trade_id"
+                    ") LIMIT 1",
+                ).fetchone() is not None
+        return foreign, orphan
 
     @staticmethod
     def _identity(account_key: str) -> str:
