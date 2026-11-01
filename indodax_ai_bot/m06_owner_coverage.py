@@ -1,7 +1,9 @@
 """Owner foreground one-shot M06 account coverage, original V2 main CLI only.
 
-No new daemon; no secret printed. Requires explicit coverage GO environment,
-TTY confirmation and a fresh VIEW ONLY Indodax API key, never a trade key.
+No new daemon; no secret printed. Requires explicit coverage GO environment
+and a pre-existing, owner-only V2 View Only credentials file. Never prompts
+for a key again. No credential discovery outside the one V2 checkout and its
+standard V2-owned config/state directories.
 """
 from __future__ import annotations
 import json
@@ -9,7 +11,6 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-import termios
 import time
 
 COVERAGE_ID = "M06_PRIVATE_ACCOUNT_COVERAGE_20261101"
@@ -26,6 +27,55 @@ def _put_private_json(path: Path, value: dict) -> None:
         json.dump(value, stream)
 
 
+def _existing_v2_credentials() -> Path | None:
+    """Use ONLY a pre-existing 0600 V2-owned View Only credential JSON.
+
+    No broad search for secrets. An operator can point to an existing V2
+    credential file with M06_V2_VIEWONLY_CREDENTIALS_FILE (a PATH, not key).
+    Otherwise check explicit documented V2-only locations. Never echo path,
+    values or permission details to the caller.
+    """
+    home = Path.home()
+    roots = (
+        home / "indodax-ai-bot-v2",
+        home / ".local" / "state" / "indodax-ai-bot-v2",
+        home / ".config" / "indodax-ai-bot-v2",
+    )
+    existing = os.environ.get("M06_V2_VIEWONLY_CREDENTIALS_FILE")
+    if existing is not None:
+        if not existing.startswith("/") or not existing.strip():
+            raise ValueError("M06_EXISTING_V2_CREDENTIAL_PATH_INVALID")
+        candidate = Path(existing)
+    else:
+        candidates = (
+            roots[1] / "viewonly-credentials.json",
+            roots[1] / "m06-viewonly-credentials.json",
+            roots[2] / "viewonly-credentials.json",
+            roots[0] / "runtime" / "m06-viewonly-credentials.json",
+        )
+        candidate = next((p for p in candidates if p.exists() or p.is_symlink()),
+                         None)
+        if candidate is None:
+            return None
+    try:
+        # Reject path traversal and symlinked parent/file, even if it resolves
+        # back inside a V2 directory.
+        absolute = Path(os.path.abspath(candidate))
+        if absolute != candidate or absolute.resolve(strict=True) != absolute:
+            raise ValueError("M06_EXISTING_V2_CREDENTIAL_PATH_UNSAFE")
+        if not any(absolute.is_relative_to(root) for root in roots):
+            raise ValueError("M06_EXISTING_V2_CREDENTIAL_OUTSIDE_ALLOWLIST")
+        # Read strictly through the canonical V2 credential parser. It
+        # refuses non-owner, non-regular, world-readable or oversized files.
+        from .m06_scoped_https import read_view_only_credentials
+        key, secret = read_view_only_credentials(str(absolute))
+        if key == secret:
+            raise ValueError("M06_EXISTING_V2_CREDENTIAL_PAIR_INVALID")
+        return absolute
+    except (OSError, ValueError) as exc:
+        raise ValueError("M06_EXISTING_V2_CREDENTIALS_NOT_SAFE") from None
+
+
 def main() -> int:
     # Import signed transport only AFTER the owner provides exact fresh GO.
     if os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO") != COVERAGE_ID:
@@ -38,7 +88,6 @@ def main() -> int:
         print("M06_COVERAGE_ONCE_ALREADY_ATTEMPTED", file=sys.stderr)
         return 3
     from .config import Settings
-    from .m06_owner_retry import _read_connectbot_secret, _valid_secret
     from .m06_account_coverage import coverage_windows, MAX_REQUESTS
     try:
         Settings.from_env().require_m01_safety()
@@ -47,24 +96,23 @@ def main() -> int:
     except Exception:
         print("M06_COVERAGE_SAFETY_OR_DATE_SCOPE_STOP", file=sys.stderr)
         return 3
-    print("M06 READ ONLY: 18 GET / 4 pair / 2 jendela 7 hari; trading OFF.", flush=True)
-    print("PAKAI API KEY BARU VIEW ONLY (Trade=OFF, Withdraw=OFF).", flush=True)
-    print("Rahasia dibaca tanpa echo. Jangan tempel API Key di chat.", flush=True)
     try:
-        key = _read_connectbot_secret("API KEY VIEW ONLY")
-        secret = _read_connectbot_secret("SECRET KEY VIEW ONLY")
-    except (EOFError, KeyboardInterrupt, OSError, ValueError, termios.error):
-        print("M06_COVERAGE_TTY_INPUT_CANCELLED", file=sys.stderr)
+        credentials = _existing_v2_credentials()
+    except ValueError:
+        print("M06_V2_EXISTING_VIEWONLY_CREDENTIALS_UNSAFE_NO_API",
+              file=sys.stderr)
         return 3
-    if not _valid_secret(key) or not _valid_secret(secret) or key == secret:
-        print("M06_COVERAGE_KEY_INVALID", file=sys.stderr)
+    if credentials is None:
+        # A historical interactive key may have existed only in a
+        # TemporaryDirectory and is not automatically retained on disk.
+        print("M06_V2_VIEWONLY_CREDENTIAL_FILE_NOT_FOUND_NO_API",
+              file=sys.stderr)
         return 3
+    print("M06_VIEWONLY_EXISTING_V2_CREDENTIALS_VERIFIED_LOCALLY", flush=True)
+    print("M06_READ_ONLY_18_GET_ONE_SESSION_TRADING_DISABLED", flush=True)
     try:
         with tempfile.TemporaryDirectory(prefix="m06-viewonly-") as d:
             td = Path(d)
-            _put_private_json(td / "credentials.json", {
-                "api_key":key, "secret_key":secret,
-            })
             now = int(time.time() * 1000)
             coverage_windows(_START, now)
             _put_private_json(td / "go.json", {
@@ -84,7 +132,7 @@ def main() -> int:
                 "--db", str(td / "decisions.sqlite3"),
                 "--m06-account-coverage-once",
                 "--m06-go-file", str(td / "go.json"),
-                "--m06-credentials-file", str(td / "credentials.json"),
+                "--m06-credentials-file", str(credentials),
             ]
             if existing.is_file() and not existing.is_symlink():
                 argv.extend(("--m06-ownership-db", str(existing)))
