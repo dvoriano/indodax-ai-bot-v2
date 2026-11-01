@@ -143,6 +143,25 @@ class M03ScheduledOwnerQueueTests(unittest.TestCase):
                 self.assertIn(reason, err)
                 scanned.assert_not_called()
 
+    def test_dropin_is_optin_and_preserves_original_safety(self):
+        root = Path(__file__).resolve().parents[1]
+        original = (root / "deploy/indodax-v2-m03-mainpath.service").read_text()
+        dropin = (root / "deploy/indodax-v2-m03-owner-advisory.conf").read_text()
+        self.assertNotIn("--m05-market-advisory-queue", original)
+        self.assertIn("ExecStart=", dropin)
+        self.assertIn("--scheduled-public-scanner-once", dropin)
+        self.assertIn("--bulk-deep-limit 20", dropin)
+        self.assertIn("--bulk-min-volume-idr 150000000", dropin)
+        self.assertIn("--m05-market-advisory-queue", dropin)
+        self.assertIn("${M05_TELEGRAM_OWNER_DB}", dropin)
+        self.assertIn("${M05_TELEGRAM_OWNER_ID}", dropin)
+        self.assertIn("/usr/bin/flock -n ", dropin)
+        self.assertIn("INDODAX_TRADING_ENABLED=NO", dropin)
+        self.assertIn("INDODAX_ALLOW_LIVE_EXECUTION=NO", dropin)
+        self.assertIn("INDODAX_EXECUTION_MODE=DRY_RUN", dropin)
+        self.assertNotIn("systemctl enable", dropin)
+        self.assertNotIn("M05_TELEGRAM_BOT_TOKEN=", dropin)
+
     def test_nonexistent_owner_db_is_never_created(self):
         absent = self.dir / "absent-owner.sqlite3"
         args = self.argv(
