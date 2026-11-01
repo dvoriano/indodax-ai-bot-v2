@@ -32,11 +32,13 @@ _HOST = "api.indodax.com"
 _APPROVAL_ID = "M06_PRIVATE_READONLY_GO_20261031"  # expired, mock compatibility
 _ONE_SHOT_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_ONE_SHOT_20261031"  # spent/locked
 _RETRY_APPROVAL_ID = "M06_PRIVATE_VIEW_ONLY_RETRY_20261031"
+_COVERAGE_APPROVAL_ID = "M06_PRIVATE_ACCOUNT_COVERAGE_20261101"
 _MAX_BYTES = 1_000_000
-# Original one-shot is permanently disabled. Only this explicitly reapproved
-# retry, on its own nonrenewable budget, may access private HTTPS.
+# The historic four-GET one-shot remains spent. A separately approved
+# coverage ID uses a distinct fixed budget and a durable single-use claim.
+# Neither authorization grants trade or unlocks old one-shot budgets.
 _RELEASE_APPROVAL_ID = os.environ.get("M06_OWNER_ONE_SHOT_PRIVATE_GO")
-_NETWORK_RELEASE_GO = (_RELEASE_APPROVAL_ID == _RETRY_APPROVAL_ID)
+_NETWORK_RELEASE_GO = _RELEASE_APPROVAL_ID in (_RETRY_APPROVAL_ID, _COVERAGE_APPROVAL_ID)
 _SYMBOL = re.compile(r"^[a-z0-9]{2,24}idr$")
 # No direct signed GET may bypass a debit through the one-shot budget.
 _BUDGET_DEBITED_FOR_THIS_GET = contextvars.ContextVar("m06_one_shot_debited", default=False)
@@ -221,6 +223,30 @@ class M06RequestBudget:
                            (approval.approval_id,))
             except sqlite3.IntegrityError:
                 raise M06ScopeDenied("M06_RETRY_ALREADY_CLAIMED") from None
+
+    def claim_fresh_coverage_once(self, approval_id: str) -> None:
+        """Irreversibly burn this NEW owner's account-coverage session.
+
+        Never delete, overwrite or reclaim an old spent one-shot GO. A
+        failed/partial session is still consumed, requiring fresh consent.
+        """
+        if approval_id != _COVERAGE_APPROVAL_ID:
+            raise M06ScopeDenied("M06_COVERAGE_APPROVAL_REQUIRED")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_coverage_claim (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                approval_id TEXT NOT NULL
+            )""")
+            if db.execute(
+                "SELECT 1 FROM m06_go_budget LIMIT 1"
+            ).fetchone() is not None:
+                raise M06ScopeDenied("M06_COVERAGE_BUDGET_ALREADY_USED")
+            try:
+                db.execute("INSERT INTO m06_coverage_claim VALUES(1, ?)",
+                           (approval_id,))
+            except sqlite3.IntegrityError:
+                raise M06ScopeDenied("M06_COVERAGE_ALREADY_CLAIMED") from None
 
     def debit(self, approval: M06ScopedApproval, *, api_key: str,
               now_ms: int | None = None) -> int:
