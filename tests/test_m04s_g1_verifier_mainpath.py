@@ -51,7 +51,7 @@ class M04SG1VerifierMainpathTests(unittest.TestCase):
         )
         caller.assert_not_called()
         self.assertEqual(out.ai_shadow["reason"], "G1_PUBLIC_EVIDENCE_UNTRUSTED")
-        self.assertEqual(out.final_decision.value, "REJECT")
+        self.assertIsNone(out.final_decision)
         self.assertFalse(out.execution_allowed)
 
     def test_signed_test_source_with_no_injected_verifier_cannot_call_roles(self):
@@ -73,7 +73,7 @@ class M04SG1VerifierMainpathTests(unittest.TestCase):
         self.assertEqual(out.ai_shadow["candidate_count"], 2)
         self.assertEqual(out.ai_shadow["completed_role_calls"], 6)
         self.assertEqual(out.ai_shadow["reason"], "M04_TWO_CANDIDATE_SHADOW_ONLY")
-        self.assertEqual(out.final_decision.value, "REJECT")
+        self.assertIsNone(out.final_decision)
         self.assertFalse(out.execution_allowed)
         self.assertFalse(out.ai_shadow["provider_connected"])
 
