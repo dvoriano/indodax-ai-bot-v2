@@ -51,7 +51,7 @@ class M04VCLIShadowWiringTests(unittest.TestCase):
         self.assertFalse(result["sumopod_shadow"]["configured"])
         self.assertFalse(result["sumopod_shadow"]["paid_network_allowed"])
         self.assertEqual(result["ai_shadow"]["completed_roles"], [])
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
 
     def test_explicit_three_model_adapter_is_connected_but_never_called(self):
         with patch("indodax_ai_bot.sumopod_provider._post",
@@ -64,7 +64,7 @@ class M04VCLIShadowWiringTests(unittest.TestCase):
         self.assertFalse(result["sumopod_shadow"]["g1_issuer_connected"])
         self.assertEqual(result["sumopod_shadow"]["role_usage_events"], 0)
         self.assertEqual(result["ai_shadow"]["completed_roles"], [])
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
         self.assertNotIn(GOOD_ENV["SUMOPOD_API_KEY"], json.dumps(result))
         post.assert_not_called()
