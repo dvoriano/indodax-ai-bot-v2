@@ -154,7 +154,7 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
         "bot_identity_pinned": True,
         "old_caipiti_bot_used": False,
         "execution_allowed": False,
-        "final_decision": "REJECT",
+        "final_decision": None,
     }
 
 
