@@ -115,7 +115,7 @@ class M06LocalFillReceiptTests(unittest.TestCase):
             client_order_id=other.client_order_id,
         )
         with self.assertRaisesRegex(
-            OwnershipConflict, "FILL_RECEIPT_REPLAY_CONFLICT"
+            OwnershipConflict, "FILL_REPLAY_CONFLICT"
         ):
             self.observe(reused, order=other)
         self.assertEqual(
