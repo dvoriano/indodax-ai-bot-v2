@@ -65,6 +65,24 @@ class ProtectedRebuyReview:
     local_fill_receipt_count: int = 0
 
 
+@dataclass(frozen=True, repr=False)
+class M06ReceiptWindowReview:
+    """Independent exchange-shaped window vs immutable V2 local receipts.
+
+    A matching hash confirms internal consistency, NOT account-wide coverage,
+    settled fills or ownership authority. This never emits wallet identifiers.
+    """
+    checked_fills: int
+    matched_local_receipts: int
+    unlinked_fills: int
+    account_wide_history_complete: bool = False
+    bot_owned_verified: bool = False
+    execution_allowed: bool = False
+
+    def __repr__(self) -> str:
+        return "<M06ReceiptWindowReview REDACTED>"
+
+
 class M06OwnershipLedger:
     """Persist deterministic local intents, reject foreign/replayed fill identities.
 
@@ -271,6 +289,112 @@ class M06OwnershipLedger:
         if type(account_key) is not str or not 1<=len(account_key)<=128:
             raise OwnershipConflict("M06_ACCOUNT_SCOPE_INVALID")
         return hashlib.sha256(account_key.encode()).hexdigest()
+
+    @classmethod
+    def match_exchange_window_to_local_receipts_readonly(cls, *,
+            db_path: str, account_uid: int,
+            orders: tuple[OrderRecord, ...],
+            fills: tuple[FillRecord, ...], symbol: str) -> M06ReceiptWindowReview:
+        """Compare existing V2 intent+receipt to one bounded order/fill window.
+
+        No writes, new private GET, backfilling missing receipts or ownership
+        promotion. Foreign/missing records remain unlinked. Conflicting
+        immutable receipts deny the whole read-only review.
+        """
+        if (type(orders) is not tuple or type(fills) is not tuple
+                or type(symbol) is not str or not symbol.endswith("idr")
+                or any(type(x) is not OrderRecord for x in orders)
+                or any(type(x) is not FillRecord for x in fills)):
+            raise OwnershipConflict("M06_WINDOW_INPUT_INVALID")
+        if (any(x.symbol != symbol or x.bot_owned_verified is not False
+                for x in orders)
+                or any(x.symbol != symbol or x.bot_owned_verified is not False
+                       for x in fills)):
+            raise OwnershipConflict("M06_WINDOW_SCOPE_INVALID")
+        # Reuse the existing owner-UID and mode=ro permission checks.
+        cls.inspect_existing_account_readonly(
+            db_path=db_path, account_uid=account_uid,
+        )
+        account = cls._identity(cls.account_scope_from_exchange_uid(account_uid))
+        by_id = {}
+        for order in orders:
+            if order.order_id in by_id:
+                raise OwnershipConflict("M06_WINDOW_DUPLICATE_ORDER")
+            by_id[order.order_id] = order
+        unique_fills = set()
+        found = 0
+        try:
+            p = Path(os.path.abspath(db_path))
+            with closing(sqlite3.connect(p.as_uri() + "?mode=ro",
+                                         uri=True, timeout=2)) as db:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                for fill in fills:
+                    if fill.trade_id in unique_fills:
+                        raise OwnershipConflict("M06_WINDOW_DUPLICATE_FILL")
+                    unique_fills.add(fill.trade_id)
+                    order = by_id.get(fill.order_id)
+                    if (order is None or order.client_order_id is None
+                            or fill.client_order_id != order.client_order_id
+                            or fill.is_buyer is None
+                            or fill.is_buyer != (order.side == "BUY")):
+                        continue
+                    intent = db.execute(
+                        "SELECT account_hash,symbol,side,client_id "
+                        "FROM m06_intents WHERE order_id=?",
+                        (order.order_id,),
+                    ).fetchone()
+                    if intent != (account, symbol, order.side, order.client_order_id):
+                        continue
+                    try:
+                        for amount in (fill.quantity, fill.price, fill.commission):
+                            _amount(amount)
+                        if fill.quantity <= 0 or fill.price <= 0:
+                            raise ValueError("M06_WINDOW_NONPOSITIVE")
+                        if fill.quote_quantity is not None:
+                            _amount(fill.quote_quantity)
+                    except ValueError:
+                        raise OwnershipConflict("M06_WINDOW_ECONOMICS_INVALID") from None
+                    evidence = [
+                        account, order.order_id, order.symbol, order.side,
+                        order.client_order_id, fill.trade_id, fill.order_id,
+                        fill.symbol, str(fill.quantity), str(fill.price),
+                        str(fill.commission), fill.is_buyer,
+                        str(fill.quote_quantity)
+                        if fill.quote_quantity is not None else None,
+                        fill.commission_asset,
+                    ]
+                    digest = hashlib.sha256(json.dumps(
+                        evidence, separators=(",", ":"), ensure_ascii=True,
+                    ).encode("ascii")).hexdigest()
+                    receipt = db.execute(
+                        "SELECT account_hash,order_id,symbol,side,client_id,"
+                        "content_sha256 FROM m06_local_fill_receipts "
+                        "WHERE trade_id=?",
+                        (fill.trade_id,),
+                    ).fetchone()
+                    if receipt is None:
+                        continue
+                    if receipt != (account, order.order_id, symbol, order.side,
+                                   order.client_order_id, digest):
+                        raise OwnershipConflict("M06_EXCHANGE_WINDOW_RECEIPT_CONFLICT")
+                    observed = db.execute(
+                        "SELECT order_id,symbol,qty,price,fee "
+                        "FROM m06_observed_fills WHERE trade_id=?",
+                        (fill.trade_id,),
+                    ).fetchone()
+                    if observed != (order.order_id, symbol, str(fill.quantity),
+                                    str(fill.price), str(fill.commission)):
+                        raise OwnershipConflict("M06_EXCHANGE_WINDOW_FILL_CONFLICT")
+                    found += 1
+        except OwnershipConflict:
+            raise
+        except (OSError, sqlite3.Error):
+            raise OwnershipConflict("M06_WINDOW_LEDGER_UNAVAILABLE") from None
+        return M06ReceiptWindowReview(
+            checked_fills=len(fills), matched_local_receipts=found,
+            unlinked_fills=len(fills) - found,
+        )
 
     def record_local_intent(self, *, account_key: str, order_id: str,
                             client_id: str, symbol: str, side: str) -> None:
