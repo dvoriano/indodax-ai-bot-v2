@@ -71,6 +71,14 @@ These are mathematical guardrails, **not proof of bot-owned quantities**; `bot_o
 
 The prior owner original V2 ConnectBot prompt failure was corrected in SHA `8329af1db18cce374b84ad5a1e4c83988befeffe` and is now independently **6/6 VPS PASS** with marker `M06_CONNECTBOT_ENTER_FIX_PASS`. Do not rerun private one-shot GETs for this local M06-03 source change.
 
+## M06-04 immutable local fill receipts (code only, no exchange authorization)
+
+The original M06 ownership SQLite `m06_observed_fills` table already protects quantity, price and commission across local replay, and `m06_special_rebuy_observations` conservatively retains **gross** FLOKI/PEPE SELL proceeds. The new same-ledger `m06_local_fill_receipts` table records an **immutable content digest** for each newly observed fill, including the canonical account UID hash, prior locally persisted order intent, client order identity, BUY/SELL direction, quote quantity, fee asset and full fill economics. The existing `BEGIN IMMEDIATE` transaction writes the local fill, receipt and special rebuy observation together; any conflict aborts the entire transaction.
+
+An existing legacy fill without a local receipt cannot silently acquire a new identity on replay; it fails closed as `M06_LEGACY_FILL_RECEIPT_ABSENT`. Legacy rebuy funds are **still protected** and readable, but their receipt coverage is explicitly `local_rebuy_receipts_linked=false`. Conflicting receipt order ID, symbol or BUY/SELL direction rejects read-only reconciliation; no historical receipt is fabricated. New valid same-intent replay after restart is idempotent; changed quote/fee metadata or foreign order/UID cannot silently rewrite a receipt.
+
+This is durable **LOCAL evidence only**. A receipt is not an exchange-signed fill or a verified bot-owned position: `bot_owned_fills_verified=false`, `protected_rebuy_verified=false`, `capital_spendable_verified=false` and `execution_allowed=false`. Original V2 CLI emits only `local_rebuy_receipts_linked` (Boolean); no trade IDs, token amounts or account identifiers. Eight new isolated offline regression tests are **CODED, not yet VPS-PASS**; no new API request, credentials, BUY/SELL or trading mode change is required.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
