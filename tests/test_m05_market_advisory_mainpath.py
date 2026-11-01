@@ -16,6 +16,7 @@ from indodax_ai_bot.config import Settings
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from indodax_ai_bot.owner_control import OwnerDecisionLedger
+from indodax_ai_bot.three_role_ai import ThreeRoleShadow as RealThreeRoleShadow
 from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient
 from indodax_ai_bot.telegram_dedicated_inbound import (
     dedicated_owner_poll_once,
@@ -119,6 +120,9 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
             patch("indodax_ai_bot.orchestrator.bulk_public_deep_scan",
                   return_value=snapshot),
             patch("indodax_ai_bot.orchestrator.time.time", return_value=NOW),
+            patch("indodax_ai_bot.orchestrator.ThreeRoleShadow",
+                  side_effect=lambda **kw: RealThreeRoleShadow(
+                      clock=lambda: NOW, **kw)),
         ):
             return self.app.run_bulk_deep_cycle(
                 trace, market=object(),
@@ -143,7 +147,7 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertEqual(out.owner_advisory["queued"], 1)
         self.assertFalse(out.owner_advisory["execution_allowed"])
         self.assertFalse(out.execution_allowed)
-        with sqlite3.connect(self.journal.path) as db:
+        with sqlite3.connect(self.journal._db_path) as db:
             self.assertEqual(
                 db.execute("SELECT COUNT(*) FROM decisions").fetchone()[0], 0
             )
