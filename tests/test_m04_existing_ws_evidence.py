@@ -59,6 +59,21 @@ class ExistingWsExternalEvidenceTest(unittest.TestCase):
             out["windows"]["last_closed_1h"]["complete_exchange_trade_tape_proven"]
         )
 
+    def test_historical_stream_never_counts_as_current(self):
+        out = inspect_existing_btc_ws(str(self.path), now_epoch=1800009000)
+        self.assertEqual(out["latest_observed_trade_lag_seconds"], 8930)
+        self.assertFalse(out["latest_observed_trade_recent_120s"])
+        self.assertFalse(out["source_eligible_for_live_decision"])
+        self.assertTrue(out["stream_is_currently_connected"])
+
+    def test_disconnected_stream_remains_non_live_even_if_recent(self):
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE ws_stream_state SET status='DISCONNECTED' WHERE pair='btc_idr'")
+        out = inspect_existing_btc_ws(str(self.path), now_epoch=1800000071)
+        self.assertTrue(out["latest_observed_trade_recent_120s"])
+        self.assertFalse(out["stream_is_currently_connected"])
+        self.assertFalse(out["source_eligible_for_live_decision"])
+
     def test_readonly_never_modifies_database(self):
         before = self.path.read_bytes()
         inspect_existing_btc_ws(str(self.path))
