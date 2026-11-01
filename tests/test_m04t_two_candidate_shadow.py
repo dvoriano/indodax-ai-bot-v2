@@ -117,7 +117,7 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         self.assertNotEqual(first[0]["evidence_digest_sha256"],
                             second[0]["evidence_digest_sha256"])
         self.assertTrue(all(e["prior_role_results"] == [] for e in (first[0], second[0])))
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
         self.assertFalse(result["provider_connected"])
 
@@ -159,7 +159,7 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         self.assertTrue(all(
             r["reason"] == "RISK_VETO_NO_TRADE" for r in result["candidate_reports"]
         ))
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
 
 
