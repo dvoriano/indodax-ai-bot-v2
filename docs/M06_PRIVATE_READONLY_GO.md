@@ -63,6 +63,14 @@ The next incremental M06-02 code path reads *active* `m06_shadow_reserve` rows i
 
 Original CLI outputs only `local_shadow_reservations_present` and `local_shadow_coverage_complete` booleans; no raw IDR totals, account UID, client IDs, or keys. Both `capital_spendable_verified` and `execution_allowed` always remain false, even after authenticated View Only observations, because unlocked cross-bot commitments and full account history are not independently established. No additional exchange GET, new service, or live reservation permission is enabled. This change requires focused offline source testing before the M06-02 code/audit stage may be marked accepted.
 
+## M06-03 fixed special-asset partitions (source only, local tests pending)
+
+The owner-scoped account reviewer now builds two fixed **non-executable** quantity previews in the original V2 path: FLOKI theoretical trading portion **25%**, minimum reserve **75%**; PEPE theoretical trading portion **30%**, minimum reserve **70%**. For each asset, the minimum protected quantity is the larger of the fixed percentage reserve and its previously stored **account-UID-bound manual holding floor**; the theoretical trading cap cannot exceed the remainder. Missing manual floor rows are explicitly UNKNOWN and cannot be treated as verified zero manual holdings. A manual floor greater than the observed free+locked wallet amount fails closed. Both locally declared floors must exist before `special_pool_local_floors_complete=true` is reported.
+
+These are mathematical guardrails, **not proof of bot-owned quantities**; `bot_owned_sellable_qty=0`, `wallet_ownership_verified=false`, `special_asset_ownership_verified=false`, `capital_spendable_verified=false`, `execution_allowed=false` remain. A verified exchange wallet balance alone cannot identify who owns individual lots or certify historical proceeds. No new private API request, trade permissions, runtime service, or extra portfolio database is created. The original CLI emits only coverage booleans, never token quantities. Seven scoped offline tests cover fractions, manual overrides, partial/missing local coverage, over-wallet veto, UID restart isolation, zero wallet conflict, and the original orchestrator four mocked GETs. Tests are **added but have not yet PASSed on owner VPS**.
+
+The prior owner original V2 ConnectBot prompt failure was corrected in SHA `8329af1db18cce374b84ad5a1e4c83988befeffe` and is now independently **6/6 VPS PASS** with marker `M06_CONNECTBOT_ENTER_FIX_PASS`. Do not rerun private one-shot GETs for this local M06-03 source change.
+
 ## Acceptance before first private request
 
 1. Inspect the exact Git SHA in PR #29 and run syntax checks plus targeted **fully offline mocked** tests for GO, key veto, quota, original CLI → orchestrator wiring and zero-network no-GO.
