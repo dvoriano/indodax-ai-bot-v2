@@ -72,7 +72,7 @@ def _existing_v2_credentials() -> Path | None:
         if key == secret:
             raise ValueError("M06_EXISTING_V2_CREDENTIAL_PAIR_INVALID")
         return absolute
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError):
         raise ValueError("M06_EXISTING_V2_CREDENTIALS_NOT_SAFE") from None
 
 
