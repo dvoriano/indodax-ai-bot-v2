@@ -51,6 +51,69 @@ def review_unverified_account(observation: AccountObservation | None,
     )
 
 @dataclass(frozen=True)
+class M06SpecialPartitionPreview:
+    """Untrusted wallet ratio arithmetic only: no bot-owned SELL quantity."""
+    asset: str
+    observed_wallet_qty: Decimal
+    theoretical_trading_cap_qty: Decimal
+    minimum_protected_qty: Decimal
+    local_manual_floor_qty: Decimal
+    local_manual_floor_recorded: bool
+    bot_owned_sellable_qty: Decimal = Decimal("0")
+    wallet_ownership_verified: bool = False
+    execution_allowed: bool = False
+
+
+def review_m06_special_partitions(*, account: AccountBalances,
+                                  local_rebuy: ProtectedRebuyReview | None
+                                  ) -> tuple[M06SpecialPartitionPreview, ...]:
+    """Two fixed owner pools, always reserve 75% FLOKI / 70% PEPE.
+
+    A local manual floor may *increase* protected quantity, never reduce it.
+    Neither observed wallet quantity nor the local floor can establish
+    bot-owned lots, so authenticated SELL availability remains exactly ZERO.
+    """
+    if type(account) is not AccountBalances:
+        raise ValueError("M06_SPECIAL_WALLET_SOURCE_INVALID")
+    if local_rebuy is not None and type(local_rebuy) is not ProtectedRebuyReview:
+        raise ValueError("M06_SPECIAL_LOCAL_SOURCE_INVALID")
+    wallet = {asset: _amount(free) + _amount(locked)
+              for asset, free, locked in account.assets}
+    if len(wallet) != len(account.assets):
+        raise ValueError("M06_SPECIAL_ASSET_DUPLICATE")
+    out = []
+    for asset, fraction, reserve, recorded in (
+        ("FLOKI", Decimal("0.25"), (
+            local_rebuy.floki_manual_qty_local_floor
+            if local_rebuy is not None else Decimal("0")
+        ), (local_rebuy.floki_manual_floor_recorded
+            if local_rebuy is not None else False)),
+        ("PEPE", Decimal("0.30"), (
+            local_rebuy.pepe_manual_qty_local_floor
+            if local_rebuy is not None else Decimal("0")
+        ), (local_rebuy.pepe_manual_floor_recorded
+            if local_rebuy is not None else False)),
+    ):
+        total = _amount(wallet.get(asset, Decimal("0")))
+        floor = _amount(reserve)
+        if type(recorded) is not bool:
+            raise ValueError("M06_SPECIAL_MANUAL_COVERAGE_INVALID")
+        if floor > total:
+            raise ValueError("M06_SPECIAL_MANUAL_FLOOR_EXCEEDS_WALLET")
+        minimum = max(total * (Decimal("1") - fraction), floor)
+        cap = min(total * fraction, total - minimum)
+        out.append(M06SpecialPartitionPreview(
+            asset=asset,
+            observed_wallet_qty=total,
+            theoretical_trading_cap_qty=_amount(cap),
+            minimum_protected_qty=_amount(minimum),
+            local_manual_floor_qty=floor,
+            local_manual_floor_recorded=recorded,
+        ))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
 class M06ReadOnlyReconciliation:
     """Original V2 M06: diagnostics are not source or wallet authority."""
     status: str
@@ -66,6 +129,7 @@ class M06ReadOnlyReconciliation:
     local_manual_floor_present: bool = False
     local_shadow_reservations_present: bool = False
     local_shadow_coverage_complete: bool = False
+    special_pool_local_floors_complete: bool = False
     protected_rebuy_ledger_verified: bool = False
     manual_asset_ownership_verified: bool = False
     account_wide_order_history_complete: bool = False
@@ -134,10 +198,11 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
     )
     if calculated.calculated_available_idr != Decimal("0"):
         raise ValueError("M06_UNVERIFIED_CAPITAL_NONZERO")
-    holdings = {asset: free + locked for asset, free, locked in account.assets}
+    pool_previews = review_m06_special_partitions(
+        account=account, local_rebuy=local_rebuy,
+    )
     special_unknown = any(
-        holdings.get(asset, Decimal("0")) > 0
-        for asset in ("FLOKI", "PEPE")
+        p.observed_wallet_qty > 0 for p in pool_previews
     )
     return M06ReadOnlyReconciliation(
         status="REJECT",
@@ -158,4 +223,7 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
             and local_rebuy.local_shadow_commitments_idr > 0),
         local_shadow_coverage_complete=(local_rebuy is not None
             and local_rebuy.local_shadow_coverage_complete is True),
+        special_pool_local_floors_complete=all(
+            p.local_manual_floor_recorded for p in pool_previews
+        ),
     )
