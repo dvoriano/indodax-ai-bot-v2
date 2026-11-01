@@ -273,6 +273,7 @@ class OwnerDecisionLedger:
                 or pair in ("usdt_idr", "usdc_idr", "floki_idr", "pepe_idr")
                 or not isinstance(digest, str) or not DIGEST.fullmatch(digest)
                 or type(closed_1m_epoch) is not int or closed_1m_epoch <= 0
+                or closed_1m_epoch % 60 != 0
                 or type(now_epoch) is not int or now_epoch <= 0
                 or type(source_expires_epoch) is not int
                 or not closed_1m_epoch <= now_epoch < source_expires_epoch
@@ -440,6 +441,16 @@ class OwnerDecisionLedger:
                 return _blocked("UNKNOWN_OR_FORGED_CALLBACK")
             if row[3] != "PENDING":
                 return _blocked("CALLBACK_ALREADY_CONSUMED")
+            # Market-advisory callbacks only become actionable as OWNER
+            # review after the exact private Telegram message is acknowledged.
+            # Legacy synthetic shadow proposal rows have no outbox entry.
+            market_delivery = db.execute(
+                """SELECT delivery_state
+                   FROM m05_market_advisory_outbox WHERE proposal_id=?""",
+                (proposal,),
+            ).fetchone()
+            if market_delivery is not None and market_delivery[0] != "SENT":
+                return _blocked("M05_ADVISORY_NOT_SENT_TO_OWNER")
             mode = db.execute(
                 "SELECT mode FROM m05_config WHERE singleton=1"
             ).fetchone()[0]
