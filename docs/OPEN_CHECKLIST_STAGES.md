@@ -126,13 +126,15 @@ Owner VPS scoped `M06_SPECIAL_POOL_ORIGINAL_MAINPATH_PASS`, exact source SHA `a8
 - [ ] Selesai. No real bot-owned lot provenance, authorized special SELL or rebuy settlement evidence.
 
 ### M06-04 · Protect rebuy bucket proceeds and bot-owned lot/fill attribution across restarts.
-- [ ] Kode
-- [ ] Audit
-- [ ] Terhubung bot
-- [ ] Deploy
-- [ ] Selesai
+Owner VPS 1 Nov 2026 accepted `Ran 17 tests in 1.323s\nOK` and marker `M06_FILL_RECEIPTS_ORIGINAL_MAINPATH_PASS` at exact PR#29 SHA `c324273d89e32dc00950558500fa76693791963d`. Eight new UID-bound immutable local fill receipt tests plus nine original protected rebuy tests PASS. New receipt hashes account UID scope, local order/client IDs, side, fill amount/fees/quote in the original SQLite transaction; replay/restart/foreign UID conflicts reject. Legacy unlinked fills remain protected but cannot silently gain provenance. **This is LOCAL evidence only**: bot-owned quantity, external fills, sale settlement, main IDR capital and exchange-confirmed ownership are still unverified; no production deployment.
+- [x] Kode. Original V2 `M06OwnershipLedger` stores immutable local fill receipts atomically with existing observed fills and FLOKI/PEPE rebuy protection.
+- [x] Audit. Owner VPS accepted 17/17 scoped tests on exact source `c324273d89e32dc00950558500fa76693791963d`.
+- [x] Terhubung bot. Original `DailyScalpingOrchestrator` four mocked GETs → original account review/CLI; reports only `local_rebuy_receipts_linked` and final REJECT.
+- [ ] Deploy. Draft PR#29 source not yet merged or installed on the original V2 runtime.
+- [ ] Selesai. Exchange-confirmed bot-owned lots, fees, settlement, and rebuy attribution not proven.
 
 ### M06-05 · Check cross-bot account balance/position ownership before LIVE coexistence.
+CODED on [DRAFT PR#29](https://github.com/dvoriano/indodax-ai-bot-v2/pull/29): original V2 read-only UID-bound SQLite inspection detects local foreign-account records and orphan fill observations; original account review still rejects forged peer completeness, and **always** leaves external-peer/account ownership unverified. Seven new focused offline tests added, **not yet owner VPS tested**. No V1 source/process access or new exchange GO. Local lack of conflicts is NEVER external account coexistence approval.
 - [ ] Kode
 - [ ] Audit
 - [ ] Terhubung bot
