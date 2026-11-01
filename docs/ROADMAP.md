@@ -2,7 +2,7 @@
 
 > **Satu-satunya tracker dan handover proyek.** Aturan normatif tetap di [PROJECT_GUIDELINE.md](PROJECT_GUIDELINE.md) bagian 0/0A/B/E/F serta [AGENTS.md](../AGENTS.md). **Rekonsiliasi evidensi: 31 Oktober 2026 (WIB)**. Seluruh 49 butir selesai, 49 butir terbuka dan register PASS historis dipertahankan, bukan mengganti roadmap atau mengulang pengujian.
 >
-> **Skala angka:** 49/49 menghitung butir besar CHECKLIST, bukan 49 hasil teknis dan bukan persentase bot yang sudah hidup. Semua subtask yang PASS tetap disimpan di **register bukti Bagian 4** dan matriks integrasi Bagian 2A. M10 `ExecCondition` PASS tetap tercatat sebagai sub-bukti, bukan checklist selesai tambahan.
+> **Skala angka:** 49/49 menghitung butir besar CHECKLIST, bukan 49 hasil teknis dan bukan persentase bot yang sudah hidup. M06 punya **15/15 centang kode/audit/terhubung dan 5/5 source utama dipasang**, tetapi kelima gerbang acceptance utama masih `[ ]` karena modal dan kepemilikan akun belum terbukti. Semua subtask yang PASS tetap disimpan di **register bukti Bagian 4** dan matriks integrasi Bagian 2A. M10 `ExecCondition` PASS tetap tercatat sebagai sub-bukti, bukan checklist selesai tambahan.
 >
 > **Aturan pencatatan owner:** hanya catat pekerjaan/tes yang **sudah PASS dan diterima**, beserta SHA, cakupan, dan batas klaim. Jangan menyalin percobaan FAIL, error sementara, log mentah, audit berulang, atau status yang sudah digantikan. Satu penerimaan cukup satu entri ringkas. Riwayat lengkap tetap tersedia melalui Git history, bukan daftar kegagalan di tracker.
 >
@@ -37,7 +37,7 @@
 | M03 | **15 / 4** | Scanner M03-A–N, real LIGHT/DEEP20, original guarded PR#19 25/25, compact PR#25 26/26 offline dan staged disabled. | Merge source original mainline, shared-IP enforcement, OOS fee+slippage edge, full G1 dependency, owner GO timer. |
 | M04 | **12 / 5** | M04-A–V original shadow/G1 safe rejection, PR#23 33/33, PR#24 24/24, PR#21 model choice 27/27 offline. | Upstream independently verifiable 15m/1h complete tape, trusted issuer, production wiring, actual provider/pricing, paid owner GO, real 3-role handoff. |
 | M05 | **8 / 4** | Owner ledger, Telegram dedicated, M05 status; PR#20 `/health`, `/scanner` real online reply. | Konsolidasi PR#20 ke satu release; real G1→AI proposal, owner callbacks, MANUAL/AUTO last-moment safety, sisa commands. |
-| M06 | **0 / 5** | Belum ada private authenticated V2 acceptance. | Readonly balance/orders/fills scoped GO, IDR spendable, FLOKI/PEPE isolation dan cross-bot ownership. |
+| M06 | **0 / 5 penerimaan penuh** | **Kode/Audit/Terhubung bot: 15/15 ✅**; source di `main`/VPS dan 112/112 tes integrasi PASS; **4 GET private View Only nyata di bawah GO terbatas sudah terbukti**. | **Belum terverifikasi:** cakupan historis akun, free IDR bersih dari seluruh komitmen, kepemilikan lot/rebuy FLOKI/PEPE, coexistence akun lintas proses, serta jalur operasional berotorisasi. **Tidak ada izin trading.** |
 | M07 | **0 / 5** | Tidak ada eksekusi order V2 diterima. | Signed order/cancel/fill, precision/fees, idempotency, UNKNOWN/reconcile, preflight. |
 | M08 | **0 / 7** | Policy SELL ROI+time 12/12 offline PASS (sub-bukti). | Wiring original Position Manager pada owned fills, protective/tiered SELL, restart/settled IDR. |
 | M09 | **0 / 4** | Belum ada end-to-end paper dengan semua modul nyata. | Scanner→G1→AI→owner→preflight→executor hardlock→Position/IDR, full fault coverage. |
@@ -196,11 +196,25 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 - [ ] Finish remaining owner Telegram commands `/market`, `/ai`, `/buy`, `/positions`, `/sell`, `/balance`, `/profit`, `/history`, `/risk` as verified actual V2 state or explicit fail-closed unavailable; source-bound G1/AI proposals and callbacks remain separately unchecked. Existing `/status` and `/kontrol` work through durable V2 ledger.
 
 ### M06: Account and protected capital
-- [ ] Authenticated Indodax **private read-only** balance/orders/fills under explicit scoped GO.
-- [ ] Verify fresh free IDR minus locked/unsettled commitment; atomic reserve, avoid double-spend.
-- [ ] FLOKI 25% trading/75% reserve; PEPE 30% trading/70% reserve; manual holding exclusions.
-- [ ] Protect rebuy bucket proceeds and bot-owned lot/fill attribution across restarts.
-- [ ] Check cross-bot account balance/position ownership before LIVE coexistence.
+
+**Centang kemajuan nyata M06 per 1 November 2026:** lima baris `[ ]` di bawah adalah **gerbang penerimaan lengkap**, bukan status apakah kodenya sudah dibuat. Bukti penyelesaian teknis sudah dicentang di matriks berikut dan di [OPEN_CHECKLIST_STAGES.md](OPEN_CHECKLIST_STAGES.md). **Tidak perlu mengulang 112 tes atau 4 GET private yang sudah diterima.**
+
+| Item | Kode | Audit terarah | Terhubung bot V2 asli | Source GitHub `main` / checkout VPS | Penerimaan lengkap |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| M06-01 View Only private scoped GO | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-02 Free/locked IDR, shadow reserve lokal | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-03 FLOKI 25/75 dan PEPE 30/70 + floor manual | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-04 Receipt fill lokal dan rebuy tahan restart | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-05 Deteksi konflik UID dan akun lintas proses | ✅ | ✅ | ✅ | ✅ | ☐ |
+
+**Rekap:** **15/15** kode/audit/jalur bot PASS; **5/5** source tersedia di `main` dan checkout utama VPS; **0/5** penerimaan penuh. M06-01 memiliki **bukti nyata private View Only empat GET pada satu sesi yang sah**, tetapi belum ada bukti kelengkapan historis akun. M06-02–05 masih mengunci `spendable_capital_verified=false`, `cross_bot_ownership_verified=false`, `bot_owned_fills_verified=false`, dan `execution_allowed=false`. Kolom `main/VPS` bermakna **source terpasang**, bukan pemanggilan otomatis di systemd atau izin akses exchange tanpa GO. Jalur diagnostik aman selesai; jalur otorisasi modal/ownership belum selesai.
+
+**Checklist utama yang belum memenuhi syarat lengkap:**
+- [ ] Authenticated Indodax **private read-only** balance/orders/fills under explicit scoped GO. *Empat GET scoped authenticated dan CLI PASS untuk keamanan sudah terbukti; cakupan histori keseluruhan dan acceptance operasional belum.*
+- [ ] Verify fresh free IDR minus locked/unsettled commitment; atomic reserve, avoid double-spend. *Shadow reserve atomik lokal PASS; komitmen seluruh pengguna akun belum dapat direkonsiliasi.*
+- [ ] FLOKI 25% trading/75% reserve; PEPE 30% trading/70% reserve; manual holding exclusions. *Rasio dan floor aman, tetapi lot perdagangan yang benar-benar milik bot masih nol terverifikasi.*
+- [ ] Protect rebuy bucket proceeds and bot-owned lot/fill attribution across restarts. *Local receipt/rebuy tahan restart PASS; bukti settlement dan kepemilikan fill dari exchange belum lengkap.*
+- [ ] Check cross-bot account balance/position ownership before LIVE coexistence. *Deteksi konflik lokal PASS; penggunaan akun dari luar SQLite V2 belum dapat dibuktikan lengkap.*
 
 ### M07: Preflight & execution
 - [ ] Official signed order/status/cancel adapter with hardlocked safe mode until LIVE GO.
@@ -332,7 +346,7 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 | **M05 PR#20 original V2 Telegram owner `/health` + `/scanner` ONLINE READ-ONLY ACCEPTED (2026-10-30 19:39 WIB)** | Installed independent M05 release pinned `2e8e43357d73bdd8cce76de2ad208b15faf9f9a4` after prior 60/60 original service-tick offline tests and `M05_PR20_ORIGINAL_RUNTIME_STAGED_PASS`. | Owner screenshot: dedicated @pitidenbot responded at 19:39 to `/health` with BTC WS `RECENT_COMPLETED_UNATTESTED` and M03 timer inactive/disabled, then `/scanner` with M03 timer/service inactive/disabled. Both explicitly Final REJECT, Trading OFF and no G1 promotion. Earlier two commands in a single message returned blocked as expected. **No order/AI/private access or 24/7 scanner proof; Telegram SQLite cursor not inspected in this screenshot.** |
 | M08 net exit policy | VPS SHA `f159925`; `ScalpingPolicy.assess_position_exit_targets`, `.assess_position_holding_time` | 12/12 scoped offline PASS for actual-cost-basis-derived hypothetical 2%/8%/11% net targets and time-priority (<30m,30–60m,>=60m,>=90m). Actual bot-owned fills/SELL not wired. |
 
-### M06 | Private read-only, capital dan ownership (TESTED_OFFLINE)
+### M06 | Private View Only nyata, 112/112 mainline PASS, kepemilikan/otorisasi tetap OPEN
 
 | Scope | SHA / jalur utama | Bukti PASS yang dipertahankan |
 | --- | --- | --- |
