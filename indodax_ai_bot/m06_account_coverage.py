@@ -53,6 +53,11 @@ class M06CoverageResult:
     local_receipts_matched: int
     local_receipts_unlinked: int
     unresolved_requirements: tuple[str, ...]
+    # Evidence-gated per original checklist; observation != LIVE acceptance.
+    m06_02_balance_and_open_orders_observed: bool = False
+    m06_03_special_pool_ratio_observed: bool = False
+    m06_04_local_fill_receipts_in_window_matched: bool = False
+    m06_05_local_account_conflict_free: bool = False
     full_account_history_verified: bool = False
     external_peer_coverage_verified: bool = False
     spendable_idr_verified: bool = False
@@ -177,6 +182,13 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
         all_fills = 0
         receipt_matches = 0
         receipt_unlinked = 0
+        # These are scoped facts, NOT client-supplied authority booleans.
+        special_ratios_seen = set()
+        local_conflict_free = (
+            local is not None
+            and not local.local_other_account_records_present
+            and not local.local_orphan_fill_records_present
+        )
         unresolved = {
             "M06_ACCOUNT_WIDE_HISTORY_NOT_PROVEN",
             "M06_EXTERNAL_PEER_COMMITMENTS_NOT_PROVEN",
@@ -224,6 +236,18 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
                 fills=tuple(fill_rows), symbol=symbol, local_rebuy=local,
             )
             unresolved.update(review.unresolved_requirements)
+            # The ratio policy for *both* special assets must have been
+            # evaluated against the same authenticated account snapshot.
+            if symbol in ("flokiidr", "pepeidr"):
+                from .m06_account_review import review_m06_special_partitions
+                observed = review_m06_special_partitions(
+                    account=account, local_rebuy=local,
+                )
+                if (len(observed) == 2
+                        and all(x.theoretical_trading_cap_qty
+                                + x.minimum_protected_qty
+                                <= x.observed_wallet_qty for x in observed)):
+                    special_ratios_seen.add(symbol)
             all_orders += len(history_rows)
             all_fills += len(fill_rows)
             if local is not None:
@@ -246,6 +270,16 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
             local_receipts_matched=receipt_matches,
             local_receipts_unlinked=receipt_unlinked,
             unresolved_requirements=tuple(sorted(unresolved)),
+            m06_02_balance_and_open_orders_observed=True,
+            m06_03_special_pool_ratio_observed=(
+                special_ratios_seen == {"flokiidr", "pepeidr"}
+            ),
+            m06_04_local_fill_receipts_in_window_matched=(
+                local is not None
+                and receipt_unlinked == 0
+                and receipt_matches > 0
+            ),
+            m06_05_local_account_conflict_free=local_conflict_free,
         )
     except boundary.M06ScopeDenied:
         raise
