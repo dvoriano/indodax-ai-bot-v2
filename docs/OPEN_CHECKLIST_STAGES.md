@@ -104,11 +104,13 @@
 
 **Mainline consolidation accepted (1 November 2026):** owner VPS executed `test_m06_*.py` on exact PR#31 head `8b6b84dd897c2265ea32be5c92bd3b4fbe0af5de`: **112/112 PASS in 4.830s**, plus original V2 `--m06-account-review-once` CLI printed `REJECT`, `account_authenticated=false`, `execution_allowed=false`, marker `M06_MAINLINE_CONSOLIDATION_PASS`. [PR#31](https://github.com/dvoriano/indodax-ai-bot-v2/pull/31) **squash-merged to main** as `a01b0c445ae4bccff0bbcfce8508855b50b6ed46`, with 34 M06-scoped changed files and no M03/M04/M05/M10 modifications. GitHub CI recorded no status; do not claim CI PASS. Owner VPS mainline checkout/install and service-level deployment have NOT been attested. No additional Indodax private GO or exchange action permitted.
 
+**VPS main checkout installation verified by owner (1 November 2026):** clean tracking `main` checkout at `~/indodax-ai-bot-v2` safely fast-forwarded from `db95103` to `cf978e396ab03a2ef89f01a4cf886f8c2d94cc33` (contains M06 squash commit `a01b0c445ae4bccff0bbcfce8508855b50b6ed46`), marker `M06_V2_MAIN_SOURCE_INSTALLED_SAFE`. Original V2 CLI `--m06-account-review-once` returned `status=REJECT`, `reason=M06_PRIVATE_ACCOUNT_GO_ABSENT`, `account_authenticated=false`, `execution_allowed=false`. **The 84-file fast-forward output is accumulated old-main→new-main history, not 84 changes from PR#31.** This proves main checkout/source is installed and CLI is callable, **not** systemd unit linkage, automated run-cycle invocation, foreign bot cessation, authenticated account-wide capital or completed M06 deployment. Existing M03 service template uses a separate pinned worktree; M05 service template uses root V2 checkout; live installed unit state still unknown. No service/timer change, new private GO, network request or trade occurred.
+
 ### M06-01 · Authenticated Indodax **private read-only** balance/orders/fills under explicit scoped GO.
 - [x] Kode. One-shot scoped signed V2 read-only source in [PR#29](https://github.com/dvoriano/indodax-ai-bot-v2/pull/29), pinned observed SHA `f21d9224638f9646c17a6b4c34059d4a1d2b383e`, 4 GET only, no executor.
 - [x] Audit. Owner previously supplied **23/23 offline PASS**; 2026-11-01 WIB owner VPS provided **REAL VIEW ONLY** result `M06_VIEW_ONLY_RECONCILED_REJECT`, `view_only_permissions_verified=true`, `execution_allowed=false`; no raw private data published. This is a bounded session, not full history or capital trust.
 - [x] Terhubung bot. Original V2 CLI `--m06-private-readonly-once` → `DailyScalpingOrchestrator` → signed 4-GET account/openOrders/injidr order-history/injidr myTrades → reconciler and journal; owner output `M06_VIEW_ONLY_COMPLETED`. Observed open_orders_count=0, order_history_count=0, fills_count=0 for the defined scope; `history_complete=false`.
-- [ ] Deploy. PR#31 is merged to GitHub main, but owner VPS original checkout/service deployment is not yet verified; previous successful tests were run in temporary worktrees.
+- [ ] Deploy. GitHub main and owner VPS original checkout/CLI now verified at cf978e3; installed systemd wiring, actual automated M06 path and service-level deployment have NOT been confirmed.
 - [ ] Selesai. Capital spendability, local rebuy ownership, account-wide history, bot-owned fills and cross-bot attribution remain unverified; M06-02 to -05 open.
 
 ### M06-02 · Verify fresh free IDR minus locked/unsettled commitment; atomic reserve, avoid double-spend.
@@ -116,7 +118,7 @@ Evidence 1 November 2026: owner VPS pinned `13ae5de746065763c97977cb28d6cd0756c0
 - [x] Kode. Existing V2 SQLite account-hash-scoped `m06_shadow_reserve` is read in one read-only UID snapshot; active sums are fed to capital diagnostics, missing table means coverage unknown.
 - [x] Audit. Six new capital tests PASS at owner VPS (among the earlier 39 successful tests), and related ConnectBot input regression independently 6/6 PASS.
 - [x] Terhubung bot. Original `DailyScalpingOrchestrator` four-mocked-GET source → `m06_account_review` → `reconcile_unverified_capital` still REJECTs with no exchange authorization.
-- [ ] Deploy. Consolidated source is merged to GitHub main via PR#31, but original VPS checkout/service installation has not been attested.
+- [ ] Deploy. Consolidated source is installed in owner VPS main and offline CLI REJECT verified; still no proof of service invocation or complete live-account capital gates.
 - [ ] Selesai. Fresh, complete real exchange and cross-bot obligations/ownership and safe true available IDR are NOT verified.
 
 ### M06-03 · FLOKI 25% trading/75% reserve; PEPE 30% trading/70% reserve; manual holding exclusions.
@@ -124,7 +126,7 @@ Owner VPS scoped `M06_SPECIAL_POOL_ORIGINAL_MAINPATH_PASS`, exact source SHA `a8
 - [x] Kode. Original V2 `m06_account_review.review_m06_special_partitions` builds fixed protected ratios and applies UID/manual floor monotonicity.
 - [x] Audit. Owner VPS 28/28 scoped source and regressions PASS at exact SHA `a8a275974ea3703e7822fbecac3101cf57f2018d`.
 - [x] Terhubung bot. Original V2 `DailyScalpingOrchestrator` mocked four GETs reaches the same account review, emits only redacted Boolean coverage and final REJECT.
-- [ ] Deploy. PR#31 has merged to GitHub main; owner VPS source and service-level rollout are still unverified.
+- [ ] Deploy. M06 protective source installed in VPS main; no evidence of live systemd M06 invocation or exchange-verified ownership.
 - [ ] Selesai. No real bot-owned lot provenance, authorized special SELL or rebuy settlement evidence.
 
 ### M06-04 · Protect rebuy bucket proceeds and bot-owned lot/fill attribution across restarts.
@@ -132,7 +134,7 @@ Owner VPS 1 Nov 2026 accepted `Ran 17 tests in 1.323s\nOK` and marker `M06_FILL_
 - [x] Kode. Original V2 `M06OwnershipLedger` stores immutable local fill receipts atomically with existing observed fills and FLOKI/PEPE rebuy protection.
 - [x] Audit. Owner VPS accepted 17/17 scoped tests on exact source `c324273d89e32dc00950558500fa76693791963d`.
 - [x] Terhubung bot. Original `DailyScalpingOrchestrator` four mocked GETs → original account review/CLI; reports only `local_rebuy_receipts_linked` and final REJECT.
-- [ ] Deploy. PR#31 merged the M06-only source into GitHub main; VPS original checkout and service integration remain unverified.
+- [ ] Deploy. Original V2 main checkout is now updated and M06 CLI rejects safely; service binding and exchange-owned lot proof not established.
 - [ ] Selesai. Exchange-confirmed bot-owned lots, fees, settlement, and rebuy attribution not proven.
 
 ### M06-05 · Check cross-bot account balance/position ownership before LIVE coexistence.
@@ -140,7 +142,7 @@ Owner VPS 1 November 2026 at exact PR#29 source SHA `790f0fddde2c9c43c5bf1d0113b
 - [x] Kode. Original V2 account ownership ledger has local other-UID and unattributed-fill risk indicators without new bots or services.
 - [x] Audit. Owner VPS original source 13/13 tests PASS at SHA `790f0fddde2c9c43c5bf1d0113bcb911589b593d`; no exchange requests or permission escalation.
 - [x] Terhubung bot. Original orchestrator → read-only account diagnostic and CLI expose Boolean-only coexistence flags; always final REJECT.
-- [ ] Deploy. PR#31 is merged into GitHub main, but owner VPS original checkout/service runtime has not been confirmed.
+- [ ] Deploy. Root checkout installed and CLI REJECT verified; original V2 unit link/automatic M06 execution and external peer controls not yet inspected.
 - [ ] Selesai. Actual exchange-wide shared-account liabilities, external peer controls and bot-owned position proof are outstanding.
 
 ### M07-01 · Official signed order/status/cancel adapter with hardlocked safe mode until LIVE GO.
