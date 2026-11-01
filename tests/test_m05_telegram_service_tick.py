@@ -89,7 +89,7 @@ class M05SystemdTickTests(unittest.TestCase):
         self.assertEqual(result["status"], "M05_TICK_COMPLETED")
         self.assertEqual(result["processed"], 1)
         self.assertEqual(result["next_offset"], 101)
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
         self.assertNotIn(TOKEN, str(result))
         self.assertEqual(self.ledger.telegram_next_offset(), 101)
