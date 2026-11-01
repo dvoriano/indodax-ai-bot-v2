@@ -77,6 +77,7 @@ class M06PrivateProbeResult:
     local_manual_floor_present: bool = False
     local_shadow_reservations_present: bool = False
     local_shadow_coverage_complete: bool = False
+    special_pool_local_floors_complete: bool = False
     history_complete: bool = False
     cross_bot_ownership_verified: bool = False
     bot_owned_fills_verified: bool = False
@@ -410,4 +411,5 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         local_manual_floor_present=capital_review.local_manual_floor_present,
         local_shadow_reservations_present=capital_review.local_shadow_reservations_present,
         local_shadow_coverage_complete=capital_review.local_shadow_coverage_complete,
+        special_pool_local_floors_complete=capital_review.special_pool_local_floors_complete,
     )
