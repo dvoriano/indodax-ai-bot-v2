@@ -134,6 +134,7 @@ class CycleResult:
     public_research: dict | None = None
     research_archive: dict | None = None
     stage_disposition: str = "LEGACY_DIAGNOSTIC"
+    owner_advisory: dict | None = None
 
 
 class DailyScalpingOrchestrator:
@@ -672,10 +673,20 @@ class DailyScalpingOrchestrator:
         self.journal.record_stage_observation(
             trace_id, "M03_M04_PRE_FINAL", reason,
         )
+        owner_advisory = None
+        if self._owner_control is not None:
+            # Single original M03/M04 bulk evidence. No extra REST/AI call,
+            # no phantom size/price or executable owner permission.
+            from .m05_market_advisory import queue_scanner_owner_advisory
+            owner_advisory = queue_scanner_owner_advisory(
+                bulk=result, ai_shadow=ai_shadow,
+                owner=self._owner_control, now_epoch=int(time.time()),
+            )
         return CycleResult(
             trace_id, None, reason, False,
             None, None, None, None, result, ai_shadow,
             stage_disposition="ADVISORY_ONLY_NO_OWNER_DECISION",
+            owner_advisory=owner_advisory,
         )
 
     def run_public_ws_cycle(self, trace_id: str, *, db_path: str,
