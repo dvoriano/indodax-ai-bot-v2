@@ -142,7 +142,10 @@ def inspect_existing_btc_ws(
             "inspection_as_of_epoch": now_epoch,
             "latest_observed_trade_lag_seconds": observed_lag_seconds,
             "latest_observed_trade_recent_120s": observed_recent,
-            "stream_is_currently_connected": state[2] == "CONTIGUOUS_OBSERVED",
+            "last_persisted_stream_status_contiguous": (
+                state[2] == "CONTIGUOUS_OBSERVED"
+            ),
+            "live_collector_heartbeat_proven": False,
             "source_eligible_for_live_decision": False,
             "distinct_stream_epochs": len(seen_epoch),
             "discontinuities_recorded": gaps,
