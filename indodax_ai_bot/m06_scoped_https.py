@@ -77,6 +77,7 @@ class M06PrivateProbeResult:
     local_manual_floor_present: bool = False
     local_shadow_reservations_present: bool = False
     local_shadow_coverage_complete: bool = False
+    local_rebuy_receipts_linked: bool = False
     special_pool_local_floors_complete: bool = False
     history_complete: bool = False
     cross_bot_ownership_verified: bool = False
