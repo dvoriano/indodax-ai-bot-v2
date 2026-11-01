@@ -240,6 +240,38 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
                 "pending_shadow_proposals"], 1,
         )
 
+    def test_unacknowledged_market_advisory_cannot_be_decided(self):
+        self.market_cycle()
+        with sqlite3.connect(self.ledger.db_path) as db:
+            data = db.execute(
+                "SELECT proposal_id,pass_callback FROM m05_market_advisory_outbox"
+            ).fetchone()
+        self.assertIsNotNone(data)
+        result = self.ledger.apply_callback(
+            user_id=OWNER, chat_id=OWNER,
+            callback_data=data[1], now_epoch=NOW + 1,
+        )
+        self.assertEqual(result["reason"], "M05_ADVISORY_NOT_SENT_TO_OWNER")
+        self.assertFalse(result["accepted"])
+        self.assertIsNone(result["final_decision"])
+        self.assertEqual(
+            self.ledger.market_advisory_delivery_status(data[0]), "QUEUED",
+        )
+
+    def test_expired_unsent_proposal_is_not_delivered(self):
+        self.market_cycle()
+        with sqlite3.connect(self.ledger.db_path) as db:
+            proposal_id = db.execute(
+                "SELECT proposal_id FROM m05_market_advisory_outbox"
+            ).fetchone()[0]
+        self.assertIsNone(self.ledger.claim_market_advisory_delivery(
+            now_epoch=CLOSED + 90,
+        ))
+        self.assertEqual(
+            self.ledger.market_advisory_delivery_status(proposal_id),
+            "EXPIRED",
+        )
+
     def test_auto_mode_never_forges_manual_proposal(self):
         self.ledger.switch_mode(
             user_id=OWNER, chat_id=OWNER, mode="AUTO", now_epoch=NOW,
