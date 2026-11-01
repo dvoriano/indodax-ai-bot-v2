@@ -203,11 +203,21 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
                     )
                 history_rows.extend(orders)
                 fill_rows.extend(fills)
-            order_keys = [o.order_id for o in history_rows]
-            fill_keys = [x.trade_id for x in fill_rows]
-            if (len(set(order_keys)) != len(order_keys)
-                    or len(set(fill_keys)) != len(fill_keys)):
-                raise boundary.M06ScopeDenied("M06_COVERAGE_WINDOW_OVERLAP_CONFLICT")
+            # An order touching the 7-day boundary may appear twice in
+            # otherwise complete adjacent windows. Deduplicate only an
+            # IDENTICAL record; a conflicting replay is a hard rejection.
+            unique_orders = {}
+            unique_fills = {}
+            for record in history_rows:
+                earlier = unique_orders.setdefault(record.order_id, record)
+                if earlier != record:
+                    raise boundary.M06ScopeDenied("M06_COVERAGE_ORDER_WINDOW_CONFLICT")
+            for record in fill_rows:
+                earlier = unique_fills.setdefault(record.trade_id, record)
+                if earlier != record:
+                    raise boundary.M06ScopeDenied("M06_COVERAGE_FILL_WINDOW_CONFLICT")
+            history_rows = list(unique_orders.values())
+            fill_rows = list(unique_fills.values())
             review = reconcile_readonly_private_snapshot(
                 account=account, open_orders=open_orders,
                 order_history=tuple(history_rows),
