@@ -271,6 +271,10 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
             self.ledger.market_advisory_delivery_status(proposal_id),
             "EXPIRED",
         )
+        self.assertEqual(
+            self.ledger.status(user_id=OWNER, chat_id=OWNER)[
+                "pending_shadow_proposals"], 0,
+        )
 
     def test_auto_mode_never_forges_manual_proposal(self):
         self.ledger.switch_mode(
