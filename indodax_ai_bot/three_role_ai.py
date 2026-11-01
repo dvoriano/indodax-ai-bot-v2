@@ -335,7 +335,10 @@ def _reject(reason: str, *, digest: str | None = None, roles: list[str] | None =
         "g1_verified": False,
         "provider_connected": False,
         "risk_veto_bypass_allowed": False,
-        "final_decision": FinalDecision.REJECT.value,
+        # G1/M04 can report unusable source or missing AI, but only M05
+        # owner Final Decision can issue PASS/REJECT for a trade proposal.
+        "final_decision": None,
+        "stage_disposition": "ADVISORY_UNAVAILABLE",
         "g2_candidate_authorized": False,
         "execution_allowed": False,
         "live_trading_authorized": False,
