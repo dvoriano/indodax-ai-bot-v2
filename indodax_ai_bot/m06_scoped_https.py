@@ -18,14 +18,14 @@ import sqlite3
 import ssl
 import stat
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .m06_private_readonly import M06ReadOnlyBlocked, READ_ONLY_PATHS
 from .m06_signed_readonly import PreparedPrivateGET, prepare_signed_get
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .m06_source_consistency import inspect_cross_source_consistency
-from .m06_account_review import reconcile_readonly_private_snapshot
+from .m06_account_review import reconcile_readonly_private_snapshot, M06SingleAccountPreview
 from .m06_ownership_ledger import M06OwnershipLedger, OwnershipConflict
 
 _HOST = "api.indodax.com"
@@ -86,6 +86,8 @@ class M06PrivateProbeResult:
     cross_bot_ownership_verified: bool = False
     bot_owned_fills_verified: bool = False
     execution_allowed: bool = False
+    # Read-only diagnostic only; never serialized or used as spending authority.
+    account_preview: M06SingleAccountPreview | None = field(default=None, repr=False)
 
 
 def _owner_private_file(path: str, *, max_bytes: int = 8192) -> dict:
@@ -420,4 +422,5 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         local_orphan_fill_records_present=capital_review.local_orphan_fill_records_present,
         external_peer_coverage_verified=False,
         special_pool_local_floors_complete=capital_review.special_pool_local_floors_complete,
+        account_preview=capital_review.account_preview,
     )
