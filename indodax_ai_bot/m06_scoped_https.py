@@ -412,5 +412,6 @@ def run_scoped_private_probe(*, approval: M06ScopedApproval,
         local_manual_floor_present=capital_review.local_manual_floor_present,
         local_shadow_reservations_present=capital_review.local_shadow_reservations_present,
         local_shadow_coverage_complete=capital_review.local_shadow_coverage_complete,
+        local_rebuy_receipts_linked=capital_review.local_rebuy_receipts_linked,
         special_pool_local_floors_complete=capital_review.special_pool_local_floors_complete,
     )
