@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import os
@@ -39,6 +40,15 @@ def _m06_fixed_budget_db() -> str:
                    "indodax-ai-bot-v2" / "m06-owner-viewonly-retry-20261031.sqlite3")
     return str(Path.home() / ".local" / "state" /
                "indodax-ai-bot-v2" / "m06-owner-viewonly-one-shot-20261031.sqlite3")
+
+
+def _m06_redacted_error_code(exc: Exception) -> str:
+    """Only show fixed M06 error identifiers; never exchange response/secret."""
+    if type(exc) is M06ScopeDenied:
+        code = str(exc)
+        if re.fullmatch(r"M06_[A-Z0-9_]{1,95}", code):
+            return code
+    return "M06_COVERAGE_NOT_ACCEPTED"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -145,11 +155,11 @@ def main(argv: list[str] | None = None) -> int:
                 journal.record_reject(
                     "M06_COVERAGE_" + uuid4().hex, result.status,
                 )
-            except (M06ScopeDenied, ValueError):
+            except (M06ScopeDenied, ValueError) as exc:
                 print(json.dumps({
                     "stage":"M06_ACCOUNT_COVERAGE_SCOPED",
                     "status":"REJECT",
-                    "reason":"M06_COVERAGE_NOT_ACCEPTED",
+                    "reason":_m06_redacted_error_code(exc),
                     "execution_allowed":False,
                 },sort_keys=True), file=sys.stderr)
                 return 3

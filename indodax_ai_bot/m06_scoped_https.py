@@ -279,6 +279,19 @@ class M06RequestBudget:
             return count + 1
 
 
+def _m06_safe_http_status(status: object) -> str:
+    """HTTP status class only; never serialize response body, IDs or headers.
+
+    Specific fixed statuses explain credential, permission, clock/signature
+    and rate-limit failures without exposing private exchange responses.
+    """
+    if type(status) is not int:
+        return "M06_PRIVATE_HTTP_NON_200"
+    if status in (400, 401, 403, 404, 408, 429, 500, 502, 503, 504):
+        return "M06_PRIVATE_HTTP_" + str(status)
+    return "M06_PRIVATE_HTTP_NON_200"
+
+
 def _read_json_over_verified_tls(request: PreparedPrivateGET) -> Any:
     """Only the four fixed HTTPS GET routes; no caller URL, redirects or proxy."""
     if type(request) is not PreparedPrivateGET or request.path not in READ_ONLY_PATHS:
@@ -301,7 +314,7 @@ def _read_json_over_verified_tls(request: PreparedPrivateGET) -> Any:
                      headers=request.headers)
         response = conn.getresponse()
         if response.status != 200:
-            raise M06ScopeDenied("M06_PRIVATE_HTTP_NON_200")
+            raise M06ScopeDenied(_m06_safe_http_status(response.status))
         media = response.getheader("Content-Type", "")
         if not media.lower().split(";", 1)[0].strip() == "application/json":
             raise M06ScopeDenied("M06_PRIVATE_HTTP_NOT_JSON")
