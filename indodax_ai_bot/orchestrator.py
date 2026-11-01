@@ -24,6 +24,7 @@ from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, Protected
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
+from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
@@ -267,6 +268,16 @@ class DailyScalpingOrchestrator:
         return run_coverage_readonly_once(
             approval=approval, budget=budget, api_key=api_key,
             secret_key=secret_key, local_ownership_db=local_ownership_db,
+        )
+
+    def inspect_m06_account_diagnostic_once(self, *,
+            approval: M06ScopedApproval, budget: M06RequestBudget,
+            api_key: str, secret_key: str) -> M06AccountDiagnosticResult:
+        """Original V2 orchestrator, ONE owner-approved account GET only."""
+        self.settings.require_m01_safety()
+        return run_account_diagnostic_readonly_once(
+            approval=approval, budget=budget,
+            api_key=api_key, secret_key=secret_key,
         )
 
     def _record_m05_reject(self, cycle: CycleResult) -> CycleResult:
