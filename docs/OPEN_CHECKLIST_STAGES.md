@@ -134,12 +134,12 @@ Owner VPS 1 Nov 2026 accepted `Ran 17 tests in 1.323s\nOK` and marker `M06_FILL_
 - [ ] Selesai. Exchange-confirmed bot-owned lots, fees, settlement, and rebuy attribution not proven.
 
 ### M06-05 · Check cross-bot account balance/position ownership before LIVE coexistence.
-CODED on [DRAFT PR#29](https://github.com/dvoriano/indodax-ai-bot-v2/pull/29): original V2 read-only UID-bound SQLite inspection detects local foreign-account records and orphan fill observations; original account review still rejects forged peer completeness, and **always** leaves external-peer/account ownership unverified. Seven new focused offline tests added, **not yet owner VPS tested**. No V1 source/process access or new exchange GO. Local lack of conflicts is NEVER external account coexistence approval.
-- [ ] Kode
-- [ ] Audit
-- [ ] Terhubung bot
-- [ ] Deploy
-- [ ] Selesai
+Owner VPS 1 November 2026 at exact PR#29 source SHA `790f0fddde2c9c43c5bf1d0113bcb911589b593d`: **13/13 scoped offline PASS in 1.318s**, marker `M06_CROSS_BOT_LOCAL_GUARD_PASS`. Seven new `tests.test_m06_local_coexistence_guard` and six existing `tests.test_m06_private_uid_binding` tests PASS. Same original V2 UID-bound SQLite `mode=ro` snapshot detects foreign account-hash records, shadow commitments and orphan local fill observations; original `DailyScalpingOrchestrator` with mocked four GETs returns redacted flags and REJECT. **Absence of local conflicts is not evidence that other accounts, peers, V1, manual sessions or external clients no longer access the same exchange wallet**; all external peer coverage, spendable capital and trading rights remain FALSE. No V1 repo/process reads or real private calls.
+- [x] Kode. Original V2 account ownership ledger has local other-UID and unattributed-fill risk indicators without new bots or services.
+- [x] Audit. Owner VPS original source 13/13 tests PASS at SHA `790f0fddde2c9c43c5bf1d0113bcb911589b593d`; no exchange requests or permission escalation.
+- [x] Terhubung bot. Original orchestrator → read-only account diagnostic and CLI expose Boolean-only coexistence flags; always final REJECT.
+- [ ] Deploy. Draft PR#29 is not consolidated to the primary V2 main/release runtime.
+- [ ] Selesai. Actual exchange-wide shared-account liabilities, external peer controls and bot-owned position proof are outstanding.
 
 ### M07-01 · Official signed order/status/cancel adapter with hardlocked safe mode until LIVE GO.
 - [ ] Kode
