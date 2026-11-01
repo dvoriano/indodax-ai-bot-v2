@@ -206,6 +206,8 @@ class M06ReadOnlyReconciliation:
     execution_allowed: bool = False
     # One diagnostic observation, not a second authorization gate.
     account_preview: M06SingleAccountPreview | None = field(default=None, repr=False)
+    # One redacted account evidence checklist; does NOT require new owner clicks.
+    unresolved_requirements: tuple[str, ...] = ()
 
 
 def reconcile_readonly_private_snapshot(*, account: AccountBalances,
@@ -283,8 +285,34 @@ def reconcile_readonly_private_snapshot(*, account: AccountBalances,
     special_unknown = any(
         p.observed_wallet_qty > 0 for p in pool_previews
     )
+    # Consolidated M06-02..05 evidence gaps. These are observations,
+    # not nested manual approvals or trust flags derived from mocks.
+    missing = [
+        "M06_FULL_ACCOUNT_HISTORY_UNPROVEN",
+        "M06_EXTERNAL_ACCOUNT_COMMITMENTS_UNPROVEN",
+    ]
+    if local_rebuy is None:
+        missing.append("M06_LOCAL_ACCOUNT_LEDGER_UNBOUND")
+    else:
+        if not local_rebuy.local_shadow_coverage_complete:
+            missing.append("M06_LOCAL_SHADOW_COMMITMENTS_UNPROVEN")
+        if local_rebuy.local_other_account_records_present:
+            missing.append("M06_OTHER_ACCOUNT_UID_LOCAL_RECORDS")
+        if local_rebuy.local_orphan_fill_records_present:
+            missing.append("M06_UNATTRIBUTED_LOCAL_FILLS")
+        if local_rebuy.total_idr_local_protected > 0:
+            missing.append("M06_SPECIAL_REBUY_SETTLEMENT_UNPROVEN")
+        if not local_rebuy.local_rebuy_receipts_linked:
+            missing.append("M06_LOCAL_RECEIPTS_INCOMPLETE")
+    if pending_buy:
+        missing.append("M06_PENDING_BUY_NOTIONAL_UNVERIFIED")
+    if special_unknown:
+        missing.append("M06_SPECIAL_WALLET_OWNERSHIP_UNPROVEN")
+    if consistency.unmatched_fill_count:
+        missing.append("M06_UNMATCHED_EXCHANGE_WINDOW_FILLS")
     return M06ReadOnlyReconciliation(
         status="REJECT",
+        unresolved_requirements=tuple(missing),
         reason="M06_UNVERIFIED_REBUY_OWNERSHIP_AND_ACCOUNT_COVERAGE",
         account_preview=account_preview,
         observed_idr_balance=True,
