@@ -578,7 +578,7 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
         self.assertEqual(preview["round_down_unallocated_base_qty"], "0.0")
         self.assertEqual(preview["visible_bid_book_sell_gross_idr"], "99000.0")
         self.assertTrue(preview["sell_notional_meets_public_minimum"])
-        self.assertTrue(preview["minimum_idr_checked_on_buy_and_sell"])
+        self.assertTrue(preview["minimum_idr_met_on_buy_and_sell"])
         self.assertEqual(
             D(preview["required_future_sell_limit_price_ceiled_to_tick"])
             % D("1"), D("0")
@@ -620,7 +620,7 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
         self.assertEqual(preview["round_down_unallocated_base_qty"], "0.1")
         self.assertEqual(preview["visible_bid_book_sell_gross_idr"], "98990.1")
         self.assertFalse(preview["sell_notional_meets_public_minimum"])
-        self.assertFalse(preview["minimum_idr_checked_on_buy_and_sell"])
+        self.assertFalse(preview["minimum_idr_met_on_buy_and_sell"])
         self.assertFalse(preview["execution_allowed"])
 
     def test_m07_missing_or_suspended_rules_never_authorize_sell_draft(self):
