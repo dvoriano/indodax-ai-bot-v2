@@ -56,6 +56,8 @@ class DeepCandidate:
     # M03 observed PUBLIC quote+depth hypothetical ticket economics only.
     # Account-specific all-in fees are unknown. Never a tradable quote.
     public_quote_friction_diagnostic: dict | None = None
+    # M07 public-source-bound gate, never capital/account or order authority.
+    m07_same_candidate_public_preflight: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -85,6 +87,8 @@ class DeepCandidate:
             "public_maintenance_flag": self.public_maintenance_flag,
             "public_quote_friction_diagnostic":
                 self.public_quote_friction_diagnostic,
+            "m07_same_candidate_public_preflight":
+                self.m07_same_candidate_public_preflight,
             "market_tradability_verified": False,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
