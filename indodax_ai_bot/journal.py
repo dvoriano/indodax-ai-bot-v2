@@ -14,6 +14,7 @@ from pathlib import Path
 from .contracts import FinalDecision
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
 from .m07_private_order_readonly import M07ReadOnlyOrder
+from .m07_readonly_fills import M07VerifiedReadOnlyFills
 from .public_market import Candle, PublicCandleHistory, PublicDataError
 
 
@@ -126,6 +127,26 @@ class DecisionJournal:
                     observed_ms INTEGER NOT NULL,
                     provenance TEXT NOT NULL CHECK (
                        provenance='INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER'
+                    ),
+                    PRIMARY KEY(account_fingerprint,symbol,client_order_id)
+                )"""
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_exchange_readonly_fill_summaries (
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    full_order_id TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    qty_base TEXT NOT NULL,
+                    gross_quote_idr TEXT NOT NULL,
+                    commission_including_tax_idr TEXT NOT NULL,
+                    net_quote_idr TEXT NOT NULL,
+                    fill_count INTEGER NOT NULL,
+                    fill_digest TEXT NOT NULL,
+                    verified_at_ms INTEGER NOT NULL,
+                    provenance TEXT NOT NULL CHECK (
+                        provenance='INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY'
                     ),
                     PRIMARY KEY(account_fingerprint,symbol,client_order_id)
                 )"""
@@ -557,6 +578,59 @@ class DecisionJournal:
                      account_fingerprint, order.symbol, order.client_order_id),
                 )
         return {"replay": False, "execution_allowed": False}
+
+    def record_m07_exchange_readonly_fills(
+        self, *, account_fingerprint: str,
+        fills: M07VerifiedReadOnlyFills, observed_ms: int,
+    ) -> dict:
+        """Immutable, same-journal historical account receipts, NOT bot lots."""
+        if (type(account_fingerprint) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", account_fingerprint)
+                or type(fills) is not M07VerifiedReadOnlyFills
+                or type(observed_ms) is not int
+                or not 1_000_000_000_000 <= observed_ms <= 9_999_999_999_999):
+            raise DecisionConflictError("M07_READONLY_FILLS_JOURNAL_INPUT_INVALID")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            known = con.execute(
+                "SELECT full_order_id,side,status,executed_qty FROM "
+                "m07_exchange_readonly_orders WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (account_fingerprint,fills.account_symbol,fills.client_order_id),
+            ).fetchone()
+            if (known is None
+                    or known[:3] != (fills.full_order_id,fills.side,"FILLED")
+                    or Decimal(known[3]) != fills.executed_base):
+                raise DecisionConflictError("M07_READONLY_FILLS_ORDER_NOT_ATTESTED")
+            current = (
+                fills.full_order_id,fills.side,format(fills.executed_base,"f"),
+                format(fills.gross_quote,"f"),
+                format(fills.total_commission_including_tax_quote,"f"),
+                format(fills.net_quote,"f"),fills.count,fills.sha256,
+            )
+            old = con.execute(
+                "SELECT full_order_id,side,qty_base,gross_quote_idr,"
+                "commission_including_tax_idr,net_quote_idr,fill_count,fill_digest "
+                "FROM m07_exchange_readonly_fill_summaries WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (account_fingerprint,fills.account_symbol,fills.client_order_id),
+            ).fetchone()
+            if old is not None:
+                if (old[0],old[1]) != current[:2] or old[6:] != current[6:] or any(
+                    Decimal(old[i]) != Decimal(current[i]) for i in range(2,6)
+                ):
+                    raise DecisionConflictError("M07_READONLY_FILLS_REPLAY_CONFLICT")
+                return {"replay":True,"execution_allowed":False}
+            con.execute(
+                "INSERT INTO m07_exchange_readonly_fill_summaries "
+                "(account_fingerprint,symbol,client_order_id,full_order_id,"
+                "side,qty_base,gross_quote_idr,commission_including_tax_idr,"
+                "net_quote_idr,fill_count,fill_digest,verified_at_ms,provenance)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (account_fingerprint,fills.account_symbol,fills.client_order_id,
+                 *current,observed_ms,"INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"),
+            )
+        return {"replay":False,"execution_allowed":False}
 
     def m07_offline_intent_summary(self) -> dict:
         """Anonymized original journal status; no account/API/order secrets."""
