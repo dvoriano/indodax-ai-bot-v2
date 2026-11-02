@@ -16,6 +16,9 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal, DecisionConflictError
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
+from .m07_private_order_readonly import M07ReadOnlyError
+from .m06_owner_coverage import _existing_v2_credentials
+from .m06_scoped_https import read_view_only_credentials
 from .orchestrator import DailyScalpingOrchestrator
 from .deep_analysis import OwnerEnteredAllInFeeSnapshot
 from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
@@ -70,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Simulate UNKNOWN for an already reserved synthetic M07 intent; permanent retry hold, no exchange GET")
     group.add_argument("--m07-offline-status-once", action="store_true",
                        help="Record UNTRUSTED synthetic normalized order status in original M07 journal, no exchange request")
+    group.add_argument("--m07-private-order-status-once", action="store_true",
+                       help="Explicit TAPI V2 View Only account + order GET, no trade/cancel/auto retry")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
                        help="Inspect ORIGINAL hardlocked TAPI V2 order/status/cancel contract without API keys, network or orders")
     group.add_argument("--m06-account-review-once", action="store_true",
@@ -136,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
+    parser.add_argument("--m07-private-symbol", default=None)
+    parser.add_argument("--m07-private-client-order-id", default=None)
     parser.add_argument("--m07-observation-id", default=None)
     parser.add_argument("--m07-observed-status", default=None)
     parser.add_argument("--m07-cumulative-base", default=None)
@@ -192,6 +199,18 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_STATUS_INPUT_INVALID")
         elif any(x is not None for x in status_fields):
             raise ConfigurationError("M07_STATUS_FIELDS_ONLY_FOR_SYNTHETIC_CLI")
+        if args.m07_private_order_status_once:
+            settings.require_m01_safety()
+            if (type(args.m07_private_symbol) is not str
+                    or not re.fullmatch(r"[A-Z0-9]{2,20}IDR",
+                                        args.m07_private_symbol)
+                    or type(args.m07_private_client_order_id) is not str
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                        args.m07_private_client_order_id)):
+                raise ConfigurationError("M07_READONLY_EXPLICIT_ORDER_ID_REQUIRED")
+        elif (args.m07_private_symbol is not None
+                or args.m07_private_client_order_id is not None):
+            raise ConfigurationError("M07_READONLY_FIELDS_REQUIRE_READONLY_COMMAND")
         m03_owner_fee_snapshot = None
         if args.m03_owner_fee_snapshot_file is not None:
             if not (
@@ -612,6 +631,43 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m07_private_order_status_once:
+            # Reuse only the preexisting V2 owner-only 0600 credentials.
+            # No discovery outside V2, no secrets in logs or JSON result.
+            try:
+                credentials_path = _existing_v2_credentials()
+                if credentials_path is None:
+                    raise M07ReadOnlyError("M07_V2_VIEWONLY_FILE_NOT_FOUND")
+                api_key, secret_key = read_view_only_credentials(
+                    str(credentials_path)
+                )
+                report = app.inspect_m07_private_readonly_order_once(
+                    symbol=args.m07_private_symbol,
+                    client_order_id=args.m07_private_client_order_id,
+                    api_key=api_key, secret_key=secret_key,
+                )
+            except (ValueError, OSError, DecisionConflictError,
+                    M06ScopeDenied) as exc:
+                # Only fixed diagnostic classes, never raw exchange payload,
+                # raw file path, HTTP bodies, IDs or credential material.
+                code = str(exc)
+                if not re.fullmatch(r"M07_[A-Z0-9_]{1,100}", code):
+                    code = "M07_READONLY_STATUS_UNAVAILABLE"
+                print(json.dumps({
+                    "m07_private_readonly_order": {
+                        "status": "UNRESOLVED", "reason": code,
+                        "execution_allowed": False,
+                    }, "final_decision": None,
+                    "execution_allowed": False,
+                }), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m07_private_readonly_order": report,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
         if (args.m07_offline_intent_once or args.m07_offline_unknown_once
                 or args.m07_offline_status_once):
             try:
