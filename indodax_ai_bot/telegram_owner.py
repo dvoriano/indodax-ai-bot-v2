@@ -55,6 +55,29 @@ class OfflineTelegramOwnerInterface:
                     + " tersimpan. AUTO tidak mengaktifkan order."
                 ),
             }
+        if command == "/reviewtest" and len(parts) == 1:
+            demo = self.ledger.queue_owner_review_button_test(
+                user_id=user_id, chat_id=chat_id, now_epoch=now_epoch,
+                chat_type=chat_type,
+            )
+            if demo.get("accepted") is True:
+                return {
+                    **demo,
+                    "text": (
+                        "SIMULASI M05: tombol PASS/REJECT review-only "
+                        "diantrekan untuk tick Telegram berikutnya. "
+                        "Berlaku maksimal 90 detik, bukan sinyal pasar, "
+                        "tidak memakai AI/G1/saldo. Trading OFF."
+                    ),
+                }
+            return {
+                **demo,
+                "text": (
+                    "SIMULASI M05 tidak diantrekan: "
+                    + demo.get("reason", "UNAVAILABLE")
+                    + ". Tidak ada order. Trading OFF."
+                ),
+            }
         # Original M05 SQLite review records are genuine local evidence,
         # never exchange trade/fill evidence. Read the SAME owner ledger.
         if command in ("/market", "/history") and len(parts) == 1:
