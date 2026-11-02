@@ -379,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                 "scoped_special_unresolved_fills":dict(
                     result.scoped_special_unresolved_fills),
                 "special_sale_scope_not_full_history":True,
+                "scoped_special_history_gaps":result.scoped_special_history_gaps,
                 "general_idr_budget_from_this_scope":None,
                 "unresolved_requirements":list(result.unresolved_requirements),
                 "m06_02_balance_and_open_orders_observed":
