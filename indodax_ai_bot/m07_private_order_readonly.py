@@ -128,7 +128,9 @@ def normalize_order_status(
 def _https_json(request: PreparedPrivateGET | PreparedM07Request) -> object:
     """Fixed host, verified TLS, GET only, bounded response. No auto-retry."""
     if type(request) is PreparedPrivateGET:
-        if request.path not in ("/api/v2/account", "/api/v2/order/histories"):
+        if request.path not in (
+                "/api/v2/account", "/api/v2/order/histories",
+                "/api/v2/myTrades"):
             raise M07ReadOnlyError("M07_READONLY_PATH_DENIED")
     elif type(request) is PreparedM07Request:
         if (request.path != "/api/v2/order"
@@ -199,7 +201,9 @@ def _read_and_record_order(*, journal, symbol: str,
                            api_key: str, secret_key: str,
                            requests_completed: int,
                            history_discovered: bool,
-                           history_submit_ms: int | None = None) -> dict:
+                           history_submit_ms: int | None = None,
+                           history_finish_ms: int | None = None,
+                           include_fills: bool = False) -> dict:
     ts = int(time.time() * 1000)
     request = OfficialV2OrderAdapter().prepare_status_viewonly_offline(
         symbol=symbol, orig_client_order_id=client_order_id,
@@ -220,7 +224,7 @@ def _read_and_record_order(*, journal, symbol: str,
         account_fingerprint=fingerprint, order=order,
         observed_ms=int(time.time() * 1000),
     )
-    return {
+    report = {
         "status": "M07_EXCHANGE_STATUS_READONLY_OBSERVED",
         "api_version": "TAPI_V2",
         "requests_completed": requests_completed,
@@ -240,6 +244,55 @@ def _read_and_record_order(*, journal, symbol: str,
         "order_sent": False,
         "execution_allowed": False,
     }
+    if include_fills:
+        # One read-only follow-up to official TAPIv2 myTrades. No implied
+        # bot ownership, free balance or right to trade special assets.
+        if (order.status != "FILLED"
+                or history_submit_ms is None
+                or type(history_finish_ms) is not int
+                or history_finish_ms < history_submit_ms
+                or history_finish_ms > int(time.time()*1000)
+                or history_finish_ms - history_submit_ms > (
+                    _SEVEN_DAYS_MS - 120000)):
+            raise M07ReadOnlyError("M07_FILLS_HISTORY_FINISH_UNVERIFIED")
+        from .m07_readonly_fills import reconcile_m07_mytrades
+        start_ms = history_submit_ms - 60000
+        end_ms = history_finish_ms + 60000
+        if end_ms - start_ms > _SEVEN_DAYS_MS:
+            raise M07ReadOnlyError("M07_FILLS_WINDOW_TOO_WIDE")
+        request = prepare_signed_get(
+            path="/api/v2/myTrades", api_key=api_key,
+            secret_key=secret_key, timestamp_ms=int(time.time()*1000),
+            symbol=symbol.lower(),
+            start_ms=start_ms, end_ms=end_ms, limit=1000,
+        )
+        fills = reconcile_m07_mytrades(
+            _https_json(request), order=order,
+            window_start_ms=start_ms, window_end_ms=end_ms,
+        )
+        rec = journal.record_m07_exchange_readonly_fills(
+            account_fingerprint=fingerprint, fills=fills,
+            observed_ms=int(time.time()*1000),
+        )
+        report.update({
+            "status": "M07_EXCHANGE_FILLS_READONLY_RECONCILED",
+            "requests_completed": requests_completed + 1,
+            "matched_fill_count": fills.count,
+            "executed_base_qty_reconciled": str(fills.executed_base),
+            "gross_quote_idr": str(fills.gross_quote),
+            "commission_including_tax_idr": str(
+                fills.total_commission_including_tax_quote),
+            "net_quote_idr": str(fills.net_quote),
+            "quote_semantics": ("NET_SELL_PROCEEDS_IDR"
+                                if fills.side == "SELL" else
+                                "BUY_COST_INCLUDING_FEE_IDR"),
+            "fills_and_fee_history_reconciled": True,
+            "read_only_fill_journal_replay": rec["replay"],
+            "bot_ownership_verified": False,
+            "unknown_intent_released": False,
+            "execution_allowed": False,
+        })
+    return report
 
 
 def read_m07_order_status_once(*, journal, symbol: str,
@@ -277,7 +330,7 @@ def _latest_history_candidate(
         if allow_empty:
             return None
         raise M07ReadOnlyError("M07_HISTORY_EMPTY_UNRESOLVED")
-    best_id, best_epoch = None, -1
+    best_id, best_epoch, best_finish = None, -1, None
     for row in rows:
         if (type(row) is not dict
                 or type(row.get("symbol")) is not str
@@ -299,7 +352,8 @@ def _latest_history_candidate(
             raise M07ReadOnlyError("M07_HISTORY_AMBIGUOUS_LATEST")
         if submit_ms > best_epoch:
             best_id, best_epoch = client_id, submit_ms
-    return best_id, best_epoch
+            best_finish = row.get("finishTime")
+    return best_id, best_epoch, best_finish
 
 
 def _latest_client_id_from_history(payload: object, *,
@@ -338,7 +392,8 @@ def read_m07_latest_order_status_once(*, journal, symbol: str,
     )
 
 def read_m07_14day_order_status_once(*, journal, symbol: str,
-                                     api_key: str, secret_key: str) -> dict:
+                                     api_key: str, secret_key: str,
+                                     include_fills: bool = False) -> dict:
     """One strictly bounded 14-day retrospective View Only diagnostic.
 
     Exactly 1 account GET + 2 <=7-day histories + at most 1 GET status.
@@ -379,7 +434,8 @@ def read_m07_14day_order_status_once(*, journal, symbol: str,
         journal=journal, symbol=symbol, client_order_id=latest[0],
         uid=uid, api_key=api_key, secret_key=secret_key,
         requests_completed=4, history_discovered=True,
-        history_submit_ms=latest[1],
+        history_submit_ms=latest[1], history_finish_ms=latest[2],
+        include_fills=include_fills,
     )
     result["history_window_last_days"] = 14
     result["history_is_full_account_coverage"] = False
