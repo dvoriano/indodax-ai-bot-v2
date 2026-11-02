@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from indodax_ai_bot.owner_control import OwnerDecisionLedger
-from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient
+from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient, TelegramTransportError
 from indodax_ai_bot.telegram_owner import OfflineTelegramOwnerInterface
 from indodax_ai_bot.telegram_service_tick import service_tick_once
 
@@ -73,7 +73,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
                 "message_id": 42 if "reply_markup" in payload else 41,
                 "chat": {"id": OWNER, "type": "private"},
             }
-        if method == "answerCallbackQuery":
+        if method in ("answerCallbackQuery", "editMessageReplyMarkup"):
             return True
         raise AssertionError("UNEXPECTED_METHOD")
 
@@ -104,8 +104,12 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         first = self.tick()
         self.assertEqual(first["processed"], 1)
         self.assertFalse(first["execution_allowed"])
-        self.assertIsNone(self.sent_buttons)
+        self.assertIsNotNone(self.sent_buttons)
         self.assertEqual(self.ledger.telegram_next_offset(), 102)
+        self.assertEqual(
+            [name for name, _ in self.calls],
+            ["getMe", "getWebhookInfo", "getUpdates", "sendMessage"],
+        )
         with sqlite3.connect(self.db) as db:
             p = db.execute(
                 "SELECT pair,entry_price_idr,quantity,state,execution_allowed "
@@ -130,6 +134,15 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(third["processed"], 1)
         self.assertFalse(third["execution_allowed"])
         self.assertIn("answerCallbackQuery", [m for m, _ in self.calls])
+        edits = [p for m, p in self.calls if m == "editMessageReplyMarkup"]
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["message_id"], 42)
+        self.assertEqual(edits[0]["chat_id"], OWNER)
+        permanent = [p for m, p in self.calls if m == "sendMessage"
+                     and "TERCATAT satu kali" in p.get("text", "")]
+        self.assertEqual(len(permanent), 1)
+        self.assertIn("PASS", permanent[0]["text"])
+        self.assertIn("Trading OFF", permanent[0]["text"])
         self.assertEqual(self.ledger.telegram_next_offset(), 103)
         with sqlite3.connect(self.db) as db:
             row = db.execute(
@@ -159,10 +172,88 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
             self.assertEqual(db.execute(
                 "SELECT state FROM m05_proposals"
             ).fetchone()[0], "PASS")
+        self.assertEqual(
+            len([m for m, _ in self.calls if m == "editMessageReplyMarkup"]), 1
+        )
+        self.assertEqual(
+            len([m for m, p in self.calls if m == "sendMessage"
+                 and "TERCATAT satu kali" in p.get("text", "")]), 1
+        )
         self.assertTrue(all(m in {
             "getMe", "getWebhookInfo", "getUpdates",
-            "sendMessage", "answerCallbackQuery",
+            "sendMessage", "answerCallbackQuery", "editMessageReplyMarkup",
         } for m, _ in self.calls))
+
+    def test_wrong_bot_message_id_cannot_record_or_clear_buttons(self):
+        self.incoming = [self.command()]
+        self.tick()
+        buttons = self.sent_buttons["reply_markup"]["inline_keyboard"][0]
+        bad = self.callback(buttons[0]["callback_data"])
+        bad["callback_query"]["message"]["message_id"] = 999
+        self.incoming = [bad]
+        second = self.tick()
+        self.assertEqual(second["processed"], 1)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state FROM m05_proposals"
+            ).fetchone()[0], "PENDING")
+        self.assertEqual(
+            len([m for m, _ in self.calls if m == "editMessageReplyMarkup"]), 0
+        )
+        self.assertEqual(
+            len([m for m, p in self.calls if m == "sendMessage"
+                 and "TERCATAT satu kali" in p.get("text", "")]), 0
+        )
+
+    def test_reject_generates_one_persistent_confirmation(self):
+        self.incoming = [self.command()]
+        self.tick()
+        reject_cb = self.sent_buttons["reply_markup"]["inline_keyboard"][0][1][
+            "callback_data"]
+        self.incoming = [self.callback(reject_cb)]
+        self.tick()
+        notices = [p["text"] for m, p in self.calls if m == "sendMessage"
+                   and "TERCATAT satu kali" in p.get("text", "")]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("REJECT", notices[0])
+        self.assertIn("Trading OFF", notices[0])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state,execution_allowed FROM m05_proposals"
+            ).fetchone(), ("REJECT", 0))
+
+    def test_callback_popup_failure_still_confirms_once_without_retry(self):
+        self.incoming = [self.command()]
+        self.tick()
+        buttons = self.sent_buttons["reply_markup"]["inline_keyboard"][0]
+        self.incoming = [self.callback(buttons[0]["callback_data"])]
+
+        def fail_popup(method, payload):
+            if method == "answerCallbackQuery":
+                self.calls.append((method, dict(payload)))
+                raise TelegramTransportError("FAKE_POPUP_UNAVAILABLE")
+            return self.fake_api(method, payload)
+
+        with patch.object(TelegramBotApiClient, "call",
+                          side_effect=fail_popup):
+            with self.assertRaisesRegex(
+                    TelegramTransportError, "M05_OWNER_FEEDBACK_UNCERTAIN_NO_RETRY"):
+                service_tick_once(env=self.env)
+
+        self.assertEqual(self.ledger.telegram_next_offset(), 103)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state,execution_allowed FROM m05_proposals"
+            ).fetchone(), ("PASS", 0))
+        self.assertEqual(len([m for m, _ in self.calls
+                              if m == "editMessageReplyMarkup"]), 1)
+        self.assertEqual(len([m for m, p in self.calls if m == "sendMessage"
+                              and "TERCATAT satu kali" in p.get("text", "")]), 1)
+        self.incoming = [self.callback(buttons[0]["callback_data"])]
+        again = self.tick()
+        self.assertEqual(again["processed"], 0)
+        self.assertEqual(len([m for m, p in self.calls if m == "sendMessage"
+                              and "TERCATAT satu kali" in p.get("text", "")]), 1)
 
     def test_untrusted_chat_and_nonowner_cannot_queue(self):
         view = OfflineTelegramOwnerInterface(self.ledger)

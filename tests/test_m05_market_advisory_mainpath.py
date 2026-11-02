@@ -77,7 +77,7 @@ class FakeTelegram:
         elif method == "getUpdates":
             result = [u for u in self.updates
                       if u["update_id"] >= payload["offset"]]
-        elif method == "answerCallbackQuery":
+        elif method in ("answerCallbackQuery", "editMessageReplyMarkup"):
             result = True
         else:
             raise AssertionError("UNEXPECTED_TELEGRAM_METHOD")
@@ -170,7 +170,7 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         )
         self.assertEqual(
             [method for method, _ in fake.calls],
-            ["getMe", "getWebhookInfo", "sendMessage", "getUpdates"],
+            ["getMe", "getWebhookInfo", "getUpdates", "sendMessage"],
         )
         self.assertEqual(fake.sent["chat_id"], OWNER)
         self.assertIn("G1/account/order: UNVERIFIED", fake.sent["text"])
@@ -185,7 +185,8 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertEqual(result["handler"]["handled"], 1)
         self.assertEqual(
             [method for method, _ in next_fake.calls],
-            ["getMe", "getWebhookInfo", "getUpdates", "answerCallbackQuery"],
+            ["getMe", "getWebhookInfo", "getUpdates",
+             "answerCallbackQuery", "editMessageReplyMarkup", "sendMessage"],
         )
         with sqlite3.connect(self.ledger.db_path) as db:
             self.assertEqual(db.execute(
