@@ -451,14 +451,19 @@ def assess_public_pair_order_constraints(
         return dict(result, status="INVALID_PUBLIC_PRICE_OR_QTY_RULE")
     bid = obs.snapshot.best_bid_idr
     ask = obs.snapshot.best_ask_idr
-    on_step = bid % tick == ZERO and ask % tick == ZERO
-    # For observed book-walk BUY quantities: market buys are funded in IDR,
-    # not assured to return a particular base precision after fees.
-    rounded_qty = (observed_book_acquired // increment) * increment
-    notional_enough = illustrative_idr >= min_idr
-    qty_enough = observed_book_acquired >= min_qty
-    rounded_enough = rounded_qty >= min_qty
-    increment_aligned = rounded_qty == observed_book_acquired
+    # Huge ratios between dynamic price and step sizes can exceed Decimal
+    # context precision. Unrepresentable book/precision stays UNKNOWN.
+    try:
+        on_step = bid % tick == ZERO and ask % tick == ZERO
+        # For observed book-walk BUY quantities: market buys funded in IDR
+        # are not assured to return exact base precision after fees.
+        rounded_qty = (observed_book_acquired // increment) * increment
+        notional_enough = illustrative_idr >= min_idr
+        qty_enough = observed_book_acquired >= min_qty
+        rounded_enough = rounded_qty >= min_qty
+        increment_aligned = rounded_qty == observed_book_acquired
+    except ArithmeticError:
+        return dict(result, status="PUBLIC_RULES_DECIMAL_PRECISION_UNAVAILABLE")
     result.update({
         "status": (
             "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
