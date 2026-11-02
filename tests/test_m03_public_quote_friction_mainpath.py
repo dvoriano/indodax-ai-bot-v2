@@ -422,6 +422,67 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
         self.assertFalse(constraints["actual_order_precision_and_balance_verified"])
         self.assertFalse(constraints["execution_allowed"])
 
+    def test_original_public_observe_reuses_scan_rule_metadata_without_new_get(self):
+        clock = 1800000070
+        requests = []
+        rows = [{
+            "ticker_id": "btc_idr", "id": "btcidr", "symbol": "BTCIDR",
+            "base_currency": "idr", "traded_currency": "btc",
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "50000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0, "is_maintenance": 0,
+        }]
+        minute = [
+            {"Time": 1800000000 - i*60, "Open": "99", "High": "101",
+             "Low": "98", "Close": "100", "Volume": "10"}
+            for i in range(35)
+        ]
+        fifteen = [
+            {"Time": 1799999100 - i*900, "Open": "99",
+             "High": "101", "Low": "98", "Close": "100", "Volume": "50"}
+            for i in range(3)
+        ]
+        def fetch(path):
+            requests.append(path)
+            if path == "/api/pairs":
+                return rows
+            if path == "/api/server_time":
+                return {"server_time": clock}
+            if path == "/api/ticker_all":
+                return {"tickers": {"btc_idr": {
+                    "server_time": clock, "buy": "99", "sell": "100",
+                    "last": "100", "high": "110", "low": "90",
+                    "vol_idr": "200000000",
+                }}}
+            if "/tradingview/history_v2?" in path:
+                return fifteen if "tf=15" in path else minute
+            if path == "/api/trades/btcidr":
+                return [{"date": 1800000000, "price": "100",
+                         "amount": "1", "type": "buy"}]
+            if path == "/api/depth/btcidr":
+                return {"buy": [["99", "2000"], ["98", "2000"]],
+                        "sell": [["100", "2000"], ["101", "2000"]]}
+            self.fail("UNEXPECTED_PUBLIC_GET: " + path)
+
+        market = IndodaxPublicMarket(fetch=fetch, clock=lambda: clock)
+        screen = DailyPairScanner(market).scan()
+        observed = market.observe("btc_idr", scan_context=screen.scan_context)
+        self.assertEqual(len(requests), 7)
+        self.assertEqual(requests.count("/api/pairs"), 1)
+        self.assertEqual(observed.pair_rule_fields,
+                         screen.scan_context.pair_rule_fields["btc_idr"])
+        report = observe_public_quote_friction(observed)
+        self.assertEqual(
+            report["public_pair_order_constraints"]["status"],
+            "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
+        )
+        self.assertEqual(report["published_idr_pro_all_in_fee_table"][
+            "buy_taker_percent_used"], "0.20555")
+        self.assertFalse(report["public_pair_order_constraints"][
+            "exchange_order_tradability_verified"])
+        self.assertFalse(report["execution_allowed"])
+
     def test_public_pair_rules_missing_invalid_and_quote_steps_are_fail_closed(self):
         base = {
             "price_precision": "1", "quantity_increment": "0.1",
