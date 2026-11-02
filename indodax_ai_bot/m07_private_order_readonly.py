@@ -120,7 +120,7 @@ def normalize_order_status(
 def _https_json(request: PreparedPrivateGET | PreparedM07Request) -> object:
     """Fixed host, verified TLS, GET only, bounded response. No auto-retry."""
     if type(request) is PreparedPrivateGET:
-        if request.path != "/api/v2/account":
+        if request.path not in ("/api/v2/account", "/api/v2/order/histories"):
             raise M07ReadOnlyError("M07_READONLY_PATH_DENIED")
     elif type(request) is PreparedM07Request:
         if (request.path != "/api/v2/order"
@@ -167,48 +167,40 @@ def _https_json(request: PreparedPrivateGET | PreparedM07Request) -> object:
         conn.close()
 
 
-def read_m07_order_status_once(*, journal, symbol: str,
-                               client_order_id: str,
-                               api_key: str, secret_key: str) -> dict:
-    """One foreground two-GET READ ONLY observation; no automatic retry.
-
-    Caller must have the existing owner-only V2 key file; never display it.
-    Account permissions must explicitly be View Only before order GET.
-    The authenticated result is recorded separately from synthetic intents.
-    """
-    try:
-        _symbol(symbol)
-        _client_id(client_order_id)
-    except ValueError:
-        raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID") from None
-    if (type(api_key) is not str or type(secret_key) is not str
-            or not api_key or not secret_key):
-        raise M07ReadOnlyError("M07_CREDENTIALS_UNAVAILABLE")
+def _verify_view_only_uid(*, api_key: str, secret_key: str) -> int:
     ts = int(time.time() * 1000)
-    request = prepare_signed_get(
+    prepared = prepare_signed_get(
         path="/api/v2/account", api_key=api_key,
         secret_key=secret_key, timestamp_ms=ts,
     )
-    account_payload = _https_json(request)
-    if type(account_payload) is dict and type(account_payload.get("code")) is int:
+    response = _https_json(prepared)
+    if type(response) is dict and type(response.get("code")) is int:
         raise M07ReadOnlyError("M07_ACCOUNT_API_ERROR")
     try:
-        enforce_view_only_permissions(account_payload)
+        enforce_view_only_permissions(response)
     except M06ScopeDenied:
         raise M07ReadOnlyError("M07_KEY_NOT_PROVEN_VIEW_ONLY") from None
-    uid = account_payload.get("uid")
+    uid = response.get("uid")
     if type(uid) is not int or uid <= 0:
         raise M07ReadOnlyError("M07_ACCOUNT_UID_INVALID")
+    return uid
+
+
+def _read_and_record_order(*, journal, symbol: str,
+                           client_order_id: str, uid: int,
+                           api_key: str, secret_key: str,
+                           requests_completed: int,
+                           history_discovered: bool) -> dict:
     ts = int(time.time() * 1000)
     request = OfficialV2OrderAdapter().prepare_status_offline(
         symbol=symbol, orig_client_order_id=client_order_id,
         api_key=api_key, secret_key=secret_key, timestamp_ms=ts,
     )
-    payload = _https_json(request)
     order = normalize_order_status(
-        payload, expected_symbol=symbol, expected_client_id=client_order_id,
+        _https_json(request),
+        expected_symbol=symbol,
+        expected_client_id=client_order_id,
     )
-    # No UID, raw balances, secret or API key in DB/output.
     fingerprint = hashlib.sha256(
         (api_key + ":" + str(uid)).encode("utf-8")
     ).hexdigest()
@@ -219,12 +211,14 @@ def read_m07_order_status_once(*, journal, symbol: str,
     return {
         "status": "M07_EXCHANGE_STATUS_READONLY_OBSERVED",
         "api_version": "TAPI_V2",
-        "requests_completed": _MAX_RESPONSES,
+        "requests_completed": requests_completed,
         "view_only_permissions_verified": True,
         "order_status": order.status,
         "executed_base_qty_observed": str(order.executed_qty),
         "observation_replayed": result["replay"],
         "recorded_in_original_journal": True,
+        "discovered_from_recent_history": history_discovered,
+        "history_window_full_account_verified": False,
         "exchange_account_response_authenticated": True,
         "bot_ownership_verified": False,
         "fills_and_fee_history_reconciled": False,
@@ -234,3 +228,85 @@ def read_m07_order_status_once(*, journal, symbol: str,
         "order_sent": False,
         "execution_allowed": False,
     }
+
+
+def read_m07_order_status_once(*, journal, symbol: str,
+                               client_order_id: str,
+                               api_key: str, secret_key: str) -> dict:
+    """Two GETs: owner key permissions + order by exact known client ID."""
+    try:
+        _symbol(symbol)
+        _client_id(client_order_id)
+    except ValueError:
+        raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID") from None
+    if not api_key or not secret_key:
+        raise M07ReadOnlyError("M07_CREDENTIALS_UNAVAILABLE")
+    uid = _verify_view_only_uid(api_key=api_key, secret_key=secret_key)
+    return _read_and_record_order(
+        journal=journal, symbol=symbol, client_order_id=client_order_id,
+        uid=uid, api_key=api_key, secret_key=secret_key,
+        requests_completed=2, history_discovered=False,
+    )
+
+
+def _latest_client_id_from_history(payload: object, *,
+                                   symbol: str) -> str:
+    """Only 10 recent rows: no implication of exhaustive historical coverage."""
+    if type(payload) is not dict or type(payload.get("data")) is not list:
+        raise M07ReadOnlyError("M07_HISTORY_RESPONSE_INVALID")
+    rows = payload["data"]
+    if len(rows) > 10:
+        raise M07ReadOnlyError("M07_HISTORY_LIMIT_INVALID")
+    if not rows:
+        raise M07ReadOnlyError("M07_HISTORY_EMPTY_UNRESOLVED")
+    best_id, best_epoch = None, -1
+    for row in rows:
+        if (type(row) is not dict
+                or type(row.get("symbol")) is not str
+                or row["symbol"].upper() != symbol):
+            raise M07ReadOnlyError("M07_HISTORY_SYMBOL_MISMATCH")
+        client_id = row.get("clientOrderId")
+        try:
+            _client_id(client_id)
+        except ValueError:
+            raise M07ReadOnlyError("M07_HISTORY_CLIENT_ID_INVALID") from None
+        submit_ms = row.get("submitTime")
+        if (type(submit_ms) is not int
+                or not 1_000_000_000_000 <= submit_ms <= 9_999_999_999_999):
+            raise M07ReadOnlyError("M07_HISTORY_SUBMIT_TIME_INVALID")
+        if submit_ms == best_epoch:
+            raise M07ReadOnlyError("M07_HISTORY_AMBIGUOUS_LATEST")
+        if submit_ms > best_epoch:
+            best_id, best_epoch = client_id, submit_ms
+    return best_id
+
+
+def read_m07_latest_order_status_once(*, journal, symbol: str,
+                                      api_key: str, secret_key: str) -> dict:
+    """Three GETs maximum: account → last-24h history → latest order.
+
+    No caller-known order ID needed. Even valid previous account orders are
+    NOT treated as V2 bot orders or spendable assets. Empty history never
+    causes a second search or unbounded pagination.
+    """
+    try:
+        _symbol(symbol)
+    except ValueError:
+        raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID") from None
+    if not api_key or not secret_key:
+        raise M07ReadOnlyError("M07_CREDENTIALS_UNAVAILABLE")
+    uid = _verify_view_only_uid(api_key=api_key, secret_key=secret_key)
+    ts = int(time.time() * 1000)
+    prepared = prepare_signed_get(
+        path="/api/v2/order/histories",
+        api_key=api_key, secret_key=secret_key,
+        timestamp_ms=ts, symbol=symbol.lower(), limit=10,
+    )
+    client_id = _latest_client_id_from_history(
+        _https_json(prepared), symbol=symbol,
+    )
+    return _read_and_record_order(
+        journal=journal, symbol=symbol, client_order_id=client_id,
+        uid=uid, api_key=api_key, secret_key=secret_key,
+        requests_completed=3, history_discovered=True,
+    )
