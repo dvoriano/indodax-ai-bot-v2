@@ -255,6 +255,92 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(len([m for m, p in self.calls if m == "sendMessage"
                               and "TERCATAT satu kali" in p.get("text", "")]), 1)
 
+    def test_expired_real_callback_closes_old_buttons_and_notifies_once(self):
+        # Reproduces the REAL owner report: command 10:37, callback 10:39
+        # processed AFTER max90s. Expired must NOT become PASS, while the
+        # stale visible inline keyboard must be closed and explained.
+        self.incoming = [self.command()]
+        self.tick()
+        self.assertIsNotNone(self.sent_buttons)
+        keyboard = self.sent_buttons["reply_markup"]["inline_keyboard"][0]
+        with sqlite3.connect(self.db) as db:
+            db.execute(
+                "UPDATE m05_proposals SET expires_epoch=? "
+                "WHERE pair=?",
+                (self.now - 1, TEST_PAIR),
+            )
+            db.commit()
+        self.incoming = [self.callback(keyboard[0]["callback_data"])]
+        processed = self.tick()
+        self.assertEqual(processed["processed"], 1)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state,reason,execution_allowed FROM m05_proposals"
+            ).fetchone(), ("REJECT", "EXPIRED", 0))
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m05_audit "
+                "WHERE event='OWNER_REVIEW_STALE_UI_NOTICE_CLAIMED'"
+            ).fetchone()[0], 1)
+        edits = [p for name, p in self.calls
+                 if name == "editMessageReplyMarkup"]
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["message_id"], 42)
+        notices = [p["text"] for name, p in self.calls if name == "sendMessage"
+                   and "sudah ditutup" in p.get("text", "")]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("EXPIRED", notices[0])
+        self.assertIn("Tidak ada keputusan baru", notices[0])
+        self.assertIn("Trading OFF", notices[0])
+
+        self.incoming = [self.callback(
+            keyboard[1]["callback_data"], update=103,
+        )]
+        again = self.tick()
+        self.assertEqual(again["processed"], 1)
+        self.assertEqual(len([
+            name for name, _ in self.calls if name == "editMessageReplyMarkup"
+        ]), 1)
+        self.assertEqual(len([
+            p for name, p in self.calls if name == "sendMessage"
+            and "sudah ditutup" in p.get("text", "")
+        ]), 1)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state,reason FROM m05_proposals"
+            ).fetchone(), ("REJECT", "EXPIRED"))
+
+    def test_historical_recorded_pass_cleans_once_without_new_decision(self):
+        # Owner's 10:00 review had PASS in SQLite but no visible Telegram
+        # feedback in the previous deployed version.
+        self.incoming = [self.command()]
+        self.tick()
+        token = self.sent_buttons["reply_markup"]["inline_keyboard"][0][0][
+            "callback_data"]
+        saved = self.ledger.apply_callback(
+            user_id=OWNER, chat_id=OWNER, callback_data=token,
+            telegram_message_id=42, now_epoch=self.now,
+        )
+        self.assertTrue(saved["accepted"])
+        self.incoming = [self.callback(token)]
+        self.tick()
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state,reason,execution_allowed FROM m05_proposals"
+            ).fetchone(), ("PASS", "OWNER_BUTTON", 0))
+        self.assertEqual(len([name for name, _ in self.calls
+                              if name == "editMessageReplyMarkup"]), 1)
+        notices = [p["text"] for name, p in self.calls if name == "sendMessage"
+                   and "sudah ditutup" in p.get("text", "")]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("PASS", notices[0])
+        self.incoming = [self.callback(token, update=103)]
+        self.tick()
+        self.assertEqual(len([name for name, _ in self.calls
+                              if name == "editMessageReplyMarkup"]), 1)
+        self.assertEqual(len([p for name, p in self.calls
+                              if name == "sendMessage"
+                              and "sudah ditutup" in p.get("text", "")]), 1)
+
     def test_untrusted_chat_and_nonowner_cannot_queue(self):
         view = OfflineTelegramOwnerInterface(self.ledger)
         for user, chat in ((OWNER + 1, OWNER + 1), (OWNER, -123)):
