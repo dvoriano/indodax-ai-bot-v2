@@ -648,6 +648,75 @@ class OwnerDecisionLedger:
             "execution_allowed": False,
         }
 
+    def claim_finished_review_button_notice(
+        self, *, user_id: int, chat_id: int, callback_data: str,
+        telegram_message_id: int, now_epoch: int,
+        chat_type: str = "private",
+    ) -> dict[str, Any]:
+        """One safe cleanup notice for an already-final Telegram review card.
+
+        Stale/expired callback cannot change Final. This verifies the
+        *exact* original owner/private bot-delivered message, proposal token
+        and durable final state before allowing one UI cleanup attempt.
+        Called after an authenticated original owner decision or an invalid
+        expired/replayed click, never before applying the owner ledger.
+        """
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        match = CALLBACK.fullmatch(callback_data) if isinstance(callback_data, str) else None
+        if (match is None or type(telegram_message_id) is not int
+                or telegram_message_id <= 0
+                or type(now_epoch) is not int or now_epoch <= 0):
+            return _blocked("INVALID_CALLBACK_UI_NOTICE")
+        proposal, _answer, secret = match.groups()
+        with self._tx() as db:
+            row = db.execute(
+                """SELECT p.owner_user_id,p.token_hash,p.state,p.reason,
+                          o.delivery_state,o.sent_message_id
+                   FROM m05_proposals p
+                   JOIN m05_market_advisory_outbox o
+                     ON o.proposal_id=p.proposal_id
+                   WHERE p.proposal_id=?""",
+                (proposal,),
+            ).fetchone()
+            if (row is None or row[0] != user_id
+                    or not hmac.compare_digest(
+                        row[1], sha256(secret.encode()).hexdigest()
+                    )
+                    or row[4] != "SENT"
+                    or row[5] != telegram_message_id
+                    or row[2] not in ("PASS", "REJECT")):
+                return _blocked("M05_UI_NOTICE_NOT_AUTHORIZED")
+            prior = db.execute(
+                """SELECT 1 FROM m05_audit
+                   WHERE proposal_id=?
+                     AND event='OWNER_REVIEW_UI_NOTICE_ATTEMPTED'
+                   LIMIT 1""",
+                (proposal,),
+            ).fetchone()
+            if prior:
+                return _blocked("M05_UI_NOTICE_ALREADY_ATTEMPTED")
+            db.execute(
+                """INSERT INTO m05_audit
+                   (event_epoch,owner_user_id,proposal_id,event,detail)
+                   VALUES (?,?,?,?,?)""",
+                (now_epoch, user_id, proposal,
+                 "OWNER_REVIEW_UI_NOTICE_ATTEMPTED",
+                 "EXPIRED_OR_CONSUMED_NO_REPLAY"),
+            )
+            state, reason = row[2], row[3]
+        label = (
+            "EXPIRED" if reason == "EXPIRED" or reason == "EXPIRED_UNSENT"
+            else "MODE_CHANGED" if reason == "MODE_NOT_MANUAL"
+            else state if reason == "OWNER_BUTTON"
+            else "REVIEW_CLOSED"
+        )
+        return {
+            "accepted": True, "ui_notice_label": label,
+            "final_decision": None, "execution_allowed": False,
+            "ui_only": True, "safe_to_remove_original_buttons": True,
+        }
+
     def record_orchestrator_reject(self, *, trace_id: str, reason: str,
                                    now_epoch: int) -> None:
         """Attached to the ONE current V2 mainpath: no proposal creation."""
