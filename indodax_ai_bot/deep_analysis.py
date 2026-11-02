@@ -508,7 +508,7 @@ def _m07_post_round_sell_research(
         "visible_bid_book_sell_gross_idr": None,
         "visible_bid_book_sell_after_all_in_fee_idr": None,
         "sell_notional_meets_public_minimum": False,
-        "minimum_idr_checked_on_buy_and_sell": False,
+        "minimum_idr_met_on_buy_and_sell": False,
         "required_future_sell_vwap_before_price_tick": None,
         "required_future_sell_limit_price_ceiled_to_tick": None,
         "published_fee_totals_counted_once": True,
@@ -593,7 +593,7 @@ def _m07_post_round_sell_research(
             "visible_bid_book_sell_gross_idr": str(sell_gross),
             "visible_bid_book_sell_after_all_in_fee_idr": str(sell_net),
             "sell_notional_meets_public_minimum": sell_gross >= min_idr,
-            "minimum_idr_checked_on_buy_and_sell": sell_gross >= min_idr,
+            "minimum_idr_met_on_buy_and_sell": sell_gross >= min_idr,
             "required_future_sell_vwap_before_price_tick": str(required_vwap),
             "required_future_sell_limit_price_ceiled_to_tick": str(
                 limit_price_on_grid
