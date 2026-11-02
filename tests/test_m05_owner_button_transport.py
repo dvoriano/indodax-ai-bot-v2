@@ -73,7 +73,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
                 "message_id": 42 if "reply_markup" in payload else 41,
                 "chat": {"id": OWNER, "type": "private"},
             }
-        if method == "answerCallbackQuery":
+        if method in ("answerCallbackQuery", "editMessageReplyMarkup"):
             return True
         raise AssertionError("UNEXPECTED_METHOD")
 
@@ -104,8 +104,12 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         first = self.tick()
         self.assertEqual(first["processed"], 1)
         self.assertFalse(first["execution_allowed"])
-        self.assertIsNone(self.sent_buttons)
+        self.assertIsNotNone(self.sent_buttons)
         self.assertEqual(self.ledger.telegram_next_offset(), 102)
+        self.assertEqual(
+            [name for name, _ in self.calls],
+            ["getMe", "getWebhookInfo", "getUpdates", "sendMessage"],
+        )
         with sqlite3.connect(self.db) as db:
             p = db.execute(
                 "SELECT pair,entry_price_idr,quantity,state,execution_allowed "
@@ -130,6 +134,15 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(third["processed"], 1)
         self.assertFalse(third["execution_allowed"])
         self.assertIn("answerCallbackQuery", [m for m, _ in self.calls])
+        edits = [p for m, p in self.calls if m == "editMessageReplyMarkup"]
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["message_id"], 42)
+        self.assertEqual(edits[0]["chat_id"], OWNER)
+        permanent = [p for m, p in self.calls if m == "sendMessage"
+                     and "TERCATAT satu kali" in p.get("text", "")]
+        self.assertEqual(len(permanent), 1)
+        self.assertIn("PASS", permanent[0]["text"])
+        self.assertIn("Trading OFF", permanent[0]["text"])
         self.assertEqual(self.ledger.telegram_next_offset(), 103)
         with sqlite3.connect(self.db) as db:
             row = db.execute(
@@ -159,9 +172,16 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
             self.assertEqual(db.execute(
                 "SELECT state FROM m05_proposals"
             ).fetchone()[0], "PASS")
+        self.assertEqual(
+            len([m for m, _ in self.calls if m == "editMessageReplyMarkup"]), 1
+        )
+        self.assertEqual(
+            len([m for m, p in self.calls if m == "sendMessage"
+                 and "TERCATAT satu kali" in p.get("text", "")]), 1
+        )
         self.assertTrue(all(m in {
             "getMe", "getWebhookInfo", "getUpdates",
-            "sendMessage", "answerCallbackQuery",
+            "sendMessage", "answerCallbackQuery", "editMessageReplyMarkup",
         } for m, _ in self.calls))
 
     def test_untrusted_chat_and_nonowner_cannot_queue(self):
