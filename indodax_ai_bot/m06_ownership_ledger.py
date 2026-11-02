@@ -688,11 +688,29 @@ class M06OwnershipLedger:
                     "FROM m06_special_rebuy_observations WHERE trade_id=?",
                     (entry[0],),
                 ).fetchone()
-                if local is not None and (
-                        local[:3] != entry[1:4]
-                        or _amount(Decimal(local[3])) !=
-                           _amount(Decimal(entry[4]))):
-                    raise OwnershipConflict("M06_EXTERNAL_OVERLAP_CONFLICT")
+                if local is not None:
+                    if (local[:3] != entry[1:4]
+                            or _amount(Decimal(local[3])) !=
+                               _amount(Decimal(entry[4]))):
+                        raise OwnershipConflict("M06_EXTERNAL_OVERLAP_CONFLICT")
+                    # A matching gross amount alone is NOT enough. A replay
+                    # could alter qty/price/fee while preserving total IDR.
+                    # Compare against the original locally immutable fill.
+                    original = db.execute(
+                        "SELECT order_id,symbol,qty,price,fee "
+                        "FROM m06_observed_fills WHERE trade_id=?",
+                        (entry[0],),
+                    ).fetchone()
+                    raw_fill = next(
+                        (x for x in fills if x.trade_id == entry[0]),
+                        None,
+                    )
+                    if raw_fill is None or original != (
+                            raw_fill.order_id, raw_fill.symbol,
+                            str(raw_fill.quantity), str(raw_fill.price),
+                            str(raw_fill.commission)):
+                        raise OwnershipConflict(
+                            "M06_EXTERNAL_OVERLAP_FILL_CONFLICT")
                 db.execute(
                     "INSERT INTO m06_scoped_external_sell_receipts "
                     "(trade_id,account_hash,asset,order_id,gross_idr,receipt_sha256) "
