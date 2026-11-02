@@ -24,7 +24,7 @@ from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, Protected
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
-from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft
+from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
@@ -185,6 +185,12 @@ class DailyScalpingOrchestrator:
         return self.journal.mark_m07_offline_unknown_hold(
             intent_id=intent_id, observed_epoch=observed_epoch,
         )
+
+    def observe_m07_offline_status_once(
+            self, observation: M07OfflineStatusObservation) -> dict:
+        """Original V2 caller: untrusted synthetic status; never exchange proof."""
+        self.settings.require_m01_safety()
+        return self.journal.record_m07_offline_status_observation(observation)
 
     def inspect_m07_offline_intent_guard_once(self) -> dict:
         return self.journal.m07_offline_intent_summary()

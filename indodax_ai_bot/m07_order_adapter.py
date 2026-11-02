@@ -218,3 +218,59 @@ class OfficialV2OrderAdapter:
 
     def dispatch(self, *args, **kwargs) -> None:
         raise M07Hardlocked("M07_ALL_HTTP_DISPATCH_HARDLOCKED")
+
+
+@dataclass(frozen=True)
+class M07OfflineStatusObservation:
+    """Normalized SYNTHETIC status, never authenticated exchange evidence.
+
+    This is deliberately not a private API parser. Before any real recovery,
+    a separately authorized, authenticated transport must bind and verify
+    exchange response, account and order ownership.
+    """
+    intent_id: str
+    client_order_id: str
+    symbol: str
+    observation_id: str
+    status: str
+    cumulative_base: Decimal
+    cumulative_quote: Decimal
+    observed_epoch: int
+
+    def validated_record(self) -> tuple[str, ...]:
+        if (type(self.intent_id) is not str
+                or not _CLIENT_ID.fullmatch(self.intent_id)
+                or type(self.observation_id) is not str
+                or not _CLIENT_ID.fullmatch(self.observation_id)
+                or self.client_order_id != self.intent_id):
+            raise ValueError("M07_OBSERVATION_ID_INVALID")
+        _symbol(self.symbol)
+        allowed = (
+            "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
+            "EXPIRED", "REJECTED", "UNKNOWN",
+        )
+        if type(self.status) is not str or self.status not in allowed:
+            raise ValueError("M07_OBSERVATION_STATUS_INVALID")
+        if (type(self.observed_epoch) is not int
+                or not 1 <= self.observed_epoch <= 9999999999):
+            raise ValueError("M07_OBSERVATION_EPOCH_INVALID")
+        quantities = []
+        for value in (self.cumulative_base, self.cumulative_quote):
+            if (type(value) is not Decimal or not value.is_finite()
+                    or value < 0 or value >= Decimal("1e24")
+                    or len(value.as_tuple().digits) > 48
+                    or (value != 0 and value.adjusted() < -18)):
+                raise ValueError("M07_OBSERVATION_CUMULATIVE_INVALID")
+            quantities.append(format(value, "f"))
+        base, quote = quantities
+        # These are internal lifecycle invariants, NOT evidence of actual fills.
+        if self.status in ("NEW", "REJECTED") and (
+                self.cumulative_base != 0 or self.cumulative_quote != 0):
+            raise ValueError("M07_OBSERVATION_NONZERO_NEW_OR_REJECTED")
+        if self.status in ("PARTIALLY_FILLED", "FILLED") and (
+                self.cumulative_base <= 0 or self.cumulative_quote <= 0):
+            raise ValueError("M07_OBSERVATION_MISSING_CUMULATIVE")
+        return (
+            self.intent_id, self.observation_id, self.client_order_id,
+            self.symbol, self.status, base, quote, str(self.observed_epoch),
+        )

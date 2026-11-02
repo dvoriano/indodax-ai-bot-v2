@@ -11,7 +11,7 @@ from typing import Iterator
 from pathlib import Path
 
 from .contracts import FinalDecision
-from .m07_order_adapter import M07OrderDraft
+from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
 from .public_market import Candle, PublicCandleHistory, PublicDataError
 
 
@@ -84,6 +84,27 @@ class DecisionJournal:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS idx_m07_offline_intent_active "
                 "ON m07_offline_order_intents(state,symbol)"
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_offline_status_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    intent_id TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    cumulative_base TEXT NOT NULL,
+                    cumulative_quote TEXT NOT NULL,
+                    observed_epoch INTEGER NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    source_kind TEXT NOT NULL CHECK(
+                        source_kind='SYNTHETIC_OFFLINE_ONLY'
+                    ),
+                    FOREIGN KEY(intent_id) REFERENCES m07_offline_order_intents(intent_id)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_m07_offline_status_order "
+                "ON m07_offline_status_observations(intent_id,observed_epoch)"
             )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
@@ -321,6 +342,119 @@ class DecisionJournal:
             "unknown_order_state_must_not_retry": True,
             "release_requires_authenticated_exchange_reconciliation": True,
             "exchange_order_id": None, "order_sent": False,
+            "execution_allowed": False,
+        }
+
+    def record_m07_offline_status_observation(
+        self, observation: M07OfflineStatusObservation,
+    ) -> dict:
+        """Durable untrusted status timeline; neither release nor fill credit.
+
+        The original order-intent state stays reserved/UNKNOWN even after
+        synthetic FILLED/CANCELED. Any non-identical replay, regressed
+        cumulative fills or terminal transition is refused atomically.
+        This method CANNOT reconcile a real exchange order.
+        """
+        if type(observation) is not M07OfflineStatusObservation:
+            raise ValueError("M07_OBSERVATION_TYPE_INVALID")
+        record = observation.validated_record()
+        fingerprint = hashlib.sha256(
+            json.dumps(record, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            intent = con.execute(
+                "SELECT client_order_id,symbol,recorded_epoch,state,"
+                "last_observed_epoch FROM m07_offline_order_intents "
+                "WHERE intent_id=?", (observation.intent_id,),
+            ).fetchone()
+            if intent is None:
+                raise DecisionConflictError("M07_OBSERVATION_INTENT_NOT_RESERVED")
+            if (observation.client_order_id, observation.symbol) != intent[:2]:
+                raise DecisionConflictError("M07_OBSERVATION_ORDER_MISMATCH")
+            old = con.execute(
+                "SELECT intent_id,payload_sha256 FROM "
+                "m07_offline_status_observations WHERE observation_id=?",
+                (observation.observation_id,),
+            ).fetchone()
+            if old is not None:
+                if old != (observation.intent_id, fingerprint):
+                    raise DecisionConflictError("M07_OBSERVATION_REPLAY_CONFLICT")
+                return self._m07_offline_observation_report(
+                    observation, replay=True, intent_state=intent[3],
+                )
+            if observation.observed_epoch < max(intent[2], intent[4]):
+                raise DecisionConflictError("M07_OBSERVATION_STALE")
+            latest = con.execute(
+                "SELECT status,cumulative_base,cumulative_quote,observed_epoch "
+                "FROM m07_offline_status_observations WHERE intent_id=? "
+                "ORDER BY observed_epoch DESC, rowid DESC LIMIT 1",
+                (observation.intent_id,),
+            ).fetchone()
+            if latest is not None:
+                status, base, quote, epoch = latest
+                if status in ("FILLED","CANCELED","EXPIRED","REJECTED"):
+                    raise DecisionConflictError("M07_OBSERVATION_TERMINAL_IS_IMMUTABLE")
+                if observation.observed_epoch <= epoch:
+                    raise DecisionConflictError("M07_OBSERVATION_NOT_NEWER")
+                if (observation.cumulative_base < Decimal(base)
+                        or observation.cumulative_quote < Decimal(quote)):
+                    raise DecisionConflictError("M07_OBSERVATION_CUMULATIVE_REGRESSION")
+                if (status == "PARTIALLY_FILLED"
+                        and observation.status in ("NEW","REJECTED")):
+                    raise DecisionConflictError("M07_OBSERVATION_ILLEGAL_REGRESSION")
+            con.execute(
+                "INSERT INTO m07_offline_status_observations "
+                "(observation_id,intent_id,client_order_id,symbol,status,"
+                "cumulative_base,cumulative_quote,observed_epoch,"
+                "payload_sha256,source_kind) "
+                "VALUES (?,?,?,?,?,?,?,?,?,'SYNTHETIC_OFFLINE_ONLY')",
+                (
+                    observation.observation_id, observation.intent_id,
+                    observation.client_order_id, observation.symbol,
+                    observation.status, record[5], record[6],
+                    observation.observed_epoch, fingerprint,
+                ),
+            )
+            next_state = intent[3]
+            if observation.status == "UNKNOWN" and intent[3] != "OFFLINE_UNKNOWN_HOLD":
+                # A simulation of ambiguous submit permanently locks new
+                # BUY; later fixtures may NOT clear the lock.
+                con.execute(
+                    "UPDATE m07_offline_order_intents SET "
+                    "state='OFFLINE_UNKNOWN_HOLD',last_observed_epoch=? "
+                    "WHERE intent_id=?",
+                    (observation.observed_epoch, observation.intent_id),
+                )
+                next_state = "OFFLINE_UNKNOWN_HOLD"
+            elif observation.observed_epoch > intent[4]:
+                con.execute(
+                    "UPDATE m07_offline_order_intents "
+                    "SET last_observed_epoch=? WHERE intent_id=?",
+                    (observation.observed_epoch, observation.intent_id),
+                )
+        return self._m07_offline_observation_report(
+            observation, replay=False, intent_state=next_state,
+        )
+
+    @staticmethod
+    def _m07_offline_observation_report(
+        observation: M07OfflineStatusObservation, *,
+        replay: bool, intent_state: str,
+    ) -> dict:
+        return {
+            "status": "OFFLINE_UNTRUSTED_STATUS_RECORDED",
+            "observation_id": observation.observation_id,
+            "simulated_order_status": observation.status,
+            "intent_state": intent_state,
+            "replay": replay,
+            "cumulative_base_unverified": format(observation.cumulative_base, "f"),
+            "cumulative_quote_unverified": format(observation.cumulative_quote, "f"),
+            "release_permitted": False,
+            "retry_permitted": False,
+            "exchange_order_state_authenticated": False,
+            "bot_owned_fills_verified": False,
+            "order_sent": False,
             "execution_allowed": False,
         }
 

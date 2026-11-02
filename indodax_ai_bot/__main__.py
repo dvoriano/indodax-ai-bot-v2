@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal, DecisionConflictError
-from .m07_order_adapter import M07OrderDraft
+from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
 from .orchestrator import DailyScalpingOrchestrator
 from .deep_analysis import OwnerEnteredAllInFeeSnapshot
 from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="EXPLICIT synthetic-only BUY reservation in original M07 journal; NO network, real position, or trade")
     group.add_argument("--m07-offline-unknown-once", action="store_true",
                        help="Simulate UNKNOWN for an already reserved synthetic M07 intent; permanent retry hold, no exchange GET")
+    group.add_argument("--m07-offline-status-once", action="store_true",
+                       help="Record UNTRUSTED synthetic normalized order status in original M07 journal, no exchange request")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
                        help="Inspect ORIGINAL hardlocked TAPI V2 order/status/cancel contract without API keys, network or orders")
     group.add_argument("--m06-account-review-once", action="store_true",
@@ -134,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
+    parser.add_argument("--m07-observation-id", default=None)
+    parser.add_argument("--m07-observed-status", default=None)
+    parser.add_argument("--m07-cumulative-base", default=None)
+    parser.add_argument("--m07-cumulative-quote", default=None)
     parser.add_argument("--m03-owner-fee-snapshot-file", default=None,
                         help="Owner-entered 0600 IDR taker all-in fee JSON; NOT verified account evidence or permission to trade")
     parser.add_argument("--ws-db", default=None,
@@ -156,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
-        if args.m07_offline_intent_once or args.m07_offline_unknown_once:
+        if (args.m07_offline_intent_once or args.m07_offline_unknown_once
+                or args.m07_offline_status_once):
             settings.require_m01_safety()
             if (type(args.m07_intent_id) is not str
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}", args.m07_intent_id)
@@ -166,6 +173,25 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        status_fields = (
+            args.m07_observation_id, args.m07_observed_status,
+            args.m07_cumulative_base, args.m07_cumulative_quote,
+        )
+        if args.m07_offline_status_once:
+            if (type(args.m07_observation_id) is not str
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                        args.m07_observation_id)
+                    or args.m07_observed_status not in (
+                        "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED",
+                        "EXPIRED", "REJECTED", "UNKNOWN",
+                    )
+                    or any(type(n) is not str or not re.fullmatch(
+                        r"(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{1,16})?", n
+                    ) for n in (args.m07_cumulative_base,
+                                args.m07_cumulative_quote))):
+                raise ConfigurationError("M07_SYNTHETIC_STATUS_INPUT_INVALID")
+        elif any(x is not None for x in status_fields):
+            raise ConfigurationError("M07_STATUS_FIELDS_ONLY_FOR_SYNTHETIC_CLI")
         m03_owner_fee_snapshot = None
         if args.m03_owner_fee_snapshot_file is not None:
             if not (
@@ -586,7 +612,8 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
-        if args.m07_offline_intent_once or args.m07_offline_unknown_once:
+        if (args.m07_offline_intent_once or args.m07_offline_unknown_once
+                or args.m07_offline_status_once):
             try:
                 if args.m07_offline_intent_once:
                     result = app.reserve_m07_offline_intent_once(
@@ -597,10 +624,23 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                         observed_epoch=int(time.time()),
                     )
-                else:
+                elif args.m07_offline_unknown_once:
                     result = app.simulate_m07_unknown_timeout_once(
                         intent_id=args.m07_intent_id,
                         observed_epoch=int(time.time()),
+                    )
+                else:
+                    result = app.observe_m07_offline_status_once(
+                        M07OfflineStatusObservation(
+                            intent_id=args.m07_intent_id,
+                            client_order_id=args.m07_intent_id,
+                            symbol="BTCIDR",
+                            observation_id=args.m07_observation_id,
+                            status=args.m07_observed_status,
+                            cumulative_base=Decimal(args.m07_cumulative_base),
+                            cumulative_quote=Decimal(args.m07_cumulative_quote),
+                            observed_epoch=int(time.time()),
+                        ),
                     )
             except DecisionConflictError as exc:
                 print(json.dumps({
