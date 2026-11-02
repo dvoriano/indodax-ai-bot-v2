@@ -341,18 +341,19 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
                               if name == "sendMessage"
                               and "sudah ditutup" in p.get("text", "")]), 1)
 
-    def test_original_m05_one_service_timer_is_bounded_ten_seconds(self):
+    def test_original_m05_one_service_timer_is_bounded_three_seconds(self):
         source = (
             Path(__file__).resolve().parents[1]
             / "systemd/user/indodax-v2-m05-telegram.timer"
         ).read_text()
-        self.assertIn("OnUnitInactiveSec=10s", source)
-        self.assertIn("OnStartupSec=10s", source)
+        self.assertIn("OnUnitInactiveSec=3s", source)
+        self.assertIn("OnStartupSec=3s", source)
         self.assertIn("AccuracySec=1s", source)
         self.assertIn("Persistent=false", source)
         self.assertEqual(
             source.count("Unit=indodax-v2-m05-telegram.service"), 1
         )
+        self.assertNotIn("OnUnitInactiveSec=10s", source)
         self.assertNotIn("OnUnitInactiveSec=30s", source)
 
     def test_untrusted_chat_and_nonowner_cannot_queue(self):
