@@ -198,7 +198,8 @@ def _read_and_record_order(*, journal, symbol: str,
                            client_order_id: str, uid: int,
                            api_key: str, secret_key: str,
                            requests_completed: int,
-                           history_discovered: bool) -> dict:
+                           history_discovered: bool,
+                           history_submit_ms: int | None = None) -> dict:
     ts = int(time.time() * 1000)
     request = OfficialV2OrderAdapter().prepare_status_viewonly_offline(
         symbol=symbol, orig_client_order_id=client_order_id,
@@ -209,6 +210,9 @@ def _read_and_record_order(*, journal, symbol: str,
         expected_symbol=symbol,
         expected_client_id=client_order_id,
     )
+    if (history_submit_ms is not None
+            and order.created_ms != history_submit_ms):
+        raise M07ReadOnlyError("M07_HISTORY_ORDER_TIME_MISMATCH")
     fingerprint = hashlib.sha256(
         (api_key + ":" + str(uid)).encode("utf-8")
     ).hexdigest()
@@ -323,13 +327,14 @@ def read_m07_latest_order_status_once(*, journal, symbol: str,
         api_key=api_key, secret_key=secret_key,
         timestamp_ms=ts, symbol=symbol.lower(), limit=10,
     )
-    client_id = _latest_client_id_from_history(
+    latest = _latest_history_candidate(
         _https_json(prepared), symbol=symbol,
     )
     return _read_and_record_order(
-        journal=journal, symbol=symbol, client_order_id=client_id,
+        journal=journal, symbol=symbol, client_order_id=latest[0],
         uid=uid, api_key=api_key, secret_key=secret_key,
         requests_completed=3, history_discovered=True,
+        history_submit_ms=latest[1],
     )
 
 def read_m07_14day_order_status_once(*, journal, symbol: str,
@@ -374,6 +379,7 @@ def read_m07_14day_order_status_once(*, journal, symbol: str,
         journal=journal, symbol=symbol, client_order_id=latest[0],
         uid=uid, api_key=api_key, secret_key=secret_key,
         requests_completed=4, history_discovered=True,
+        history_submit_ms=latest[1],
     )
     result["history_window_last_days"] = 14
     result["history_is_full_account_coverage"] = False
