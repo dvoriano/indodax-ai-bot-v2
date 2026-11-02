@@ -160,6 +160,13 @@ class TelegramOwnerPoller:
                 user_id=user_id, chat_id=chat_id, text=text,
                 now_epoch=now_epoch, chat_type="private",
             )
+            # /reviewtest immediately sends its single original inline
+            # outbox card after this poll. Do not ALSO send an immediate
+            # command acknowledgment to the same chat: Telegram may rate-
+            # limit two sendMessage calls within one second.
+            if (result.get("accepted") is True
+                    and result.get("reason") == "M05_OWNER_BUTTON_TEST_QUEUED"):
+                return ("OWNER_REVIEW_TEST_QUEUED", None, None)
             # No source/account data is fabricated: UI gives NOT_CONNECTED.
             reply = result.get("text", "Perintah belum tersedia. Trading OFF.")
             if not isinstance(reply, str) or len(reply) > 1024:
