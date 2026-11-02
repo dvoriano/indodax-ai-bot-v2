@@ -66,6 +66,11 @@ class ProtectedRebuyReview:
     # Special manual/external SELL fills imported as LOCAL offline evidence.
     # Does not certify complete history or exchange-attested ownership.
     locally_observed_external_special_sell_fills: int = 0
+    # Tentative same-token BUY fills. Do NOT subtract from SELL rebuy hold.
+    floki_rebuy_buy_observed_outflow_idr: Decimal = Decimal("0")
+    pepe_rebuy_buy_observed_outflow_idr: Decimal = Decimal("0")
+    local_rebuy_buy_observation_count: int = 0
+    rebuy_consumption_settled_verified: bool = False
 
 
 @dataclass(frozen=True, repr=False)
@@ -188,6 +193,7 @@ class M06OwnershipLedger:
                         "m06_intents",
                         "m06_special_rebuy_observations",
                         "m06_scoped_external_sell_receipts",
+                        "m06_scoped_rebuy_buy_observations",
                         "m06_manual_asset_floors",
                     )
                     if table in present
@@ -251,6 +257,7 @@ class M06OwnershipLedger:
             "m06_intents",
             "m06_special_rebuy_observations",
             "m06_scoped_external_sell_receipts",
+            "m06_scoped_rebuy_buy_observations",
             "m06_manual_asset_floors",
             "m06_local_fill_receipts",
             "m06_shadow_reserve",
@@ -517,6 +524,41 @@ class M06OwnershipLedger:
                     external_only_count += 1
         if len(by_trade) > 10000:
             raise OwnershipConflict("M06_REBUY_LEDGER_LIMIT_EXCEEDED")
+        # Read optional tentative BUY observations from the SAME UID-bound
+        # V2 ledger. These are diagnostics ONLY: not authenticated settlement
+        # or permission to decrease the original SELL rebuy protection.
+        rebuy_buy_count = 0
+        floki_buy = Decimal("0")
+        pepe_buy = Decimal("0")
+        has_rebuys = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='m06_scoped_rebuy_buy_observations'"
+        ).fetchone() is not None
+        if has_rebuys:
+            buy_rows = db.execute(
+                "SELECT asset,observed_outflow_idr "
+                "FROM m06_scoped_rebuy_buy_observations "
+                "WHERE account_hash=? LIMIT 10001",
+                (account_hash,),
+            ).fetchall()
+            if len(buy_rows) > 10000:
+                raise OwnershipConflict("M06_REBUY_BUY_LEDGER_LIMIT")
+            rebuy_buy_count = len(buy_rows)
+            for asset,raw in buy_rows:
+                try:
+                    amount = _amount(Decimal(raw))
+                except (ValueError, TypeError, ArithmeticError):
+                    raise OwnershipConflict("M06_REBUY_BUY_VALUE_CORRUPT") from None
+                if asset == "FLOKI":
+                    floki_buy += amount
+                elif asset == "PEPE":
+                    pepe_buy += amount
+                else:
+                    raise OwnershipConflict("M06_REBUY_BUY_ASSET_CORRUPT")
+            try:
+                _amount(floki_buy + pepe_buy)
+            except (ValueError, TypeError, ArithmeticError):
+                raise OwnershipConflict("M06_REBUY_BUY_OVERFLOW") from None
         floki, pepe = Decimal("0"), Decimal("0")
         for asset, oid, raw in by_trade.values():
             try:
@@ -588,6 +630,10 @@ class M06OwnershipLedger:
             local_rebuy_receipts_linked=linked,
             local_fill_receipt_count=receipt_count,
             locally_observed_external_special_sell_fills=external_count,
+            floki_rebuy_buy_observed_outflow_idr=floki_buy,
+            pepe_rebuy_buy_observed_outflow_idr=pepe_buy,
+            local_rebuy_buy_observation_count=rebuy_buy_count,
+            rebuy_consumption_settled_verified=False,
         )
 
     def observe_scoped_external_special_sells_offline(
@@ -730,6 +776,158 @@ class M06OwnershipLedger:
                     "INSERT INTO m06_scoped_external_sell_receipts "
                     "(trade_id,account_hash,asset,order_id,gross_idr,receipt_sha256) "
                     "VALUES(?,?,?,?,?,?)", entry,
+                )
+            return self._read_rebuy_in_transaction(db, account_hash)
+
+    def observe_scoped_same_token_rebuy_buy_offline(
+            self, *, account_uid: int, symbol: str,
+            orders: tuple[OrderRecord, ...],
+            fills: tuple[FillRecord, ...],
+    ) -> ProtectedRebuyReview:
+        """Persist bounded same-token BUY observation, never release SELL hold.
+
+        Synthetic/owner-provided parsed rows do not prove authenticated
+        private history, full rebuy provenance, exchange settlement, or
+        available main IDR. Rebuy consumption is OBSERVED, not CREDITED.
+        This original M06 ledger method makes NO private request or order.
+        """
+        account_hash = self._identity(
+            self.account_scope_from_exchange_uid(account_uid)
+        )
+        if (type(symbol) is not str
+                or symbol not in ("flokiidr", "pepeidr")
+                or type(orders) is not tuple or type(fills) is not tuple
+                or len(orders) > 1000 or len(fills) > 1000):
+            raise OwnershipConflict("M06_REBUY_BUY_SCOPE_INVALID")
+        # Same physical owner-only existing ledger as M06 special SELL.
+        # Reject missing/symlink/world-accessible file before any write.
+        try:
+            d=self.path.parent.lstat()
+            f=self.path.lstat()
+            uid=os.getuid()
+            if (not stat.S_ISDIR(d.st_mode) or d.st_uid != uid
+                    or d.st_mode & 0o077
+                    or not stat.S_ISREG(f.st_mode) or f.st_uid != uid
+                    or f.st_mode & 0o077):
+                raise OwnershipConflict("M06_REBUY_BUY_DB_INSECURE")
+        except OSError:
+            raise OwnershipConflict("M06_REBUY_BUY_DB_INSECURE") from None
+        by_id = {}
+        for order in orders:
+            if (type(order) is not OrderRecord or order.symbol != symbol
+                    or order.side not in ("BUY","SELL")
+                    or order.bot_owned_verified is not False
+                    or order.order_id in by_id):
+                raise OwnershipConflict("M06_REBUY_BUY_ORDER_INVALID")
+            by_id[order.order_id] = order
+        sums = {}
+        prepared = []
+        seen = set()
+        for fill in fills:
+            if (type(fill) is not FillRecord or fill.symbol != symbol
+                    or fill.bot_owned_verified is not False
+                    or fill.trade_id in seen):
+                raise OwnershipConflict("M06_REBUY_BUY_FILL_INVALID")
+            seen.add(fill.trade_id)
+            order=by_id.get(fill.order_id)
+            if (order is None or fill.client_order_id is None
+                    or order.client_order_id != fill.client_order_id
+                    or fill.is_buyer is None
+                    or fill.is_buyer != (order.side == "BUY")):
+                raise OwnershipConflict("M06_REBUY_BUY_SOURCE_UNLINKED")
+            if order.side != "BUY":
+                # A paired SELL may be present in the bounded window; it
+                # stays in the separate existing SELL source observation.
+                continue
+            try:
+                for amount in (fill.quantity,fill.price,fill.commission):
+                    _amount(amount)
+                if fill.quantity <= 0 or fill.price <= 0:
+                    raise ValueError("M06_REBUY_BUY_AMOUNT_NONPOSITIVE")
+                if (type(order.executed_qty) is not Decimal
+                        or not order.executed_qty.is_finite()
+                        or order.executed_qty < 0):
+                    raise ValueError("M06_REBUY_BUY_ORDER_EXEC_INVALID")
+                fill_sum=sums.get(fill.order_id,Decimal("0"))+fill.quantity
+                if fill_sum>order.executed_qty:
+                    raise ValueError("M06_REBUY_BUY_FILL_OVER_EXEC")
+                sums[fill.order_id]=fill_sum
+                outflow = _amount(fill.quantity*fill.price)
+                if fill.quote_quantity is not None:
+                    outflow=max(outflow,_amount(fill.quote_quantity))
+                if fill.commission_asset is not None and (
+                        type(fill.commission_asset) is not str
+                        or fill.commission_asset.lower() not in (
+                            "idr", "floki", "pepe")):
+                    raise ValueError("M06_REBUY_BUY_FEE_ASSET_UNKNOWN")
+                if fill.commission_asset == "idr":
+                    outflow=_amount(outflow+fill.commission)
+                if outflow<=0:
+                    raise ValueError("M06_REBUY_BUY_SPEND_INVALID")
+            except (ValueError, TypeError, ArithmeticError):
+                raise OwnershipConflict("M06_REBUY_BUY_ECONOMICS_INVALID") from None
+            asset=symbol[:-3].upper()
+            evidence=[
+                account_hash,asset,order.order_id,order.client_order_id,
+                fill.trade_id,fill.order_id,fill.client_order_id,fill.symbol,
+                str(fill.quantity),str(fill.price),
+                str(fill.quote_quantity) if fill.quote_quantity is not None else None,
+                str(fill.commission),fill.commission_asset,fill.is_buyer,
+            ]
+            digest=hashlib.sha256(json.dumps(
+                evidence,separators=(",",":"),ensure_ascii=True,
+            ).encode("ascii")).hexdigest()
+            prepared.append((fill.trade_id,account_hash,asset,order.order_id,
+                             str(outflow),digest))
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            # Optional schema, never created on regular ledger startup.
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_scoped_rebuy_buy_observations (
+                trade_id TEXT PRIMARY KEY,
+                account_hash TEXT NOT NULL,
+                asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
+                order_id TEXT NOT NULL,
+                observed_outflow_idr TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL
+            )""")
+            for entry in prepared:
+                collision=db.execute(
+                    "SELECT 1 FROM m06_scoped_external_sell_receipts "
+                    "WHERE trade_id=?", (entry[0],)
+                ).fetchone() if db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='m06_scoped_external_sell_receipts'"
+                ).fetchone() else None
+                if collision is not None:
+                    raise OwnershipConflict("M06_REBUY_BUY_COLLIDES_WITH_SELL")
+                # A bot-owned receipt with the same trade ID must match
+                # immutable raw fill economics; otherwise hard conflict.
+                local=db.execute(
+                    "SELECT order_id,symbol,qty,price,fee "
+                    "FROM m06_observed_fills WHERE trade_id=?",
+                    (entry[0],),
+                ).fetchone()
+                if local is not None:
+                    raw=next((x for x in fills
+                              if x.trade_id==entry[0]),None)
+                    if raw is None or local!=(
+                            raw.order_id,raw.symbol,str(raw.quantity),
+                            str(raw.price),str(raw.commission)):
+                        raise OwnershipConflict("M06_REBUY_BUY_LOCAL_FILL_CONFLICT")
+                prior=db.execute(
+                    "SELECT account_hash,asset,order_id,observed_outflow_idr,"
+                    "receipt_sha256 FROM m06_scoped_rebuy_buy_observations "
+                    "WHERE trade_id=?", (entry[0],)
+                ).fetchone()
+                if prior is not None:
+                    if tuple(prior)!=entry[1:]:
+                        raise OwnershipConflict("M06_REBUY_BUY_REPLAY_CONFLICT")
+                    continue
+                db.execute(
+                    "INSERT INTO m06_scoped_rebuy_buy_observations "
+                    "(trade_id,account_hash,asset,order_id,"
+                    "observed_outflow_idr,receipt_sha256) VALUES(?,?,?,?,?,?)",
+                    entry,
                 )
             return self._read_rebuy_in_transaction(db, account_hash)
 
