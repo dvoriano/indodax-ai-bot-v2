@@ -372,6 +372,14 @@ def main(argv: list[str] | None = None) -> int:
                 "trade_fills_count":result.trade_fills_count,
                 "local_receipts_matched":result.local_receipts_matched,
                 "local_receipts_unlinked":result.local_receipts_unlinked,
+                "scoped_special_sell_gross_idr":dict(
+                    result.scoped_special_sell_gross_idr),
+                "scoped_special_sell_fill_count":dict(
+                    result.scoped_special_sell_fill_count),
+                "scoped_special_unresolved_fills":dict(
+                    result.scoped_special_unresolved_fills),
+                "special_sale_scope_not_full_history":True,
+                "general_idr_budget_from_this_scope":None,
                 "unresolved_requirements":list(result.unresolved_requirements),
                 "m06_02_balance_and_open_orders_observed":
                     result.m06_02_balance_and_open_orders_observed,
