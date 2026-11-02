@@ -206,6 +206,9 @@ class M07OriginalOfflineIntentUnknownTests(unittest.TestCase):
                 ["--m07-offline-intent-once", "--m07-intent-id", "x"],
                 ["--m07-offline-intent-once", "--db", "relative.db",
                  "--m07-intent-id", "x"],
+                ["--m07-offline-intent-once", "--db",
+                 "/var/tmp/m07-synthetic-must-not-create.sqlite3",
+                 "--m07-intent-id", "x"],
                 ["--health", "--m07-intent-id", "x", "--db",
                  str(Path(tmp)/"v2.sqlite3")],
             ]
