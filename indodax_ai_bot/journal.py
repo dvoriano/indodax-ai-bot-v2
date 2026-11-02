@@ -309,13 +309,13 @@ class DecisionJournal:
                 raise DecisionConflictError("M07_UNKNOWN_EPOCH_BEFORE_RESERVE")
             if observed_epoch < state[2]:
                 raise DecisionConflictError("M07_UNKNOWN_EPOCH_REGRESSION")
-            if state[0] == "OFFLINE_RESERVED":
-                con.execute(
-                    "UPDATE m07_offline_order_intents SET "
-                    "state='OFFLINE_UNKNOWN_HOLD', last_observed_epoch=? "
-                    "WHERE intent_id=? AND state='OFFLINE_RESERVED'",
-                    (observed_epoch, intent_id),
-                )
+            con.execute(
+                "UPDATE m07_offline_order_intents SET "
+                "state='OFFLINE_UNKNOWN_HOLD', last_observed_epoch=? "
+                "WHERE intent_id=? AND state IN "
+                "('OFFLINE_RESERVED','OFFLINE_UNKNOWN_HOLD')",
+                (observed_epoch, intent_id),
+            )
         return {
             "status": "OFFLINE_UNKNOWN_HOLD", "intent_id": intent_id,
             "unknown_order_state_must_not_retry": True,
