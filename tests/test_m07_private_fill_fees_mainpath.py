@@ -21,7 +21,7 @@ T=1793635200000
 DAY=86400000
 START=T-9*DAY
 END=START+120000
-CID="viewonly-usdt-51"
+CID="viewonly-account-audit"
 FULL="usdtidr-limit-909"
 ACCOUNT={"canTrade":False,"canWithdraw":False,"canWithdrawFiat":False,"uid":33344,"balances":[]}
 
@@ -39,11 +39,11 @@ def order_detail():
         "symbol":"USDTIDR","clientOrderId":CID,
         "orderId":909,"fullOrderId":FULL,
         "side":"SELL","type":"LIMIT","status":"FILLED",
-        "origQty":"51","executedQty":"51","time":START,
+        "origQty":"9","executedQty":"9","time":START,
     }
 
 
-def one_fill(ident="9911", qty="20", quote="340000", fee="1300",
+def one_fill(ident="9911", qty="3", quote="51000", fee="195",
              order_id=FULL, client_id=CID, asset="idr"):
     return {
         "tradeId":ident,"orderId":order_id,"clientOrderId":client_id,
@@ -56,7 +56,7 @@ def one_fill(ident="9911", qty="20", quote="340000", fee="1300",
 
 def two_fills():
     return {"data":[
-        one_fill(), one_fill(ident="9912",qty="31",quote="527000",fee="2000"),
+        one_fill(), one_fill(ident="9912",qty="6",quote="102000",fee="390"),
     ]}
 
 
@@ -85,7 +85,7 @@ def read(db, raw_trades, *, time_ms=T, history=None, record=None):
 
 
 class M07ViewOnlyFillFeesTests(unittest.TestCase):
-    def test_original_cli_five_gets_51_usdt_idr_net_and_no_buy_sell(self):
+    def test_original_cli_five_gets_synthetic_fills_idr_net_and_no_buy_sell(self):
         with TemporaryDirectory() as tmp:
             db=Path(tmp)/"v2.sqlite3"
             calls=[]
@@ -121,10 +121,10 @@ class M07ViewOnlyFillFeesTests(unittest.TestCase):
             self.assertIn("startTime=",calls[4][1])
             self.assertIn("limit=1000",calls[4][1])
             report=json.loads(out.getvalue())["m07_private_readonly_order"]
-            self.assertEqual(report["executed_base_qty_reconciled"],"51")
-            self.assertEqual(report["gross_quote_idr"],"867000")
-            self.assertEqual(report["commission_including_tax_idr"],"3300")
-            self.assertEqual(report["net_quote_idr"],"863700")
+            self.assertEqual(report["executed_base_qty_reconciled"],"9")
+            self.assertEqual(report["gross_quote_idr"],"153000")
+            self.assertEqual(report["commission_including_tax_idr"],"585")
+            self.assertEqual(report["net_quote_idr"],"152415")
             self.assertEqual(report["matched_fill_count"],2)
             self.assertEqual(report["requests_completed"],5)
             self.assertTrue(report["fills_and_fee_history_reconciled"])
@@ -139,7 +139,7 @@ class M07ViewOnlyFillFeesTests(unittest.TestCase):
                     "SELECT qty_base,gross_quote_idr,commission_including_tax_idr,"
                     "net_quote_idr,fill_count FROM m07_exchange_readonly_fill_summaries"
                 ).fetchone()
-                self.assertEqual(r,("51","867000","3300","863700",2))
+                self.assertEqual(r,("9","153000","585","152415",2))
             with self.assertRaises(M07Hardlocked):
                 OfficialV2OrderAdapter().dispatch()
 
@@ -160,8 +160,8 @@ class M07ViewOnlyFillFeesTests(unittest.TestCase):
             ({"data":[one_fill(),one_fill()]}, "M07_FILLS_TRADE_ID_DUPLICATED"),
             ({"data":[]}, "M07_FILLS_EMPTY_OR_TRUNCATED"),
             ({"data":[one_fill(asset="usdt"),
-                      one_fill(ident="9912",qty="31",
-                               quote="527000",fee="2000")]},
+                      one_fill(ident="9912",qty="6",
+                               quote="102000",fee="390")]},
              "M07_FILLS_NON_IDR_FEE_OR_AMOUNT_INVALID"),
             ({"data":[one_fill(order_id="foreign-id")]},
              "M07_FILLS_ORDER_IDENTITY_MISMATCH"),
@@ -179,7 +179,7 @@ class M07ViewOnlyFillFeesTests(unittest.TestCase):
                         ).fetchone()[0]
                         self.assertEqual(count,0)
 
-    def test_other_orders_in_same_history_do_not_contaminate_51_usdt(self):
+    def test_other_orders_in_same_history_do_not_contaminate_readonly_receipts(self):
         with TemporaryDirectory() as tmp:
             foreign=one_fill(
                 ident="10433",qty="1",quote="17000",fee="50",
@@ -189,7 +189,7 @@ class M07ViewOnlyFillFeesTests(unittest.TestCase):
             raw["data"].append(foreign)
             result,calls=read(Path(tmp)/"journal.sqlite3",raw)
             self.assertEqual(result["matched_fill_count"],2)
-            self.assertEqual(result["net_quote_idr"],"863700")
+            self.assertEqual(result["net_quote_idr"],"152415")
             self.assertEqual(len(calls),5)
 
     def test_source_change_on_replay_does_not_overwrite_audited_fills(self):
