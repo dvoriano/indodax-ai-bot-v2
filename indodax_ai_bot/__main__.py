@@ -73,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="Simulate UNKNOWN for an already reserved synthetic M07 intent; permanent retry hold, no exchange GET")
     group.add_argument("--m07-offline-status-once", action="store_true",
                        help="Record UNTRUSTED synthetic normalized order status in original M07 journal, no exchange request")
-    group.add_argument("--m07-private-latest-order-once", action="store_true",
+    group.add_argument("--m07-private-14day-order-once", action="store_true",
+                       help="Owner View Only 14-day account/history/order GET, max 4 GET; no trading")
+    group.add_argument("--m07-private-latest-order-once",
                        help="One View Only account/history/latest-order GET chain, 3 GET max; no known client ID required")
     group.add_argument("--m07-private-order-status-once", action="store_true",
                        help="Explicit TAPI V2 View Only account + order GET, no trade/cancel/auto retry")
@@ -202,7 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         elif any(x is not None for x in status_fields):
             raise ConfigurationError("M07_STATUS_FIELDS_ONLY_FOR_SYNTHETIC_CLI")
         if (args.m07_private_order_status_once
-                or args.m07_private_latest_order_once):
+                or args.m07_private_latest_order_once
+                or args.m07_private_14day_order_once):
             settings.require_m01_safety()
             if (type(args.m07_private_symbol) is not str
                     or not re.fullmatch(r"[A-Z0-9]{2,20}IDR",
@@ -213,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
                                         args.m07_private_client_order_id)):
                 raise ConfigurationError("M07_READONLY_EXPLICIT_ORDER_ID_REQUIRED")
-            if (args.m07_private_latest_order_once
+            if ((args.m07_private_latest_order_once
+                    or args.m07_private_14day_order_once)
                     and args.m07_private_client_order_id is not None):
                 raise ConfigurationError("M07_LATEST_REJECTS_CLIENT_ID_OVERRIDE")
         elif (args.m07_private_symbol is not None
@@ -640,7 +644,8 @@ def main(argv: list[str] | None = None) -> int:
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
         if (args.m07_private_order_status_once
-                or args.m07_private_latest_order_once):
+                or args.m07_private_latest_order_once
+                or args.m07_private_14day_order_once):
             # Reuse only the preexisting V2 owner-only 0600 credentials.
             # No discovery outside V2, no secrets in logs or JSON result.
             try:
@@ -656,8 +661,13 @@ def main(argv: list[str] | None = None) -> int:
                         client_order_id=args.m07_private_client_order_id,
                         api_key=api_key, secret_key=secret_key,
                     )
-                else:
+                elif args.m07_private_latest_order_once:
                     report = app.inspect_m07_private_latest_order_once(
+                        symbol=args.m07_private_symbol,
+                        api_key=api_key, secret_key=secret_key,
+                    )
+                else:
+                    report = app.inspect_m07_private_14day_order_once(
                         symbol=args.m07_private_symbol,
                         api_key=api_key, secret_key=secret_key,
                     )
