@@ -43,6 +43,7 @@ class M06PersistentScopedSpecialSellTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path=Path(self.tmp.name)/"m06-v2-ownership.sqlite3"
         self.ledger=M06OwnershipLedger(self.path)
+        self.path.chmod(0o600)
         self.key=M06OwnershipLedger.account_scope_from_exchange_uid(UID)
 
     def put(self, asset="flokiidr", **kw):
@@ -50,6 +51,28 @@ class M06PersistentScopedSpecialSellTests(unittest.TestCase):
         return self.ledger.observe_scoped_external_special_sells_offline(
             account_uid=UID,symbol=asset,orders=orders,fills=fills,
         )
+
+    def test_insecure_ledger_refuses_persisting_private_sell_ids(self):
+        orders,fills=source()
+        self.path.chmod(0o644)
+        with self.assertRaisesRegex(OwnershipConflict,"LEDGER_INSECURE"):
+            self.ledger.observe_scoped_external_special_sells_offline(
+                account_uid=UID,symbol="flokiidr",
+                orders=orders,fills=fills)
+        self.path.chmod(0o600)
+        self.assertEqual(self.ledger.review_protected_rebuy(
+            account_key=self.key).distinct_sell_fills,0)
+
+    def test_missing_existing_db_never_automatically_recreated_by_import(self):
+        other=Path(self.tmp.name)/"missing-special-ledger.sqlite3"
+        existing=M06OwnershipLedger(other)
+        other.unlink()
+        orders,fills=source()
+        with self.assertRaisesRegex(OwnershipConflict,"LEDGER_INSECURE"):
+            existing.observe_scoped_external_special_sells_offline(
+                account_uid=UID,symbol="flokiidr",
+                orders=orders,fills=fills)
+        self.assertFalse(other.exists())
 
     def test_manual_sell_is_protected_same_asset_no_bot_intent(self):
         out=self.put()
