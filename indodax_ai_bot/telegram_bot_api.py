@@ -200,6 +200,7 @@ class TelegramOwnerPoller:
         result = self._owner.handle_callback(
             user_id=from_user["id"], chat_id=chat["id"],
             data=data, now_epoch=now_epoch, chat_type="private",
+            telegram_message_id=message["message_id"],
         )
         # A successful owner PASS is stored as PASS, not rewritten to
         # REJECT. This is a consent-only shadow: execution remains OFF.
