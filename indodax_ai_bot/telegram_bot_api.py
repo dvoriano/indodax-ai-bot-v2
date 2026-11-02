@@ -217,13 +217,42 @@ class TelegramOwnerPoller:
         if result.get("accepted") is True:
             if choice not in ("PASS", "REJECT") or result.get("final_decision") != choice:
                 raise TelegramTransportError("M05_TELEGRAM_OWNER_DECISION_MISMATCH")
+            # One durable UI-feedback attempt per original card. If the
+            # network later fails, a second button press cannot duplicate
+            # confirmation or change the first owner decision.
+            notice = self._ledger.claim_finished_review_button_notice(
+                user_id=from_user["id"], chat_id=chat["id"],
+                callback_data=data, now_epoch=now_epoch,
+                telegram_message_id=message["message_id"],
+                chat_type="private",
+            )
+            if notice.get("accepted") is not True:
+                raise TelegramTransportError("M05_OWNER_UI_FEEDBACK_CLAIM_FAILED")
             outcome = "OWNER_CALLBACK_" + choice + "_RECORDED"
             reply = "Owner " + choice + " dicatat. Simulasi saja, order OFF."
         else:
             if choice is not None or result.get("final_decision") is not None:
                 raise TelegramTransportError("M05_TELEGRAM_UNAUTHORIZED_FINAL")
-            outcome = "OWNER_CALLBACK_INVALID_OR_EXPIRED"
-            reply = "Proposal tidak berlaku. Tidak ada order."
+            # Some owner callbacks only arrive on the NEXT 30-second poll,
+            # after the strict 90-second TTL. They are correctly rejected,
+            # but until now both stale buttons remained and no chat message
+            # explained the rejection. One original-card-bound cleanup only.
+            notice = self._ledger.claim_finished_review_button_notice(
+                user_id=from_user["id"], chat_id=chat["id"],
+                callback_data=data, now_epoch=now_epoch,
+                telegram_message_id=message["message_id"],
+                chat_type="private",
+            )
+            if notice.get("accepted") is True:
+                outcome = "OWNER_CALLBACK_STALE_UI_NOTICE"
+                label = notice["ui_notice_label"]
+                reply = (
+                    "M05 review " + label +
+                    " sudah ditutup. Tidak ada keputusan baru. Trading OFF."
+                )
+            else:
+                outcome = "OWNER_CALLBACK_INVALID_OR_EXPIRED"
+                reply = "Proposal tidak berlaku. Tidak ada order."
         return (outcome, "answerCallbackQuery", reply)
 
     def poll_once(self, *, limit: int = 10) -> dict[str, Any]:
@@ -303,6 +332,7 @@ class TelegramOwnerPoller:
                 if method == "answerCallbackQuery" and outcome in (
                     "OWNER_CALLBACK_PASS_RECORDED",
                     "OWNER_CALLBACK_REJECT_RECORDED",
+                    "OWNER_CALLBACK_STALE_UI_NOTICE",
                 ):
                     failures = []
                     try:
@@ -326,7 +356,8 @@ class TelegramOwnerPoller:
                         self._api.call("sendMessage", {
                             "chat_id": self._ledger.owner_user_id,
                             "text": (
-                                "M05 review " +
+                                reply if outcome == "OWNER_CALLBACK_STALE_UI_NOTICE"
+                                else "M05 review " +
                                 ("PASS" if outcome == "OWNER_CALLBACK_PASS_RECORDED"
                                  else "REJECT") +
                                 " TERCATAT satu kali. SIMULASI saja, "
