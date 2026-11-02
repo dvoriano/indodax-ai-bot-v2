@@ -189,12 +189,15 @@ class OwnerDecisionLedger:
         with self._tx() as db:
             row = db.execute(
                 """SELECT
-                       COALESCE(SUM(delivery_state='QUEUED'
-                                    AND expires_epoch>?),0),
-                       COALESCE(SUM(delivery_state='SENT'
-                                    AND expires_epoch>?),0),
+                       COALESCE(SUM(o.delivery_state='QUEUED'
+                                    AND o.expires_epoch>?
+                                    AND p.state='PENDING'),0),
+                       COALESCE(SUM(o.delivery_state='SENT'
+                                    AND o.expires_epoch>?
+                                    AND p.state='PENDING'),0),
                        COUNT(*)
-                   FROM m05_market_advisory_outbox""",
+                   FROM m05_market_advisory_outbox o
+                   JOIN m05_proposals p ON p.proposal_id=o.proposal_id""",
                 (now_epoch, now_epoch),
             ).fetchone()
             reviewed = db.execute(
