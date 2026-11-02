@@ -172,6 +172,52 @@ class OwnerDecisionLedger:
             "live_execution_authorized": False,
         }
 
+    def owner_review_snapshot(
+        self, *, user_id: int, chat_id: int,
+        now_epoch: int, chat_type: str = "private",
+    ) -> dict[str, Any]:
+        """Owner-private existing M05 facts, NOT trade/account/AI evidence.
+
+        This intentionally reads only the original owner decision SQLite
+        ledger. It does not call exchanges, generate a proposal or order,
+        inspect foreign accounts, or promote public candidates to G1.
+        """
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        if type(now_epoch) is not int or now_epoch <= 0:
+            return _blocked("INVALID_M05_SNAPSHOT_CLOCK")
+        with self._tx() as db:
+            row = db.execute(
+                """SELECT
+                       COALESCE(SUM(delivery_state='QUEUED'
+                                    AND expires_epoch>?),0),
+                       COALESCE(SUM(delivery_state='SENT'
+                                    AND expires_epoch>?),0),
+                       COUNT(*)
+                   FROM m05_market_advisory_outbox""",
+                (now_epoch, now_epoch),
+            ).fetchone()
+            reviewed = db.execute(
+                """SELECT
+                       COALESCE(SUM(state='PASS'
+                                    AND reason='OWNER_BUTTON'),0),
+                       COALESCE(SUM(state='REJECT'
+                                    AND reason='OWNER_BUTTON'),0)
+                   FROM m05_proposals"""
+            ).fetchone()
+        return {
+            "accepted": True,
+            "fresh_queued_market_advisories": int(row[0]),
+            "fresh_sent_market_advisories": int(row[1]),
+            "market_advisories_recorded": int(row[2]),
+            "owner_review_pass_count": int(reviewed[0]),
+            "owner_review_reject_count": int(reviewed[1]),
+            "market_source_authenticated": False,
+            "exchange_fills_authenticated": False,
+            "execution_allowed": False,
+            "final_decision": None,
+        }
+
     def switch_mode(self, *, user_id: int, chat_id: int, mode: str,
                     now_epoch: int, chat_type: str = "private") -> dict[str, Any]:
         if not self._is_owner(user_id, chat_id, chat_type):
