@@ -22,6 +22,7 @@ from .m06_shadow_account import AccountObservation
 from .m06_private_payloads import parse_account, parse_orders, parse_fills, parse_open_orders
 from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, ProtectedRebuyReview
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
+from .policy import ScalpingPolicy, IDRFundingRouteReview
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
@@ -293,6 +294,42 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         return M06OwnershipLedger(db_path).review_protected_rebuy(
             account_key=account_key,
+        )
+
+    def review_m06_idr_funding_route_offline(
+            self, *, db_path: str, account_key: str, account,
+            funding_source: str, buy_asset: str, requested_idr: Decimal,
+            commitments_not_locked_idr: Decimal,
+            local_shadow_commitments_idr: Decimal,
+    ) -> IDRFundingRouteReview:
+        """Original V2 M06 ledger + source-split funding route, PREVIEW only.
+
+        MAIN recycles any available general IDR; special SELL proceeds
+        remain exclusively earmarked for repurchasing their SAME asset.
+        """
+        self.settings.require_m01_safety()
+        from .m06_private_payloads import AccountBalances
+        if type(account) is not AccountBalances:
+            raise ValueError("M06_IDR_ACCOUNT_INPUT_INVALID")
+        if (type(commitments_not_locked_idr) is not Decimal
+                or type(local_shadow_commitments_idr) is not Decimal
+                or not commitments_not_locked_idr.is_finite()
+                or not local_shadow_commitments_idr.is_finite()
+                or commitments_not_locked_idr < 0
+                or local_shadow_commitments_idr < 0):
+            raise ValueError("M06_IDR_COMMITMENTS_INVALID")
+        rebuy = self.review_m06_protected_rebuy_offline(
+            db_path=db_path, account_key=account_key,
+        )
+        return ScalpingPolicy().review_idr_buy_funding_route(
+            free_idr=account.free_idr, locked_idr=account.locked_idr,
+            floki_rebuy_idr=rebuy.floki_idr_local_protected,
+            pepe_rebuy_idr=rebuy.pepe_idr_local_protected,
+            commitments_not_locked_idr=(
+                commitments_not_locked_idr + local_shadow_commitments_idr
+            ),
+            funding_source=funding_source, buy_asset=buy_asset,
+            requested_idr=requested_idr,
         )
 
     def reconcile_m06_capital_with_local_rebuy_offline(self, *,

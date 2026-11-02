@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+import re
 
 
 
@@ -62,6 +63,29 @@ class MainCapitalReview:
     spendable_idr: Decimal
     overcommitted: bool
     source_authenticated: bool = False
+    execution_allowed: bool = False
+
+
+@dataclass(frozen=True)
+class IDRFundingRouteReview:
+    """A funding-source preview, NOT permission to dispatch an exchange order.
+
+    All GENERAL IDR can revolve into the next eligible MAIN scalp, whatever
+    its origin or size. Only FLOKI/PEPE SELL proceeds are earmarked to
+    repurchase their SAME asset. Read-only local reservations never
+    authenticate actual proceeds or account-wide availability.
+    """
+    funding_source: str
+    buy_asset: str
+    requested_idr: Decimal
+    main_available_idr: Decimal
+    floki_rebuy_available_idr: Decimal
+    pepe_rebuy_available_idr: Decimal
+    selected_source_budget_idr: Decimal
+    source_and_amount_match: bool
+    all_buckets_funded_by_free_balance: bool
+    source_authenticated: bool = False
+    exchange_order_authorized: bool = False
     execution_allowed: bool = False
 
 
@@ -159,6 +183,69 @@ class ScalpingPolicy:
             commitments_not_locked_idr=commitments,
             spendable_idr=max(Decimal("0"), remainder),
             overcommitted=remainder < 0,
+        )
+
+    def review_idr_buy_funding_route(
+        self, *, free_idr: Decimal, locked_idr: Decimal,
+        floki_rebuy_idr: Decimal, pepe_rebuy_idr: Decimal,
+        commitments_not_locked_idr: Decimal,
+        funding_source: str, buy_asset: str,
+        requested_idr: Decimal,
+    ) -> IDRFundingRouteReview:
+        """Route a proposed IDR BUY by SOURCE, not original principal amount.
+
+        MAIN source: any presently FREE GENERAL IDR (deposits, past trading,
+        or settled MAIN scalp proceeds) after two protected rebuy reserves
+        and not-yet-locked commitments. NO fixed capital baseline or ceiling.
+        Special sale proceeds: FLOKI_REBUY -> FLOKI only; PEPE_REBUY -> PEPE
+        only. Never pool these proceeds with MAIN, even if all coins share
+        one exchange IDR wallet. No wallet evidence or LIVE authorization.
+        """
+        if (type(funding_source) is not str or funding_source not in (
+                "MAIN", "FLOKI_REBUY", "PEPE_REBUY")):
+            raise ValueError("M06_IDR_FUNDING_SOURCE_INVALID")
+        if (type(buy_asset) is not str
+                or re.fullmatch(r"[A-Z0-9]{2,20}", buy_asset) is None
+                or buy_asset == "IDR"):
+            raise ValueError("M06_IDR_BUY_ASSET_INVALID")
+        if (type(requested_idr) is not Decimal
+                or not requested_idr.is_finite()
+                or requested_idr <= 0
+                or requested_idr >= Decimal("1e24")):
+            raise ValueError("M06_IDR_BUY_AMOUNT_INVALID")
+        budget = self.review_main_capital(
+            free_idr=free_idr, locked_idr=locked_idr,
+            floki_rebuy_idr=floki_rebuy_idr,
+            pepe_rebuy_idr=pepe_rebuy_idr,
+            commitments_not_locked_idr=commitments_not_locked_idr,
+        )
+        sufficient_all = not budget.overcommitted
+        sources = {
+            "MAIN": budget.spendable_idr,
+            "FLOKI_REBUY": floki_rebuy_idr,
+            "PEPE_REBUY": pepe_rebuy_idr,
+        }
+        if funding_source == "MAIN":
+            # Trading exclusions remain separate from historical read-only.
+            asset_matches = buy_asset not in (
+                "FLOKI", "PEPE", "USDT", "USDC")
+        else:
+            asset_matches = (
+                buy_asset == ("FLOKI" if funding_source == "FLOKI_REBUY"
+                              else "PEPE")
+            )
+        chosen = sources[funding_source]
+        return IDRFundingRouteReview(
+            funding_source=funding_source, buy_asset=buy_asset,
+            requested_idr=requested_idr,
+            main_available_idr=budget.spendable_idr,
+            floki_rebuy_available_idr=floki_rebuy_idr,
+            pepe_rebuy_available_idr=pepe_rebuy_idr,
+            selected_source_budget_idr=chosen,
+            source_and_amount_match=(
+                sufficient_all and asset_matches and requested_idr <= chosen
+            ),
+            all_buckets_funded_by_free_balance=sufficient_all,
         )
 
     def review_special_asset_pool(
