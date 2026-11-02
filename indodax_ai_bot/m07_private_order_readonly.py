@@ -23,12 +23,13 @@ from .m06_scoped_https import (
     enforce_view_only_permissions, M06ScopeDenied,
 )
 from .m07_order_adapter import (
-    OfficialV2OrderAdapter, PreparedM07Request, _symbol, _client_id,
+    OfficialV2OrderAdapter, PreparedM07Request, _SYMBOL, _client_id,
 )
 
 _HOST = "api.indodax.com"
 _MAX_BODY = 65536
 _MAX_RESPONSES = 2
+_SEVEN_DAYS_MS = 7 * 86400 * 1000
 _DIGITS = re.compile(r"(?:0|[1-9][0-9]{0,20})(?:\.[0-9]{1,18})?\Z")
 _ORDER_STATUS = frozenset((
     "NEW", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED",
@@ -37,6 +38,13 @@ _ORDER_STATUS = frozenset((
 
 class M07ReadOnlyError(ValueError):
     """Only fixed safe diagnostic codes; never include raw private payloads."""
+
+
+def _readonly_symbol(symbol: str) -> str:
+    """Audit every valid IDR symbol, not only MAIN trading candidates."""
+    if type(symbol) is not str or not _SYMBOL.fullmatch(symbol):
+        raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID")
+    return symbol
 
 
 @dataclass(frozen=True, repr=False)
@@ -73,7 +81,7 @@ def normalize_order_status(
 ) -> M07ReadOnlyOrder:
     """Validate the documented GET /api/v2/order body, never infer a fill lot."""
     try:
-        _symbol(expected_symbol)
+        _readonly_symbol(expected_symbol)
         _client_id(expected_client_id)
     except ValueError:
         raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID") from None
@@ -190,9 +198,10 @@ def _read_and_record_order(*, journal, symbol: str,
                            client_order_id: str, uid: int,
                            api_key: str, secret_key: str,
                            requests_completed: int,
-                           history_discovered: bool) -> dict:
+                           history_discovered: bool,
+                           history_submit_ms: int | None = None) -> dict:
     ts = int(time.time() * 1000)
-    request = OfficialV2OrderAdapter().prepare_status_offline(
+    request = OfficialV2OrderAdapter().prepare_status_viewonly_offline(
         symbol=symbol, orig_client_order_id=client_order_id,
         api_key=api_key, secret_key=secret_key, timestamp_ms=ts,
     )
@@ -201,6 +210,9 @@ def _read_and_record_order(*, journal, symbol: str,
         expected_symbol=symbol,
         expected_client_id=client_order_id,
     )
+    if (history_submit_ms is not None
+            and order.created_ms != history_submit_ms):
+        raise M07ReadOnlyError("M07_HISTORY_ORDER_TIME_MISMATCH")
     fingerprint = hashlib.sha256(
         (api_key + ":" + str(uid)).encode("utf-8")
     ).hexdigest()
@@ -235,7 +247,7 @@ def read_m07_order_status_once(*, journal, symbol: str,
                                api_key: str, secret_key: str) -> dict:
     """Two GETs: owner key permissions + order by exact known client ID."""
     try:
-        _symbol(symbol)
+        _readonly_symbol(symbol)
         _client_id(client_order_id)
     except ValueError:
         raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID") from None
@@ -249,15 +261,21 @@ def read_m07_order_status_once(*, journal, symbol: str,
     )
 
 
-def _latest_client_id_from_history(payload: object, *,
-                                   symbol: str) -> str:
-    """Only 10 recent rows: no implication of exhaustive historical coverage."""
-    if type(payload) is not dict or type(payload.get("data")) is not list:
+def _latest_history_candidate(
+        payload: object, *, symbol: str, allow_empty: bool = False,
+        from_ms: int | None = None, until_ms: int | None = None,
+        ) -> tuple[str, int] | None:
+    """Select latest order, reject untrusted rows and ambiguous timestamps."""
+    _readonly_symbol(symbol)
+    if (type(payload) is not dict or type(payload.get("data")) is not list
+            or type(payload.get("code")) is int):
         raise M07ReadOnlyError("M07_HISTORY_RESPONSE_INVALID")
     rows = payload["data"]
     if len(rows) > 10:
         raise M07ReadOnlyError("M07_HISTORY_LIMIT_INVALID")
     if not rows:
+        if allow_empty:
+            return None
         raise M07ReadOnlyError("M07_HISTORY_EMPTY_UNRESOLVED")
     best_id, best_epoch = None, -1
     for row in rows:
@@ -274,11 +292,21 @@ def _latest_client_id_from_history(payload: object, *,
         if (type(submit_ms) is not int
                 or not 1_000_000_000_000 <= submit_ms <= 9_999_999_999_999):
             raise M07ReadOnlyError("M07_HISTORY_SUBMIT_TIME_INVALID")
+        if (from_ms is not None and submit_ms < from_ms
+                or until_ms is not None and submit_ms > until_ms):
+            raise M07ReadOnlyError("M07_HISTORY_OUTSIDE_WINDOW")
         if submit_ms == best_epoch:
             raise M07ReadOnlyError("M07_HISTORY_AMBIGUOUS_LATEST")
         if submit_ms > best_epoch:
             best_id, best_epoch = client_id, submit_ms
-    return best_id
+    return best_id, best_epoch
+
+
+def _latest_client_id_from_history(payload: object, *,
+                                   symbol: str) -> str:
+    """Original 24h last-order path retained for backward compatibility."""
+    selected = _latest_history_candidate(payload, symbol=symbol)
+    return selected[0]
 
 
 def read_m07_latest_order_status_once(*, journal, symbol: str,
@@ -289,10 +317,7 @@ def read_m07_latest_order_status_once(*, journal, symbol: str,
     NOT treated as V2 bot orders or spendable assets. Empty history never
     causes a second search or unbounded pagination.
     """
-    try:
-        _symbol(symbol)
-    except ValueError:
-        raise M07ReadOnlyError("M07_ORDER_QUERY_INVALID") from None
+    _readonly_symbol(symbol)
     if not api_key or not secret_key:
         raise M07ReadOnlyError("M07_CREDENTIALS_UNAVAILABLE")
     uid = _verify_view_only_uid(api_key=api_key, secret_key=secret_key)
@@ -302,11 +327,64 @@ def read_m07_latest_order_status_once(*, journal, symbol: str,
         api_key=api_key, secret_key=secret_key,
         timestamp_ms=ts, symbol=symbol.lower(), limit=10,
     )
-    client_id = _latest_client_id_from_history(
+    latest = _latest_history_candidate(
         _https_json(prepared), symbol=symbol,
     )
     return _read_and_record_order(
-        journal=journal, symbol=symbol, client_order_id=client_id,
+        journal=journal, symbol=symbol, client_order_id=latest[0],
         uid=uid, api_key=api_key, secret_key=secret_key,
         requests_completed=3, history_discovered=True,
+        history_submit_ms=latest[1],
     )
+
+def read_m07_14day_order_status_once(*, journal, symbol: str,
+                                     api_key: str, secret_key: str) -> dict:
+    """One strictly bounded 14-day retrospective View Only diagnostic.
+
+    Exactly 1 account GET + 2 <=7-day histories + at most 1 GET status.
+    USDT/PEPE/FLOKI may be OBSERVED but never traded by M07OrderDraft.
+    This is NOT full history coverage, ownership or trading authorization.
+    """
+    _readonly_symbol(symbol)
+    if not api_key or not secret_key:
+        raise M07ReadOnlyError("M07_CREDENTIALS_UNAVAILABLE")
+    uid = _verify_view_only_uid(api_key=api_key, secret_key=secret_key)
+    observed_now_ms = int(time.time() * 1000)
+    if not 1_000_000_000_000 <= observed_now_ms <= 9_999_999_999_999:
+        raise M07ReadOnlyError("M07_OBSERVATION_CLOCK_INVALID")
+    start = observed_now_ms - 2 * _SEVEN_DAYS_MS
+    mid = observed_now_ms - _SEVEN_DAYS_MS
+    windows = ((mid, observed_now_ms), (start, mid - 1))
+    latest = None
+    for lower, upper in windows:
+        signed = prepare_signed_get(
+            path="/api/v2/order/histories",
+            api_key=api_key, secret_key=secret_key,
+            timestamp_ms=int(time.time() * 1000),
+            symbol=symbol.lower(), start_ms=lower,
+            end_ms=upper, limit=10,
+        )
+        candidate = _latest_history_candidate(
+            _https_json(signed), symbol=symbol, allow_empty=True,
+            from_ms=lower, until_ms=upper,
+        )
+        if candidate is not None:
+            if latest is not None and candidate[1] == latest[1]:
+                raise M07ReadOnlyError("M07_HISTORY_AMBIGUOUS_LATEST")
+            if latest is None or candidate[1] > latest[1]:
+                latest = candidate
+    if latest is None:
+        raise M07ReadOnlyError("M07_HISTORY_14D_EMPTY_UNRESOLVED")
+    result = _read_and_record_order(
+        journal=journal, symbol=symbol, client_order_id=latest[0],
+        uid=uid, api_key=api_key, secret_key=secret_key,
+        requests_completed=4, history_discovered=True,
+        history_submit_ms=latest[1],
+    )
+    result["history_window_last_days"] = 14
+    result["history_is_full_account_coverage"] = False
+    result["excluded_from_main_trading_if_special_asset"] = (
+        symbol[:-3] in ("PEPE", "FLOKI", "USDT", "USDC")
+    )
+    return result
+
