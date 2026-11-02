@@ -39,12 +39,12 @@ def hist(submit_ms):
     ]}
 
 
-def final_status():
+def final_status(*, created_ms=NOW_MS-9*DAY_MS):
     return {
         "symbol":"USDTIDR","clientOrderId":C,
         "orderId":31,"fullOrderId":"usdtidr-limit-31",
         "side":"SELL","type":"LIMIT","status":"FILLED",
-        "origQty":"51","executedQty":"51","time":NOW_MS-9*DAY_MS,
+        "origQty":"51","executedQty":"51","time":created_ms,
     }
 
 
@@ -136,7 +136,8 @@ class M07FourGetReadonlyLookbackTests(unittest.TestCase):
                 req.append(request.path)
                 return [
                     ACCOUNT,hist(NOW_MS-2*DAY_MS),
-                    hist(NOW_MS-10*DAY_MS),final_status()
+                    hist(NOW_MS-10*DAY_MS),
+                    final_status(created_ms=NOW_MS-2*DAY_MS)
                 ][len(req)-1]
             with (
                 patch("indodax_ai_bot.m07_private_order_readonly._https_json",
@@ -150,6 +151,33 @@ class M07FourGetReadonlyLookbackTests(unittest.TestCase):
             self.assertEqual(result["requests_completed"],4)
             self.assertEqual(len(req),4)
             self.assertFalse(result["history_is_full_account_coverage"])
+
+    def test_history_get_order_clock_mismatch_cannot_be_stored(self):
+        with TemporaryDirectory() as tmp:
+            db=Path(tmp)/"v2.sqlite3"
+            received=[]
+            def answer(request):
+                received.append(request.path)
+                return [ACCOUNT,{"data":[]},
+                        hist(NOW_MS-9*DAY_MS),
+                        final_status(created_ms=NOW_MS-10*DAY_MS)
+                       ][len(received)-1]
+            with (
+                patch("indodax_ai_bot.m07_private_order_readonly._https_json",
+                      side_effect=answer),
+                patch("indodax_ai_bot.m07_private_order_readonly.time.time",
+                      return_value=NOW_MS/1000),
+            ):
+                with self.assertRaisesRegex(M07ReadOnlyError,
+                                            "M07_HISTORY_ORDER_TIME_MISMATCH"):
+                    read_m07_14day_order_status_once(
+                        journal=DecisionJournal(db),
+                        symbol="USDTIDR",api_key=KEY,secret_key=SECRET)
+            self.assertEqual(len(received),4)
+            with DecisionJournal(db)._connect() as con:
+                self.assertEqual(con.execute(
+                    "SELECT COUNT(*) FROM m07_exchange_readonly_orders"
+                ).fetchone()[0],0)
 
     def test_history_out_of_window_fails_before_fourth_get(self):
         with TemporaryDirectory() as tmp:
