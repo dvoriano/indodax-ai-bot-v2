@@ -89,6 +89,25 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
                 self.assertIsNone(report["fee_and_slippage_scenarios"])
                 self.assertFalse(report["execution_allowed"])
 
+    def test_tiny_base_quantity_is_not_mistaken_for_zero_or_covered(self):
+        # 100k IDR / 1e24 IDR per coin is only 1e-19 base units.
+        # A fixed absolute 1e-12 epsilon would incorrectly count this
+        # meaningful quantity as zero and fabricate a total loss.
+        quote = public_observation(
+            ticker_bid="999999999999999999999999",
+            ticker_ask="1000000000000000000000000",
+            bids=(("999999999999999999999999", "1"),),
+            asks=(("1000000000000000000000000", "1"),),
+        )
+        report = observe_public_quote_friction(quote)
+        self.assertEqual(report["status"], "VISIBLE_BOOK_WALK_ILLUSTRATIVE_ONLY")
+        self.assertEqual(report["illustrative_base_qty_from_asks"],
+                         "1E-19")
+        self.assertGreater(
+            D(report["illustrative_immediate_bid_proceeds_idr"]), D("99999")
+        )
+        self.assertFalse(report["execution_allowed"])
+
     def test_stale_invalid_cross_ticker_depth_and_no_book_fail_closed(self):
         for quote, expected in (
             (public_observation(ticker_bid="95"),
