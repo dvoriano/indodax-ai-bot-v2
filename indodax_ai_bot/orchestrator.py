@@ -6,6 +6,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import time
 import sqlite3
+import os
+import stat
 
 from .config import Settings
 from .contracts import FinalDecision
@@ -456,6 +458,24 @@ class DailyScalpingOrchestrator:
         Unlike bot-owned fills, manual/external sells have NO V2 intent.
         """
         self.settings.require_m01_safety()
+        # Constructor of the existing M06 ledger initializes tables. Guard
+        # BEFORE construction, otherwise a missing file would be created
+        # and a shared/symlink path might be mutated prematurely.
+        if type(db_path) is not str or not db_path.startswith("/"):
+            raise ValueError("M06_EXTERNAL_LEDGER_ABSOLUTE_PATH_REQUIRED")
+        p = Path(db_path)
+        try:
+            directory = p.parent.lstat()
+            file = p.lstat()
+        except OSError:
+            raise ValueError("M06_EXTERNAL_EXISTING_LEDGER_REQUIRED") from None
+        if not (stat.S_ISDIR(directory.st_mode)
+                and stat.S_ISREG(file.st_mode)
+                and directory.st_uid == os.getuid()
+                and file.st_uid == os.getuid()
+                and directory.st_mode & 0o077 == 0
+                and file.st_mode & 0o077 == 0):
+            raise ValueError("M06_EXTERNAL_EXISTING_LEDGER_INSECURE")
         report = M06OwnershipLedger(
             db_path,
         ).observe_scoped_external_special_sells_offline(
