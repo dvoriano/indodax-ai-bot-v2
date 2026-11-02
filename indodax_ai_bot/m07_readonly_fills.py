@@ -77,17 +77,23 @@ def reconcile_m07_mytrades(
         for row in records:
             if type(row) is not dict:
                 raise M07ReadOnlyError("M07_FILLS_ROW_INVALID")
-            ident = row.get("tradeId")
-            if type(ident) is not str or not _DIGEST_ID.fullmatch(ident) or ident in ids:
-                raise M07ReadOnlyError("M07_FILLS_TRADE_ID_DUPLICATED")
-            ids.add(ident)
-            if (row.get("symbol") != order.symbol.lower()
-                    or row.get("clientOrderId") != order.client_order_id
-                    or row.get("orderId") != order.full_order_id
+            if row.get("symbol") != order.symbol.lower():
+                raise M07ReadOnlyError("M07_FILLS_ORDER_IDENTITY_MISMATCH")
+            match_client = row.get("clientOrderId") == order.client_order_id
+            match_full = row.get("orderId") == order.full_order_id
+            if not match_client and not match_full:
+                # The scoped endpoint returns OTHER orders in the same
+                # pair/window. Do not mis-attribute those trades to this SELL.
+                continue
+            if (not match_client or not match_full
                     or type(row.get("isBuyer")) is not bool
                     or row["isBuyer"] != (order.side == "BUY")
                     or type(row.get("isMaker")) is not bool):
                 raise M07ReadOnlyError("M07_FILLS_ORDER_IDENTITY_MISMATCH")
+            ident = row.get("tradeId")
+            if type(ident) is not str or not _DIGEST_ID.fullmatch(ident) or ident in ids:
+                raise M07ReadOnlyError("M07_FILLS_TRADE_ID_DUPLICATED")
+            ids.add(ident)
             t = row.get("time")
             if (type(t) is not int
                     or not window_start_ms <= t <= window_end_ms):
@@ -106,7 +112,7 @@ def reconcile_m07_mytrades(
                 ident, str(qty), str(quote), str(fee), str(price),
                 t, bool(row["isMaker"]),
             ))
-        if base != order.executed_qty or base <= 0 or commission > gross:
+        if not entries or base != order.executed_qty or base <= 0 or commission > gross:
             raise M07ReadOnlyError("M07_FILLS_EXECUTED_QUANTITY_MISMATCH")
         net = gross - commission if order.side == "SELL" else gross + commission
         if net <= 0 or net >= Decimal("1e28"):
