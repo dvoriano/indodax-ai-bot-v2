@@ -1,12 +1,12 @@
 [Unit]
-Description=Indodax V2 M05 dedicated Telegram 30-second owner polling
+Description=Indodax V2 M05 dedicated Telegram 10-second owner polling
 Documentation=https://github.com/dvoriano/indodax-ai-bot-v2/blob/main/docs/M05_DEDICATED_TELEGRAM_OPERATOR.md
 
 [Timer]
 # No scheduled burst catch-up. Each invocation holds the same SQLite lock.
-OnStartupSec=45s
-OnUnitInactiveSec=30s
-AccuracySec=3s
+OnStartupSec=10s
+OnUnitInactiveSec=10s
+AccuracySec=1s
 Persistent=false
 Unit=indodax-v2-m05-telegram.service
 
