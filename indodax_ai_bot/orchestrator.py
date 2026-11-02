@@ -224,6 +224,16 @@ class DailyScalpingOrchestrator:
             api_key=api_key, secret_key=secret_key,
         )
 
+    def inspect_m07_private_fill_fees_once(
+            self, *, symbol: str, api_key: str, secret_key: str) -> dict:
+        """Account-only 14d discovery + matching myTrades, max 5 GET."""
+        self.settings.require_m01_safety()
+        return read_m07_14day_order_status_once(
+            journal=self.journal, symbol=symbol,
+            api_key=api_key, secret_key=secret_key,
+            include_fills=True,
+        )
+
     def inspect_m07_offline_intent_guard_once(self) -> dict:
         return self.journal.m07_offline_intent_summary()
 
