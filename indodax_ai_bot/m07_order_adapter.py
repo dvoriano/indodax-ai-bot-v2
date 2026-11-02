@@ -193,6 +193,28 @@ class OfficialV2OrderAdapter:
             timestamp_ms=timestamp_ms, recv_window_ms=recv_window_ms,
         )
 
+    def prepare_status_viewonly_offline(
+        self, *, symbol: str, orig_client_order_id: str,
+        api_key: str, secret_key: str, timestamp_ms: int,
+        recv_window_ms: int = 5000,
+    ) -> PreparedM07Request:
+        """Read existing account orders, including trading-excluded assets.
+
+        This permits GET only; it never changes which symbols M07OrderDraft
+        may trade. FLOKI/PEPE/USDT/USDC are audit-only here.
+        """
+        if (type(symbol) is not str
+                or not _SYMBOL.fullmatch(symbol)):
+            raise ValueError("M07_VIEWONLY_SYMBOL_INVALID")
+        return self._sign(
+            method="GET", params=(
+                ("symbol", symbol),
+                ("origClientOrderId", _client_id(orig_client_order_id)),
+            ),
+            api_key=api_key, secret_key=secret_key,
+            timestamp_ms=timestamp_ms, recv_window_ms=recv_window_ms,
+        )
+
     def prepare_cancel_offline(
         self, *, symbol: str, orig_client_order_id: str,
         api_key: str, secret_key: str, timestamp_ms: int,
