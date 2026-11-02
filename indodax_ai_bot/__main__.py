@@ -63,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m07-order-adapter-offline-once", action="store_true",
+                       help="Inspect ORIGINAL hardlocked TAPI V2 order/status/cancel contract without API keys, network or orders")
     group.add_argument("--m06-account-review-once", action="store_true",
                        help="Original V2 offline M06 account review, always REJECT; no private keys/requests")
     group.add_argument("--m06-private-readonly-once", action="store_true",
@@ -567,6 +569,16 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m07_order_adapter_offline_once:
+            settings.require_m01_safety()
+            report = app.inspect_m07_official_order_adapter_once()
+            print(json.dumps({
+                "m07_official_order_adapter": report,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
         if args.health:
             result = app.health()
         else:
