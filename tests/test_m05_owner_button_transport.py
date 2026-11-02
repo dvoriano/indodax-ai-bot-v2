@@ -279,7 +279,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
             ).fetchone(), ("REJECT", "EXPIRED", 0))
             self.assertEqual(db.execute(
                 "SELECT COUNT(*) FROM m05_audit "
-                "WHERE event='OWNER_REVIEW_STALE_UI_NOTICE_CLAIMED'"
+                "WHERE event='OWNER_REVIEW_UI_NOTICE_ATTEMPTED'"
             ).fetchone()[0], 1)
         edits = [p for name, p in self.calls
                  if name == "editMessageReplyMarkup"]
