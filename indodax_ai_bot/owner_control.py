@@ -342,13 +342,13 @@ class OwnerDecisionLedger:
         pass_cb = f"m5:{proposal_id}:P:{secret}"
         reject_cb = f"m5:{proposal_id}:R:{secret}"
         message = (
-            "Indodax V2 | M03/M04 public advisory\\n"
-            "Pair: " + pair.upper() + "\\n"
-            "Closed 1m (epoch): " + str(closed_1m_epoch) + "\\n"
-            "Setup M03: " + setup + "\\n"
-            "Analisis M04: " + market_status + "\\n"
-            "RISK: " + risk_status + "\\n"
-            "Fingerprint: " + digest[:16] + "\\n"
+            "Indodax V2 | M03/M04 public advisory\n"
+            "Pair: " + pair.upper() + "\n"
+            "Closed 1m (epoch): " + str(closed_1m_epoch) + "\n"
+            "Setup M03: " + setup + "\n"
+            "Analisis M04: " + market_status + "\n"
+            "RISK: " + risk_status + "\n"
+            "Fingerprint: " + digest[:16] + "\n"
             "G1/account/order: UNVERIFIED. Harga dan jumlah order belum "
             "diotorisasi. PASS/REJECT hanya keputusan review owner; "
             "TIDAK mengirim BUY atau SELL."
@@ -421,11 +421,11 @@ class OwnerDecisionLedger:
             ("M05_OWNER_BUTTON_TRANSPORT_TEST:" + proposal_id).encode()
         ).hexdigest()
         msg = (
-            "M05 BUTTON TEST | SIMULASI, BUKAN SINYAL PASAR\\n"
-            "Hanya uji komunikasi Telegram owner PASS/REJECT.\\n"
+            "M05 BUTTON TEST | SIMULASI, BUKAN SINYAL PASAR\n"
+            "Hanya uji komunikasi Telegram owner PASS/REJECT.\n"
             "Tidak ada pair pasar, G1, AI berbayar, saldo, harga, "
-            "jumlah maupun order.\\n"
-            "Tombol berlaku maksimal 90 detik dari perintah.\\n"
+            "jumlah maupun order.\n"
+            "Tombol berlaku maksimal 90 detik dari perintah.\n"
             "PASS dan REJECT hanya menyimpan hasil uji di SQLite V2. "
             "BUY/SELL TIDAK AKAN DIKIRIM. Trading OFF."
         )
