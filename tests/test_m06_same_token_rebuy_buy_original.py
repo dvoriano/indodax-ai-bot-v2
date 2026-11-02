@@ -138,9 +138,14 @@ class M06RebuyBuyPersistOriginalV2Tests(unittest.TestCase):
         orders,fills=records()
         newer=replace(fills[0],trade_id="new-trade")
         changed=replace(fills[0],commission=D("7"))
+        # Two 2-unit fills require the signed order's executed quantity
+        # to cover 4 units; otherwise it should correctly fail earlier
+        # at over-execution rather than exercising atomic replay rollback.
+        larger=(replace(orders[0],original_qty=D("4"),
+                        executed_qty=D("4")),)
         with self.assertRaisesRegex(OwnershipConflict,"REPLAY_CONFLICT"):
             self.ledger.observe_scoped_same_token_rebuy_buy_offline(
-                account_uid=UID,symbol="flokiidr",orders=orders,
+                account_uid=UID,symbol="flokiidr",orders=larger,
                 fills=(newer,changed))
         report=self.ledger.review_protected_rebuy(account_key=self.key)
         self.assertEqual(report.local_rebuy_buy_observation_count,1)
