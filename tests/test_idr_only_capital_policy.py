@@ -35,7 +35,7 @@ class IDROnlyCapitalPolicyTests(unittest.TestCase):
         roadmap = (ROOT / "docs/ROADMAP.md").read_text()
         self.assertIn("Modal utama V2 IDR-ONLY", guideline)
         self.assertIn("tidak membuktikan", guideline)
-        self.assertIn("gross Rp923.916", guideline)
+        self.assertIn("hasil konversi Rp923.916", guideline)
         self.assertIn("Rp920.078", roadmap)
         self.assertIn("spendable_idr_verified=false", roadmap)
         self.assertIn("M07 checklist **0/5**", roadmap)
