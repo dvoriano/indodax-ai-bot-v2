@@ -551,6 +551,131 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
                 "exchange_order_tradability_verified"])
             self.assertFalse(result["execution_allowed"])
 
+    def test_m07_original_candidate_conservative_sell_minimum_and_tick(self):
+        from dataclasses import replace
+        rules = {
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "50000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0,
+        }
+        obs = replace(public_observation(), pair_rule_fields=rules)
+        with TemporaryDirectory() as d:
+            bot = DailyScalpingOrchestrator(
+                Settings(), DecisionJournal(Path(d)/"journal.sqlite3"),
+            )
+            with patch.object(bot.journal, "record_and_compare_public_wall",
+                              return_value={"status": "UNATTESTED"}):
+                candidate = bot._attach_public_wall_experience(
+                    DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None), obs,
+                )
+        diag = candidate.summary()["public_quote_friction_diagnostic"]
+        preview = diag["public_post_round_sell_research"]
+        self.assertEqual(preview["status"],
+                         "PUBLIC_POST_ROUND_SELL_RESEARCH_ONLY")
+        self.assertEqual(preview["sell_qty_rounded_down_before_real_buy_fees"],
+                         "1000.0")
+        self.assertEqual(preview["round_down_unallocated_base_qty"], "0.0")
+        self.assertEqual(preview["visible_bid_book_sell_gross_idr"], "99000.0")
+        self.assertTrue(preview["sell_notional_meets_public_minimum"])
+        self.assertTrue(preview["minimum_idr_met_on_buy_and_sell"])
+        self.assertEqual(
+            D(preview["required_future_sell_limit_price_ceiled_to_tick"])
+            % D("1"), D("0")
+        )
+        self.assertGreater(
+            D(preview["required_future_sell_limit_price_ceiled_to_tick"]),
+            D("100"),
+        )
+        self.assertTrue(preview["fee_deducted_base_asset_unknown"])
+        self.assertFalse(preview["actual_post_buy_sellable_quantity_verified"])
+        self.assertFalse(preview["future_sell_book_liquidity_verified"])
+        self.assertFalse(preview["exchange_order_acceptance_verified"])
+        self.assertFalse(preview["owner_free_spendable_idr_verified"])
+        self.assertFalse(preview["execution_allowed"])
+        self.assertFalse(diag["execution_allowed"])
+
+    def test_m07_rounded_sell_can_fail_minimum_even_when_buy_passes(self):
+        from dataclasses import replace
+        rules = {
+            "price_precision": "1", "quantity_increment": "0.3",
+            "trade_min_base_currency": "99000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0,
+        }
+        obs = replace(public_observation(), pair_rule_fields=rules)
+        diag = observe_public_quote_friction(obs)
+        rules_check = diag["public_pair_order_constraints"]
+        self.assertEqual(
+            rules_check["status"], "PUBLIC_RULES_QTY_ROUND_DOWN_REQUIRED"
+        )
+        self.assertTrue(rules_check["illustrative_idr_meets_public_minimum"])
+        preview = diag["public_post_round_sell_research"]
+        self.assertEqual(
+            preview["status"], "PUBLIC_POST_ROUND_SELL_BELOW_MIN_IDR"
+        )
+        self.assertEqual(
+            preview["sell_qty_rounded_down_before_real_buy_fees"], "999.9"
+        )
+        self.assertEqual(preview["round_down_unallocated_base_qty"], "0.1")
+        self.assertEqual(preview["visible_bid_book_sell_gross_idr"], "98990.1")
+        self.assertFalse(preview["sell_notional_meets_public_minimum"])
+        self.assertFalse(preview["minimum_idr_met_on_buy_and_sell"])
+        self.assertFalse(preview["execution_allowed"])
+
+    def test_m07_missing_or_suspended_rules_never_authorize_sell_draft(self):
+        from dataclasses import replace
+        rules = {
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "50000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0,
+        }
+        for altered in (
+            {}, {"is_market_suspended": 1}, {"quantity_increment": "NaN"},
+            {"trade_min_traded_currency": "2000"},
+            {"price_precision": "3"},
+        ):
+            with self.subTest(altered=altered):
+                obs = replace(
+                    public_observation(), pair_rule_fields={**rules, **altered}
+                )
+                if not altered:
+                    obs = replace(obs, pair_rule_fields={})
+                diag = observe_public_quote_friction(obs)
+                preview = diag["public_post_round_sell_research"]
+                self.assertEqual(preview["status"], "PUBLIC_RULES_UNQUALIFIED")
+                self.assertIsNone(
+                    preview["required_future_sell_limit_price_ceiled_to_tick"]
+                )
+                self.assertFalse(preview["execution_allowed"])
+
+    def test_m07_explicit_owner_fee_changes_unverified_sell_target_not_go(self):
+        from dataclasses import replace
+        rules = {
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "50000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0,
+        }
+        obs = replace(public_observation(), pair_rule_fields=rules)
+        public = observe_public_quote_friction(obs)
+        override = OwnerEnteredAllInFeeSnapshot.from_mapping(
+            owner_profile(buy="400", sell="400")
+        )
+        owner = observe_public_quote_friction(
+            obs, owner_fee_snapshot=override
+        )
+        a = D(public["public_post_round_sell_research"][
+            "required_future_sell_limit_price_ceiled_to_tick"])
+        b = D(owner["public_post_round_sell_research"][
+            "required_future_sell_limit_price_ceiled_to_tick"])
+        self.assertGreater(b, a)
+        self.assertFalse(owner["fees_all_in_account_verified"])
+        self.assertFalse(owner["public_post_round_sell_research"][
+            "exchange_order_acceptance_verified"])
+        self.assertFalse(owner["execution_allowed"])
+
     def test_existing_bulk_mainpath_only_attaches_cost_to_public_candidate(self):
         with TemporaryDirectory() as d:
             journal = DecisionJournal(Path(d)/"journal.sqlite3")

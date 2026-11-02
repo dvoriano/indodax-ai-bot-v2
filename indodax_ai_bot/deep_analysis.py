@@ -7,7 +7,7 @@ research diagnostics until G1 provenance/coverage gates are implemented.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 from hashlib import sha256
 from typing import Callable
 
@@ -487,6 +487,123 @@ def assess_public_pair_order_constraints(
     return result
 
 
+def _m07_post_round_sell_research(
+    obs: PublicObservation, *,
+    pair_rules: dict, illustrative_idr: Decimal,
+    acquired_before_real_buy_fees: Decimal,
+    buy_all_in_bps: Decimal, sell_all_in_bps: Decimal,
+) -> dict:
+    """Original M07-02 read-only minimum SELL and price-grid sensitivity.
+
+    Visible ASK→BID book arithmetic and public /api/pairs constraints only.
+    The hypothetical asset amount is BEFORE any real BUY fill/fee/rounding.
+    This is NOT a preflight authorization, a bot-owned lot, or a trade quote.
+    """
+    result = {
+        "stage": "M07_POST_ROUND_SELL_MINIMUM_RESEARCH",
+        "status": "PUBLIC_RULES_UNQUALIFIED",
+        "pair": obs.pair,
+        "sell_qty_rounded_down_before_real_buy_fees": None,
+        "round_down_unallocated_base_qty": None,
+        "visible_bid_book_sell_gross_idr": None,
+        "visible_bid_book_sell_after_all_in_fee_idr": None,
+        "sell_notional_meets_public_minimum": False,
+        "minimum_idr_met_on_buy_and_sell": False,
+        "required_future_sell_vwap_before_price_tick": None,
+        "required_future_sell_limit_price_ceiled_to_tick": None,
+        "published_fee_totals_counted_once": True,
+        "spread_and_visible_book_impact_already_in_prices": True,
+        "fee_deducted_base_asset_unknown": True,
+        "actual_post_buy_sellable_quantity_verified": False,
+        "future_sell_book_liquidity_verified": False,
+        "exchange_order_acceptance_verified": False,
+        "owner_free_spendable_idr_verified": False,
+        "g1_verified": False,
+        "execution_allowed": False,
+    }
+    if not isinstance(pair_rules, dict) or pair_rules.get("status") not in (
+        "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY",
+        "PUBLIC_RULES_QTY_ROUND_DOWN_REQUIRED",
+    ):
+        return result
+    try:
+        qty = Decimal(pair_rules["illustrative_base_qty_rounded_down"])
+        tick = Decimal(pair_rules["price_step_idr"])
+        min_idr = Decimal(pair_rules["min_order_idr"])
+        min_qty = Decimal(pair_rules["min_order_base_qty"])
+        if (not all(type(x) is Decimal and x.is_finite() and x >= ZERO
+                    for x in (illustrative_idr, buy_all_in_bps,
+                              sell_all_in_bps, qty, tick, min_idr, min_qty))
+                or tick <= ZERO or qty <= ZERO or min_qty <= ZERO
+                or min_idr <= ZERO or illustrative_idr < min_idr
+                or buy_all_in_bps > Decimal("500")
+                or sell_all_in_bps >= Decimal("10000")
+                or qty < min_qty):
+            return dict(result, status="INVALID_POST_ROUND_PUBLIC_CONSTRAINTS")
+        if (type(acquired_before_real_buy_fees) is not Decimal
+                or not acquired_before_real_buy_fees.is_finite()
+                or acquired_before_real_buy_fees < qty):
+            return dict(result, status="INVALID_ASK_BOOK_ACQUIRED_QUANTITY")
+        if qty != (
+            (qty // Decimal(pair_rules["quantity_increment_base"]))
+            * Decimal(pair_rules["quantity_increment_base"])
+        ):
+            return dict(result, status="QUANTITY_NOT_ON_PUBLIC_INCREMENT")
+        # Same bounded depth used by original M03 book walk. No second REST.
+        remaining = qty
+        sell_gross = ZERO
+        for price, visible_qty in obs.bid_book_levels:
+            if (type(price) is not Decimal or type(visible_qty) is not Decimal
+                    or not price.is_finite() or not visible_qty.is_finite()
+                    or price <= ZERO or visible_qty <= ZERO):
+                return dict(result, status="INVALID_VISIBLE_BID_BOOK")
+            sold = min(remaining, visible_qty)
+            sell_gross += sold * price
+            remaining -= sold
+            if remaining == ZERO:
+                break
+        if remaining != ZERO:
+            return dict(result, status="VISIBLE_BID_DEPTH_INSUFFICIENT_AFTER_ROUND")
+        sell_net = sell_gross * (Decimal(1) - sell_all_in_bps / Decimal(10000))
+        # Original BUY acquired units are not exchange-owned, and BUY fees
+        # might be deducted from asset rather than IDR, making qty less.
+        # Future price is a *mathematical requirement*, never a fill promise.
+        buy_cost = illustrative_idr * (
+            Decimal(1) + buy_all_in_bps / Decimal(10000)
+        )
+        target_net = buy_cost + max(Decimal("10000"), buy_cost * Decimal("0.02"))
+        min_sell_gross = target_net / (
+            Decimal(1) - sell_all_in_bps / Decimal(10000)
+        )
+        required_vwap = min_sell_gross / qty
+        limit_price_on_grid = (
+            (required_vwap / tick).to_integral_value(rounding=ROUND_CEILING)
+            * tick
+        )
+        result.update({
+            "status": (
+                "PUBLIC_POST_ROUND_SELL_RESEARCH_ONLY"
+                if sell_gross >= min_idr
+                else "PUBLIC_POST_ROUND_SELL_BELOW_MIN_IDR"
+            ),
+            "sell_qty_rounded_down_before_real_buy_fees": str(qty),
+            "round_down_unallocated_base_qty": str(
+                acquired_before_real_buy_fees - qty
+            ),
+            "visible_bid_book_sell_gross_idr": str(sell_gross),
+            "visible_bid_book_sell_after_all_in_fee_idr": str(sell_net),
+            "sell_notional_meets_public_minimum": sell_gross >= min_idr,
+            "minimum_idr_met_on_buy_and_sell": sell_gross >= min_idr,
+            "required_future_sell_vwap_before_price_tick": str(required_vwap),
+            "required_future_sell_limit_price_ceiled_to_tick": str(
+                limit_price_on_grid
+            ),
+        })
+        return result
+    except (ArithmeticError, ValueError, KeyError, TypeError):
+        return dict(result, status="POST_ROUND_PRECISION_OR_RULE_UNAVAILABLE")
+
+
 def observe_public_quote_friction(
     obs: PublicObservation, *, illustrative_idr: Decimal = Decimal("100000"),
     owner_fee_snapshot: OwnerEnteredAllInFeeSnapshot | None = None,
@@ -523,6 +640,10 @@ def observe_public_quote_friction(
         "published_idr_pro_all_in_fee_table": None,
         "published_idr_pro_taker_fee_sensitivity": None,
         "selected_all_in_fee_basis": "NO_VALID_BOOK_WALK",
+        "public_post_round_sell_research": {
+            "status": "NOT_EVALUATED_NO_VALID_BOOK_WALK",
+            "execution_allowed": False,
+        },
         "public_pair_order_constraints": {
             "status": "NOT_EVALUATED_NO_VALID_BOOK_WALK",
             "exchange_order_tradability_verified": False,
@@ -713,6 +834,24 @@ def observe_public_quote_friction(
                 "owner_entered_is_not_authenticated_account_fee": True,
                 "execution_allowed": False,
             }
+    # ORIGINAL M07-02 observation mainpath: crossing buy/sell book has
+    # populated both the public per-pair constraints and selected fee source.
+    # Assess the post-increment SELL minimum on a hypothetical quantity,
+    # and ceil any future target to the same observed public price step.
+    # Neither amount is proven owned or order-accepted by the exchange.
+    pair_rules = diagnostic["public_pair_order_constraints"]
+    source_buy = published_buy_bps
+    source_sell = published_sell_bps
+    if diagnostic["owner_entered_fee_sensitivity"] is not None:
+        source_buy = owner_fee_snapshot.buy_all_in_bps
+        source_sell = owner_fee_snapshot.sell_all_in_bps
+    diagnostic["public_post_round_sell_research"] = (
+        _m07_post_round_sell_research(
+            obs, pair_rules=pair_rules, illustrative_idr=illustrative_idr,
+            acquired_before_real_buy_fees=acquired,
+            buy_all_in_bps=source_buy, sell_all_in_bps=source_sell,
+        )
+    )
     return diagnostic
 
 
