@@ -130,7 +130,7 @@ def _https_json(request: PreparedPrivateGET | PreparedM07Request) -> object:
     if type(request) is PreparedPrivateGET:
         if request.path not in (
                 "/api/v2/account", "/api/v2/order/histories",
-                "/api/v2/myTrades"):
+                "/api/v2/myTrades", "/api/v2/openOrders"):
             raise M07ReadOnlyError("M07_READONLY_PATH_DENIED")
     elif type(request) is PreparedM07Request:
         if (request.path != "/api/v2/order"
