@@ -201,6 +201,25 @@ class M06PersistentScopedSpecialSellTests(unittest.TestCase):
         self.assertEqual(again.distinct_sell_fills,1)
         self.assertEqual(again.locally_observed_external_special_sell_fills,0)
 
+    def test_original_orchestrator_refuses_missing_or_world_readable_db(self):
+        app=DailyScalpingOrchestrator(
+            Settings(),DecisionJournal(Path(self.tmp.name)/"decisions2.sqlite3"))
+        orders,fills=source()
+        missing=Path(self.tmp.name)/"missing-local-m06.sqlite3"
+        with self.assertRaisesRegex(ValueError,"EXISTING_LEDGER_REQUIRED"):
+            app.store_m06_scoped_special_sell_observation_offline(
+                db_path=str(missing),account_uid=UID,
+                symbol="flokiidr",orders=orders,fills=fills)
+        self.assertFalse(missing.exists())
+        self.path.chmod(0o644)
+        with self.assertRaisesRegex(ValueError,"EXISTING_LEDGER_INSECURE"):
+            app.store_m06_scoped_special_sell_observation_offline(
+                db_path=str(self.path),account_uid=UID,
+                symbol="flokiidr",orders=orders,fills=fills)
+        self.path.chmod(0o600)
+        self.assertEqual(self.ledger.review_protected_rebuy(
+            account_key=self.key).distinct_sell_fills,0)
+
     def test_original_v2_orchestrator_and_secure_local_readonly_inspection(self):
         orders,fills=source()
         app=DailyScalpingOrchestrator(
