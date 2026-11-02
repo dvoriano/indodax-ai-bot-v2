@@ -25,7 +25,7 @@ from .telegram_owner import OfflineTelegramOwnerInterface
 BOT_API_HOST = "https://api.telegram.org"
 TOKEN_RE = re.compile(r"^[0-9]{5,20}:[A-Za-z0-9_-]{20,128}$")
 METHODS = frozenset(("getUpdates", "sendMessage", "answerCallbackQuery",
-                     "getMe", "getWebhookInfo"))
+                     "editMessageReplyMarkup", "getMe", "getWebhookInfo"))
 READ_ONLY_METHODS = frozenset(("getMe", "getWebhookInfo"))
 Transport = Callable[[str, dict[str, Any], float], Any]
 
@@ -290,9 +290,49 @@ class TelegramOwnerPoller:
                     }
                 else:
                     raise TelegramTransportError("M05_TELEGRAM_UNEXPECTED_REPLY")
-                # If sending fails, consent remains consumed/durable. It is
-                # not re-executed on retries or on a later process restart.
-                self._api.call(method, payload)
+                # Callback already committed exactly once BEFORE any Bot
+                # API effect. A failed/uncertain send is NEVER replayed.
+                if method == "answerCallbackQuery" and outcome in (
+                    "OWNER_CALLBACK_PASS_RECORDED",
+                    "OWNER_CALLBACK_REJECT_RECORDED",
+                ):
+                    failures = []
+                    try:
+                        self._api.call(method, payload)
+                    except TelegramTransportError:
+                        failures.append("ACK")
+                    # Remove both stale inline buttons so Telegram no longer
+                    # presents PASS and REJECT on an already-decided review.
+                    # Never edit a foreign chat: _dispatch validated owner,
+                    # original bot and the original sent message_id.
+                    try:
+                        self._api.call("editMessageReplyMarkup", {
+                            "chat_id": self._ledger.owner_user_id,
+                            "message_id": callback["message"]["message_id"],
+                        })
+                    except TelegramTransportError:
+                        failures.append("KEYBOARD")
+                    # Persistent owner-visible confirmation. A popup alone
+                    # disappears, leaving the impression nothing happened.
+                    try:
+                        self._api.call("sendMessage", {
+                            "chat_id": self._ledger.owner_user_id,
+                            "text": (
+                                "M05 review " +
+                                ("PASS" if outcome == "OWNER_CALLBACK_PASS_RECORDED"
+                                 else "REJECT") +
+                                " TERCATAT satu kali. SIMULASI saja, "
+                                "tidak ada BUY/SELL. Trading OFF."
+                            ),
+                        })
+                    except TelegramTransportError:
+                        failures.append("CONFIRM")
+                    if failures:
+                        raise TelegramTransportError(
+                            "M05_OWNER_FEEDBACK_UNCERTAIN_NO_RETRY"
+                        )
+                else:
+                    self._api.call(method, payload)
         return {
             "handled": handled, "ignored": ignored,
             "next_offset": self._ledger.telegram_next_offset(),
