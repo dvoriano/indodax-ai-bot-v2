@@ -222,6 +222,8 @@ class M07OriginalStatusTimelineTests(unittest.TestCase):
             ("REJECTED", "0.01", "1"),
             ("UNKNOWN", "-0.1", "0"),
             ("FILLED", "NaN", "1"),
+            ("UNKNOWN", "1e-99999", "0"),
+            ("UNKNOWN", "1." + "0" * 100, "0"),
         ]:
             with self.subTest(status=status, base=base):
                 with self.assertRaises(ValueError):
