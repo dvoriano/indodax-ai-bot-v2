@@ -63,6 +63,9 @@ class ProtectedRebuyReview:
     # Local immutability coverage only, NEVER exchange provenance.
     local_rebuy_receipts_linked: bool = False
     local_fill_receipt_count: int = 0
+    # Special manual/external SELL fills imported as LOCAL offline evidence.
+    # Does not certify complete history or exchange-attested ownership.
+    locally_observed_external_special_sell_fills: int = 0
 
 
 @dataclass(frozen=True, repr=False)
@@ -167,6 +170,14 @@ class M06OwnershipLedger:
             with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=2)) as db:
                 db.execute("PRAGMA query_only=ON")
                 db.execute("BEGIN")
+                # Older V2 databases may not yet have the OPTIONAL manual
+                # SELL receipt table. A readonly inspection must not mutate
+                # its schema or incorrectly claim a missing table is a fill.
+                present = {
+                    row[0] for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
                 bound = any(
                     db.execute(
                         "SELECT 1 FROM " + table
@@ -176,8 +187,10 @@ class M06OwnershipLedger:
                     for table in (
                         "m06_intents",
                         "m06_special_rebuy_observations",
+                        "m06_scoped_external_sell_receipts",
                         "m06_manual_asset_floors",
                     )
+                    if table in present
                 )
                 if not bound:
                     raise OwnershipConflict("M06_LOCAL_ACCOUNT_UNBOUND")
@@ -237,6 +250,7 @@ class M06OwnershipLedger:
         local_sources = (
             "m06_intents",
             "m06_special_rebuy_observations",
+            "m06_scoped_external_sell_receipts",
             "m06_manual_asset_floors",
             "m06_local_fill_receipts",
             "m06_shadow_reserve",
@@ -455,15 +469,56 @@ class M06OwnershipLedger:
 
     @staticmethod
     def _read_rebuy_in_transaction(db, account_hash: str) -> ProtectedRebuyReview:
+        # Union local V2-intent SELL receipts and external/manual SELL
+        # observations by trade ID so the SAME fill never counts twice.
+        # External rows are a conservative hold only, NOT owned positions.
         rows = db.execute(
-            "SELECT asset,gross_idr FROM m06_special_rebuy_observations "
+            "SELECT trade_id,asset,order_id,gross_idr "
+            "FROM m06_special_rebuy_observations "
             "WHERE account_hash=? ORDER BY trade_id LIMIT 10001",
             (account_hash,),
         ).fetchall()
         if len(rows) > 10000:
             raise OwnershipConflict("M06_REBUY_LEDGER_LIMIT_EXCEEDED")
+        by_trade = {tid: (asset, oid, raw) for tid,asset,oid,raw in rows}
+        external_count = 0
+        external_only_count = 0
+        has_external = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='m06_scoped_external_sell_receipts'"
+        ).fetchone() is not None
+        if has_external:
+            external = db.execute(
+                "SELECT trade_id,asset,order_id,gross_idr "
+                "FROM m06_scoped_external_sell_receipts "
+                "WHERE account_hash=? ORDER BY trade_id LIMIT 10001",
+                (account_hash,),
+            ).fetchall()
+            if len(external) > 10000:
+                raise OwnershipConflict("M06_SCOPED_EXTERNAL_LEDGER_LIMIT")
+            external_count = len(external)
+            for tid,asset,oid,raw in external:
+                prior = by_trade.get(tid)
+                if prior is not None:
+                    try:
+                        compatible = (
+                            prior[0] == asset and prior[1] == oid
+                            and _amount(Decimal(prior[2])) ==
+                                _amount(Decimal(raw))
+                        )
+                    except (ValueError, ArithmeticError):
+                        raise OwnershipConflict(
+                            "M06_DUPLICATE_SPECIAL_GROSS_CORRUPT") from None
+                    if not compatible:
+                        raise OwnershipConflict(
+                            "M06_DUPLICATE_SPECIAL_SELL_SOURCE_CONFLICT")
+                else:
+                    by_trade[tid] = (asset,oid,raw)
+                    external_only_count += 1
+        if len(by_trade) > 10000:
+            raise OwnershipConflict("M06_REBUY_LEDGER_LIMIT_EXCEEDED")
         floki, pepe = Decimal("0"), Decimal("0")
-        for asset, raw in rows:
+        for asset, oid, raw in by_trade.values():
             try:
                 value = _amount(Decimal(raw))
             except (ValueError, ArithmeticError):
@@ -498,7 +553,9 @@ class M06OwnershipLedger:
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='m06_local_fill_receipts'"
         ).fetchone() is not None
-        linked = has_receipts
+        # External/manual fills do not have a bot-intent receipt. A table
+        # existing for other fills must not certify these as V2 bot-owned.
+        linked = has_receipts and external_only_count == 0
         receipt_count = 0
         if has_receipts:
             receipt_rows = db.execute(
@@ -523,14 +580,158 @@ class M06OwnershipLedger:
                         or linked_row[3] != "SELL"):
                     raise OwnershipConflict("M06_SPECIAL_RECEIPT_CONFLICT")
         return ProtectedRebuyReview(
-            floki, pepe, floki + pepe, len(rows),
+            floki, pepe, floki + pepe, len(by_trade),
             floki_manual_qty_local_floor=floki_floor,
             pepe_manual_qty_local_floor=pepe_floor,
             floki_manual_floor_recorded="FLOKI" in floors,
             pepe_manual_floor_recorded="PEPE" in floors,
             local_rebuy_receipts_linked=linked,
             local_fill_receipt_count=receipt_count,
+            locally_observed_external_special_sell_fills=external_count,
         )
+
+    def observe_scoped_external_special_sells_offline(
+            self, *, account_uid: int, symbol: str,
+            orders: tuple[OrderRecord, ...],
+            fills: tuple[FillRecord, ...],
+    ) -> ProtectedRebuyReview:
+        """Atomic idempotent LOCAL record of same-pair View Only SELL fills.
+
+        Deliberate OFFLINE-only method. Its inputs can be mocked and DO NOT
+        independently attest authenticated exchange origin or all-time
+        coverage. Caller MUST obtain any future real fills from an explicitly
+        owner-approved View Only source. No real M06 GET is made here.
+
+        Missing order, unknown direction or ambiguous client ID DENIES the
+        whole batch. Never interprets absence of a fill as no historic hold.
+        """
+        from .m06_special_sale_window import (
+            observe_m06_special_sale_window, M06SpecialSaleWindowRejected,
+        )
+        account_hash = self._identity(
+            self.account_scope_from_exchange_uid(account_uid)
+        )
+        # This OPTIONAL local import must never create an unchecked DB,
+        # follow a symlink or persist manual order IDs in a shared file.
+        try:
+            p = self.path
+            parent = p.parent.lstat()
+            file = p.lstat()
+            owner = os.getuid()
+            secure = (
+                stat.S_ISDIR(parent.st_mode)
+                and stat.S_ISREG(file.st_mode)
+                and parent.st_uid == owner and file.st_uid == owner
+                and parent.st_mode & 0o077 == 0
+                and file.st_mode & 0o077 == 0
+            )
+        except (OSError, ValueError):
+            secure = False
+        if not secure:
+            raise OwnershipConflict("M06_EXTERNAL_LOCAL_LEDGER_INSECURE")
+        if (type(orders) is not tuple or type(fills) is not tuple
+                or len(orders) > 1000 or len(fills) > 1000):
+            raise OwnershipConflict("M06_EXTERNAL_SCOPED_BATCH_INVALID")
+        try:
+            checked = observe_m06_special_sale_window(
+                symbol=symbol, orders=orders, fills=fills,
+            )
+        except M06SpecialSaleWindowRejected:
+            raise OwnershipConflict(
+                "M06_EXTERNAL_SCOPED_FILL_INVALID") from None
+        if checked.scope_has_unresolved_fills:
+            raise OwnershipConflict("M06_EXTERNAL_SCOPED_COVERAGE_AMBIGUOUS")
+        by_id = {row.order_id: row for row in orders}
+        prepared = []
+        for fill in fills:
+            order = by_id.get(fill.order_id)
+            if (order is None or fill.is_buyer is None
+                    or order.client_order_id is None
+                    or fill.client_order_id != order.client_order_id):
+                raise OwnershipConflict("M06_EXTERNAL_SOURCE_LINK_UNVERIFIED")
+            # BUY fills are not SELL proceeds. BUY rebuy consumption is a
+            # separate unsettled problem and CANNOT reduce this source hold.
+            if order.side != "SELL":
+                continue
+            if (fill.is_buyer is not False or order.symbol != symbol):
+                raise OwnershipConflict("M06_EXTERNAL_SELL_SIDE_INVALID")
+            try:
+                gross = _amount(fill.quantity * fill.price)
+                if fill.quote_quantity is not None:
+                    gross = max(gross, _amount(fill.quote_quantity))
+                if gross <= 0:
+                    raise ValueError("M06_EXTERNAL_SELL_GROSS_NONPOSITIVE")
+            except (ValueError, ArithmeticError, TypeError):
+                raise OwnershipConflict("M06_EXTERNAL_SELL_AMOUNT_INVALID") from None
+            asset = symbol[:-3].upper()
+            content = [
+                account_hash, asset, order.order_id, order.client_order_id,
+                fill.trade_id, fill.order_id, fill.client_order_id,
+                fill.symbol, str(fill.quantity), str(fill.price),
+                str(fill.quote_quantity) if fill.quote_quantity is not None else None,
+                str(fill.commission), fill.commission_asset, fill.is_buyer,
+            ]
+            digest = hashlib.sha256(json.dumps(
+                content, separators=(",", ":"), ensure_ascii=True
+            ).encode("ascii")).hexdigest()
+            prepared.append((fill.trade_id, account_hash, asset,
+                             order.order_id, str(gross), digest))
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            # Explicit offline ingestion only. Normal M06 startup/read-only
+            # and existing historical ledgers never create this new table.
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_scoped_external_sell_receipts (
+                trade_id TEXT PRIMARY KEY,
+                account_hash TEXT NOT NULL,
+                asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
+                order_id TEXT NOT NULL,
+                gross_idr TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL
+            )""")
+            for entry in prepared:
+                prior = db.execute(
+                    "SELECT account_hash,asset,order_id,gross_idr,receipt_sha256 "
+                    "FROM m06_scoped_external_sell_receipts WHERE trade_id=?",
+                    (entry[0],),
+                ).fetchone()
+                if prior is not None:
+                    if prior != entry[1:]:
+                        raise OwnershipConflict("M06_EXTERNAL_SCOPED_REPLAY_CONFLICT")
+                    continue
+                local = db.execute(
+                    "SELECT account_hash,asset,order_id,gross_idr "
+                    "FROM m06_special_rebuy_observations WHERE trade_id=?",
+                    (entry[0],),
+                ).fetchone()
+                if local is not None:
+                    if (local[:3] != entry[1:4]
+                            or _amount(Decimal(local[3])) !=
+                               _amount(Decimal(entry[4]))):
+                        raise OwnershipConflict("M06_EXTERNAL_OVERLAP_CONFLICT")
+                    # A matching gross amount alone is NOT enough. A replay
+                    # could alter qty/price/fee while preserving total IDR.
+                    # Compare against the original locally immutable fill.
+                    original = db.execute(
+                        "SELECT order_id,symbol,qty,price,fee "
+                        "FROM m06_observed_fills WHERE trade_id=?",
+                        (entry[0],),
+                    ).fetchone()
+                    raw_fill = next(
+                        (x for x in fills if x.trade_id == entry[0]),
+                        None,
+                    )
+                    if raw_fill is None or original != (
+                            raw_fill.order_id, raw_fill.symbol,
+                            str(raw_fill.quantity), str(raw_fill.price),
+                            str(raw_fill.commission)):
+                        raise OwnershipConflict(
+                            "M06_EXTERNAL_OVERLAP_FILL_CONFLICT")
+                db.execute(
+                    "INSERT INTO m06_scoped_external_sell_receipts "
+                    "(trade_id,account_hash,asset,order_id,gross_idr,receipt_sha256) "
+                    "VALUES(?,?,?,?,?,?)", entry,
+                )
+            return self._read_rebuy_in_transaction(db, account_hash)
 
     def review_protected_rebuy(self, *, account_key: str) -> ProtectedRebuyReview:
         """Read persisted conservative holds; NEVER claim actual wallet proceeds."""
