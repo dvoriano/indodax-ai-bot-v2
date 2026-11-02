@@ -864,6 +864,9 @@ class M06OwnershipLedger:
                 outflow = _amount(fill.quantity*fill.price)
                 if fill.quote_quantity is not None:
                     outflow=max(outflow,_amount(fill.quote_quantity))
+                if (fill.commission_asset is None
+                        and fill.commission != 0):
+                    raise ValueError("M06_REBUY_BUY_FEE_ASSET_UNKNOWN")
                 if fill.commission_asset is not None and (
                         type(fill.commission_asset) is not str
                         or fill.commission_asset.lower() not in (
@@ -980,7 +983,17 @@ class M06OwnershipLedger:
         except ValueError:
             raise OwnershipConflict("M06_SPECIAL_FILL_AMOUNT_INVALID") from None
         # Conservatively hold GROSS quote IDR (no fee deduction); a locally
-        # observed rebuy BUY is not allowed to reduce this hold.
+        # observed rebuy BUY is not allowed to reduce this hold. A trade
+        # identifier cannot be a BUY and SELL in two local receipt tables.
+        buy_table = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='m06_scoped_rebuy_buy_observations'"
+        ).fetchone() is not None
+        if buy_table and db.execute(
+            "SELECT 1 FROM m06_scoped_rebuy_buy_observations "
+            "WHERE trade_id=?", (fill.trade_id,),
+        ).fetchone() is not None:
+            raise OwnershipConflict("M06_SPECIAL_SELL_BUY_TRADE_COLLISION")
         observed = (account_hash, asset, order.order_id, str(gross))
         prior = db.execute(
             "SELECT account_hash,asset,order_id,gross_idr "
