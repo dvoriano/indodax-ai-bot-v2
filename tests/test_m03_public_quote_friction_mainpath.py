@@ -729,5 +729,169 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
             self.assertEqual(cycle.ai_shadow["completed_roles"], [])
 
 
+
+class M07SameCandidatePublicBridgeTests(unittest.TestCase):
+    """No balance claims: same observed M03 source, original M07 hardlock."""
+
+    def rules(self):
+        return {
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "10000",
+            "trade_min_traded_currency": "1",
+            "is_market_suspended": 0, "is_maintenance": 0,
+        }
+
+    def report(self, obs, *, pair="btc_idr", friction=None):
+        from indodax_ai_bot.m07_same_candidate_public import (
+            assess_m07_same_candidate_public_boundary,
+        )
+        if friction is None:
+            friction = observe_public_quote_friction(obs)
+        return assess_m07_same_candidate_public_boundary(
+            candidate_pair=pair, observation=obs,
+            observed_friction=friction,
+        )
+
+    def test_real_candidate_public_pair_rules_and_fee_basis_same_source(self):
+        obs = replace(public_observation(), pair_rule_fields=self.rules())
+        result = self.report(obs)
+        self.assertEqual(result["status"],
+                         "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY")
+        self.assertEqual(result["observed_pair"], "btc_idr")
+        self.assertEqual(result["closed_1m_epoch"], 1800000060)
+        self.assertTrue(result["same_candidate_and_closed_minute"])
+        self.assertTrue(result["same_observation_public_rule_batch"])
+        self.assertTrue(result["public_quote_price_step_match"])
+        self.assertTrue(result["public_market_explicitly_active"])
+        self.assertEqual(
+            D(result["all_in_buy_taker_bps_public_reference_only"]),
+            D("20.555"))
+        self.assertEqual(
+            D(result["all_in_sell_taker_bps_public_reference_only"]),
+            D("41.555"))
+        for label in (
+            "per_account_fee_verified", "m06_actual_spendable_idr_verified",
+            "m06_special_rebuy_exclusions_verified",
+            "g1_independent_source_verified", "m05_fresh_owner_final_verified",
+            "m07_atomic_order_intent_preflight_verified",
+            "limit_buy_draft_created", "order_sent", "execution_allowed",
+        ):
+            self.assertFalse(result[label])
+
+    def test_cross_pair_or_stale_fee_mixing_never_admitted(self):
+        obs = replace(public_observation(), pair_rule_fields=self.rules())
+        valid_friction = observe_public_quote_friction(obs)
+        for pair, friction in (
+            ("eth_idr", valid_friction),
+            ("btc_idr", {**valid_friction, "pair":"eth_idr"}),
+            ("btc_idr", {**valid_friction,
+                         "closed_1m_epoch":1800000000}),
+            ("btc_idr", {**valid_friction,
+                         "observed_epoch":1800000100}),
+            ("btc_idr", {"pair":"btc_idr"}),
+        ):
+            with self.subTest(pair=pair, report=friction.get("pair")):
+                out = self.report(obs, pair=pair, friction=friction)
+                self.assertEqual(out["status"],
+                                 "M07_PUBLIC_PREFLIGHT_SOURCE_UNRESOLVED")
+                self.assertFalse(out["same_candidate_and_closed_minute"])
+                self.assertFalse(out["execution_allowed"])
+
+    def test_missing_or_maintenance_rules_only_public_warnings(self):
+        for rules in (
+            {},
+            {**self.rules(), "is_maintenance":1},
+            {**self.rules(), "is_market_suspended":1},
+            {**self.rules(), "price_precision":"0"},
+            {**self.rules(), "price_precision":"0.3"},
+        ):
+            with self.subTest(rules=rules):
+                obs=replace(public_observation(),pair_rule_fields=rules)
+                out=self.report(obs)
+                self.assertNotEqual(out["status"],
+                                    "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY")
+                self.assertFalse(out["execution_allowed"])
+
+    def test_cross_candle_and_special_asset_exclusion_do_not_promote(self):
+        from indodax_ai_bot.contracts import SourceReceipt, MarketSnapshot
+        base=public_observation()
+        older=replace(base, snapshot=MarketSnapshot(
+            SourceReceipt("btc_idr",1800000060,1800000200,
+                          "INDODAX_PUBLIC_OHLC_V2_UNATTESTED",False),
+            D("99"),D("100")),
+            pair_rule_fields=self.rules(),
+        )
+        self.assertEqual(self.report(older)["status"],
+                         "M07_PUBLIC_PREFLIGHT_SOURCE_UNRESOLVED")
+        restricted=replace(base, pair="floki_idr", snapshot=MarketSnapshot(
+            SourceReceipt("floki_idr",1800000060,1800000070,
+                          "INDODAX_PUBLIC_OHLC_V2_UNATTESTED",False),
+            D("99"),D("100")),pair_rule_fields=self.rules(),
+        )
+        out=self.report(restricted,pair="floki_idr")
+        self.assertEqual(out["status"],
+                         "M07_PUBLIC_PAIR_RULES_MISSING_OR_EXCLUDED")
+        self.assertFalse(out["execution_allowed"])
+
+    def test_original_callback_preserves_one_public_observation_no_order(self):
+        with TemporaryDirectory() as td:
+            journal=DecisionJournal(Path(td)/"decisions.sqlite3")
+            app=DailyScalpingOrchestrator(Settings(), journal)
+            obs=replace(public_observation(),pair_rule_fields=self.rules())
+            with patch.object(journal, "record_and_compare_public_wall",
+                              return_value={"status":"UNATTESTED"}) as wall:
+                result=app._attach_public_wall_experience(
+                    DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None),obs)
+            wall.assert_called_once()
+            self.assertEqual(result.summary()[
+                "m07_same_candidate_public_preflight"]["status"],
+                "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY")
+            self.assertFalse(result.summary()["trade_authorized"])
+            with journal._connect() as con:
+                self.assertEqual(con.execute(
+                    "SELECT COUNT(*) FROM m07_offline_order_intents",
+                ).fetchone()[0],0)
+
+    def test_original_bulk_mainpath_includes_m07_without_credential_or_owner(self):
+        with TemporaryDirectory() as td:
+            journal=DecisionJournal(Path(td)/"decisions.sqlite3")
+            app=DailyScalpingOrchestrator(Settings(), journal)
+            candidate=DeepCandidate("btc_idr",75,"PUBLIC_REVIEW",None)
+            obs=replace(public_observation(),pair_rule_fields=self.rules())
+
+            def fake_bulk(_market,_screening,*,limit,on_candidate):
+                checked=on_candidate(candidate,obs)
+                return {
+                    "g1_source_admission":{"qualified":False},
+                    "provisional_market_evidence":[checked.summary()],
+                    "g1_verified":False,"source_trust_verified":False,
+                    "trade_history_complete":False,
+                    "execution_allowed":False,
+                }
+
+            with (
+                patch.object(app, "_scan_with_early_momentum",
+                             return_value=object()),
+                patch("indodax_ai_bot.orchestrator.bulk_public_deep_scan",
+                      side_effect=fake_bulk),
+                patch("indodax_ai_bot.orchestrator.ThreeRoleShadow.run",
+                      return_value={"status":"G1_UNQUALIFIED",
+                                    "completed_roles":[],
+                                    "execution_allowed":False}),
+                patch.object(journal, "record_and_compare_public_wall",
+                             return_value={"status":"UNATTESTED"}),
+            ):
+                cycle=app.run_bulk_deep_cycle("m07-public-bound-g1-off",
+                                              market=object(),deep_limit=20)
+            evidence=cycle.bulk["provisional_market_evidence"][0][
+                "m07_same_candidate_public_preflight"]
+            self.assertEqual(
+                evidence["status"],"M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY")
+            self.assertFalse(evidence["m06_actual_spendable_idr_verified"])
+            self.assertFalse(evidence["m05_fresh_owner_final_verified"])
+            self.assertFalse(cycle.execution_allowed)
+            self.assertEqual(cycle.ai_shadow["completed_roles"],[])
+
+
 if __name__ == "__main__":
     unittest.main()
