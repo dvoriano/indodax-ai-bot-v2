@@ -13,7 +13,7 @@ from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner, rank_scanner_with_early_momentum
 from .volume_screening import apply_deep_volume_floor
-from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research, observe_public_quote_friction
+from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research, observe_public_quote_friction, OwnerEnteredAllInFeeSnapshot
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
@@ -141,7 +141,8 @@ class DailyScalpingOrchestrator:
     def __init__(self, settings: Settings, journal: DecisionJournal, *,
                  ai_role_caller=None,
                  source_verifier: G1ReceiptVerifier | None = None,
-                 owner_control: OwnerDecisionLedger | None = None) -> None:
+                 owner_control: OwnerDecisionLedger | None = None,
+                 m03_owner_fee_snapshot: OwnerEnteredAllInFeeSnapshot | None = None) -> None:
         settings.require_m01_safety()
         self.settings = settings
         self.journal = journal
@@ -156,6 +157,9 @@ class DailyScalpingOrchestrator:
                 owner_control, OwnerDecisionLedger):
             raise TypeError("INVALID_M05_OWNER_CONTROL")
         self._owner_control = owner_control
+        if m03_owner_fee_snapshot is not None and type(m03_owner_fee_snapshot) is not OwnerEnteredAllInFeeSnapshot:
+            raise TypeError("M03_INVALID_OWNER_ENTERED_FEE_SNAPSHOT")
+        self._m03_owner_fee_snapshot = m03_owner_fee_snapshot
 
     def review_m06_account(self, *, observation: AccountObservation | None = None,
                            now_epoch: int) -> M06AccountDecision:
@@ -319,7 +323,9 @@ class DailyScalpingOrchestrator:
         # Same original observed REST quote and bounded top-book depth. An
         # illustrative fixed ticket is NOT owner spendable IDR; the per-user
         # all-in fee remains unknown. No extra REST or provider call.
-        cost = observe_public_quote_friction(observation)
+        cost = observe_public_quote_friction(
+            observation, owner_fee_snapshot=self._m03_owner_fee_snapshot,
+        )
         return replace(
             candidate, wall_temporal_evidence=wall,
             public_quote_friction_diagnostic=cost,
