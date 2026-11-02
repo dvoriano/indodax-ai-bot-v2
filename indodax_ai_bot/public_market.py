@@ -5,7 +5,7 @@ Only supported 1m and 15m OHLC endpoints requested; 5m is aggregated from 1m.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 import json
 import re
@@ -70,6 +70,9 @@ class PublicScanContext:
     tickers: dict[str, Any]
     # Public research only: status is NOT independent proof a pair is tradable.
     maintenance_pair_ids: frozenset[str] = frozenset()
+    # Exact fields from SAME official /api/pairs batch, no extra request.
+    # Missing fields remain UNKNOWN, never active/executable by default.
+    pair_rule_fields: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ class PublicObservation:
     # First 10 per side are not exchange-attested and may be canceled.
     bid_book_levels: tuple[tuple[Decimal, Decimal], ...] = ()
     ask_book_levels: tuple[tuple[Decimal, Decimal], ...] = ()
+    pair_rule_fields: dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> dict[str, str | int | bool]:
         return {
@@ -119,6 +123,8 @@ class PublicObservation:
             "book_liquidity_is_guaranteed": False,
             "trade_history_complete": self.trade_history_complete,
             "depth_levels_visible": self.depth_levels_visible,
+            "public_pair_rule_fields_present": bool(self.pair_rule_fields),
+            "public_pair_tradability_verified": False,
         }
 
 
@@ -156,6 +162,7 @@ class IndodaxPublicMarket:
         self.public_get_attempt_count = 0
         # Captured only from the same /api/pairs snapshot, not persisted.
         self.public_maintenance_pairs: frozenset[str] = frozenset()
+        self.public_pair_rule_fields: dict[str, dict[str, Any]] = {}
 
     def _http_json(self, path: str) -> Any:
         # Every path comes from hardcoded public endpoint constructors.
@@ -190,6 +197,7 @@ class IndodaxPublicMarket:
             raise PublicDataError("INVALID_PAIRS_PAYLOAD")
         pairs: dict[str, tuple[str, str]] = {}
         maintenance: set[str] = set()
+        rules: dict[str, dict[str, Any]] = {}
         for item in data:
             if not isinstance(item, dict) or item.get("base_currency") != "idr":
                 continue
@@ -221,7 +229,17 @@ class IndodaxPublicMarket:
             if m in (1, True, "1"):
                 maintenance.add(ticker_id)
             pairs[ticker_id] = (pair_id, symbol.upper())
+            # Preserve exact optional public order constraints as observed.
+            # No absent value is filled, and no published fee is assumed to
+            # validate per-pair precision or live order tradability.
+            allowed = (
+                "price_precision", "quantity_increment",
+                "trade_min_base_currency", "trade_min_traded_currency",
+                "is_market_suspended", "is_maintenance",
+            )
+            rules[ticker_id] = {key: item[key] for key in allowed if key in item}
         self.public_maintenance_pairs = frozenset(maintenance)
+        self.public_pair_rule_fields = rules
         if not pairs:
             raise PublicDataError("NO_ACTIVE_IDR_PAIRS")
         return pairs
@@ -393,6 +411,8 @@ class IndodaxPublicMarket:
             bid_depth5, ask_depth5,
             visible_buy_count, visible_sell_count,
             ladders["buy"], ladders["sell"],
+            dict((scan_context.pair_rule_fields if scan_context is not None
+                  else self.public_pair_rule_fields).get(pair, {})),
         )
 
     def closed_1m_research_history(self, pair: str = "btc_idr", *,
