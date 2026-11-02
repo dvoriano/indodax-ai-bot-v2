@@ -207,8 +207,9 @@ class OriginalOwnerCommandTests(unittest.TestCase):
         self.assertIn("Trading", responses[3])
         self.assertIn("Saldo IDR", responses[4])
         self.assertEqual(self.ledger.telegram_next_offset(), 615)
-        self.assertTrue(all("BUY" not in x or "tidak" in x.lower()
-                            for x in responses))
+        self.assertTrue(all("Trading OFF" in text or
+                            "Tidak mengirim order" in text
+                            for text in responses if "order" in text))
         recorded.clear()
         with patch.object(TelegramBotApiClient, "call", new=fake_call):
             again = service_tick_once(env=environment)
