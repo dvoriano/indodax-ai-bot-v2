@@ -81,6 +81,7 @@ class M06PersistentScopedSpecialSellTests(unittest.TestCase):
         self.assertEqual(out.locally_observed_external_special_sell_fills,1)
         self.assertEqual(out.distinct_sell_fills,1)
         self.assertFalse(out.exchange_proceeds_verified)
+        self.assertFalse(out.local_rebuy_receipts_linked)
         self.assertFalse(out.main_capital_spending_allowed)
         self.assertFalse(out.execution_allowed)
 
