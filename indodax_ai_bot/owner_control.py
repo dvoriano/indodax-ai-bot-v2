@@ -570,7 +570,8 @@ class OwnerDecisionLedger:
         return row[0] if row else None
 
     def apply_callback(self, *, user_id: int, chat_id: int, callback_data: str,
-                       now_epoch: int, chat_type: str = "private") -> dict[str, Any]:
+                       now_epoch: int, chat_type: str = "private",
+                       telegram_message_id: int | None = None) -> dict[str, Any]:
         """Requires outer Telegram adapter authentication, not raw user JSON."""
         if not self._is_owner(user_id, chat_id, chat_type):
             return _blocked("OWNER_NOT_AUTHORIZED")
@@ -593,12 +594,21 @@ class OwnerDecisionLedger:
             # review after the exact private Telegram message is acknowledged.
             # Legacy synthetic shadow proposal rows have no outbox entry.
             market_delivery = db.execute(
-                """SELECT delivery_state
+                """SELECT delivery_state,sent_message_id
                    FROM m05_market_advisory_outbox WHERE proposal_id=?""",
                 (proposal,),
             ).fetchone()
-            if market_delivery is not None and market_delivery[0] != "SENT":
-                return _blocked("M05_ADVISORY_NOT_SENT_TO_OWNER")
+            if market_delivery is not None:
+                if market_delivery[0] != "SENT":
+                    return _blocked("M05_ADVISORY_NOT_SENT_TO_OWNER")
+                # The real Telegram transport binds the pressed button to
+                # the exact message that M05 itself sent and acknowledged.
+                # Legacy offline direct callers omit the transport message.
+                if telegram_message_id is not None and (
+                    type(telegram_message_id) is not int
+                    or telegram_message_id != market_delivery[1]
+                ):
+                    return _blocked("M05_ADVISORY_MESSAGE_ID_MISMATCH")
             mode = db.execute(
                 "SELECT mode FROM m05_config WHERE singleton=1"
             ).fetchone()[0]
