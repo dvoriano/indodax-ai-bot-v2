@@ -89,6 +89,73 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
         self.assertFalse(report["execution_allowed"])
         self.assertEqual(report["eligible_live_candidates"], 0)
 
+    def test_official_idr_pro_all_in_totals_default_to_taker(self):
+        report = observe_public_quote_friction(public_observation())
+        table = report["published_idr_pro_all_in_fee_table"]
+        self.assertEqual(table["market"], "IDR")
+        self.assertEqual(table["mode"], "PRO")
+        self.assertEqual(table["published_effective_since"], "2026-10-01")
+        self.assertEqual(table["buy_maker_percent_reference_only"], "0.10555")
+        self.assertEqual(table["buy_taker_percent_used"], "0.20555")
+        self.assertEqual(table["sell_maker_percent_reference_only"], "0.31555")
+        self.assertEqual(table["sell_taker_percent_used"], "0.41555")
+        self.assertTrue(table["service_tax_cfx_already_included"])
+        self.assertFalse(table["component_fee_addition_allowed"])
+        self.assertFalse(table["account_specific_fee_verified"])
+        self.assertTrue(table["maker_execution_not_implied"])
+        self.assertEqual(
+            report["selected_all_in_fee_basis"],
+            "INDODAX_PRO_IDR_PUBLIC_TAKER_ALL_IN_TOTAL_UNVERIFIED_ACCOUNT",
+        )
+        preview = report["published_idr_pro_taker_fee_sensitivity"]
+        self.assertEqual(preview["buy_total_all_in_bps"], "20.55500")
+        self.assertEqual(preview["sell_total_all_in_bps"], "41.55500")
+        self.assertEqual(
+            preview["roundtrip_taker_fee_percent_sum_reference_only"],
+            "0.62110",
+        )
+        self.assertEqual(
+            preview["modeled_immediate_net_profit_idr_unverified"],
+            "-1616.94",
+        )
+        self.assertFalse(preview["additional_spread_fee_deduction"])
+        self.assertFalse(preview["individual_fee_components_added"])
+        self.assertFalse(preview["account_specific_fee_verified"])
+        self.assertFalse(preview["execution_allowed"])
+        self.assertFalse(report["fees_all_in_account_verified"])
+        self.assertFalse(report["net_roi_verified"])
+        self.assertEqual(report["eligible_live_candidates"], 0)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_official_published_taker_does_not_double_count_quote_spread(self):
+        report = observe_public_quote_friction(public_observation())
+        # Observed ASK100/BID99 already reduces 100k -> 99k BEFORE fees.
+        # Single all-in BUY 0.20555% and SELL 0.41555% reduce proceeds:
+        # -1000 -205.55 -411.3945 = -1616.9445 IDR.
+        net = D(report["published_idr_pro_taker_fee_sensitivity"][
+            "modeled_immediate_net_profit_idr_unverified"])
+        self.assertEqual(net, D("-1616.94"))
+        self.assertEqual(
+            report["book_walk_immediate_exit_before_fees_idr"], "-1000.00"
+        )
+        self.assertEqual(report["owner_entered_fee_status"], "NOT_PROVIDED")
+        self.assertIsNone(report["owner_entered_fee_sensitivity"])
+        self.assertFalse(report["g1_verified"])
+
+    def test_official_total_fee_keeps_invalid_book_fail_closed(self):
+        for observed in (
+            public_observation(asks=(("100", "1"),)),
+            public_observation(ticker_bid="95"),
+            public_observation(bids=()),
+        ):
+            with self.subTest(observed=observed.bid_book_levels):
+                report = observe_public_quote_friction(observed)
+                self.assertIsNone(
+                    report["published_idr_pro_taker_fee_sensitivity"]
+                )
+                self.assertIsNone(report["published_idr_pro_all_in_fee_table"])
+                self.assertFalse(report["execution_allowed"])
+
     def test_insufficient_bid_or_ask_never_invents_roundtrip_profit(self):
         for quote, expected in (
             (public_observation(asks=(("100", "1"),)),
@@ -172,6 +239,15 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
                          "FRESH_OWNER_ENTERED_NOT_EXCHANGE_AUTHENTICATED")
         sensitivity = report["owner_entered_fee_sensitivity"]
         self.assertEqual(sensitivity["buy_all_in_bps_owner_entered"], "30")
+        self.assertEqual(
+            report["selected_all_in_fee_basis"],
+            "OWNER_ENTERED_IDR_TAKER_ALL_IN_TOTAL_UNVERIFIED_ACCOUNT",
+        )
+        self.assertEqual(
+            report["published_idr_pro_taker_fee_sensitivity"][
+                "modeled_immediate_net_profit_idr_unverified"],
+            "-1616.94",
+        )
         self.assertEqual(sensitivity["sell_all_in_bps_owner_entered"], "50")
         self.assertEqual(sensitivity[
             "modeled_immediate_net_profit_idr_unverified"], "-1795.00")
@@ -337,6 +413,11 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
                 "public_quote_friction_diagnostic"]
             self.assertEqual(proof["status"],
                              "VISIBLE_BOOK_WALK_ILLUSTRATIVE_ONLY")
+            self.assertEqual(
+                proof["published_idr_pro_all_in_fee_table"][
+                    "buy_taker_percent_used"], "0.20555"
+            )
+            self.assertFalse(proof["execution_allowed"])
             self.assertFalse(cycle.execution_allowed)
             self.assertFalse(cycle.bulk["execution_allowed"])
             self.assertEqual(cycle.ai_shadow["completed_roles"], [])

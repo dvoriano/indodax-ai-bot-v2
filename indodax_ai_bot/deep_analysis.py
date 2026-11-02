@@ -322,6 +322,59 @@ class OwnerEnteredAllInFeeSnapshot:
         return cls(pair, vals[0], vals[1], epoch)
 
 
+# Published INDODAX PRO IDR total All-in Fees: service/tax/CFX are
+# ALREADY included; never add them separately. User-provided screenshot
+# from the official help article, verified 2 Nov 2026, post 1 Oct 2026
+# published fee revision. Public schedule is NOT signed/account-attested.
+# Market taker is the relevant role for crossing the visible ASK then BID.
+_M03_IDR_PRO_PUBLISHED_ALL_IN_PERCENT = {
+    "BUY_MAKER": Decimal("0.10555"),
+    "BUY_TAKER": Decimal("0.20555"),
+    "SELL_MAKER": Decimal("0.31555"),
+    "SELL_TAKER": Decimal("0.41555"),
+}
+_M03_IDR_PRO_FEE_HELP_URL = (
+    "https://help.indodax.com/hc/id/articles/"
+    "4416646599705-Rincian-Biaya-Transaksi-di-INDODAX"
+)
+
+
+def _m03_all_in_total_fee_preview(
+    buy_fee_bps: Decimal, sell_fee_bps: Decimal,
+    illustrative_idr: Decimal, proceeds: Decimal, acquired: Decimal,
+) -> dict:
+    """Apply ONLY full fee totals. Public ASK/BID depth embeds spread already.
+
+    No maker fill, per-account fee, actual exchange execution or settlement
+    is inferred. Same calculator for public published and owner-entered
+    sensitivity; do not double-count all-in components or book spread.
+    """
+    buy_cost = illustrative_idr * (Decimal(1) + buy_fee_bps / Decimal(10000))
+    net_bid_proceeds = proceeds * (Decimal(1) - sell_fee_bps / Decimal(10000))
+    modeled_pnl = net_bid_proceeds - buy_cost
+    desired_pnl = max(Decimal("10000"), buy_cost * Decimal("0.02"))
+    target_gross_sale = (buy_cost + desired_pnl) / (
+        Decimal(1) - sell_fee_bps / Decimal(10000)
+    )
+    return {
+        "modeled_immediate_net_profit_idr_unverified": str(
+            modeled_pnl.quantize(Decimal("0.01"))
+        ),
+        "modeled_immediate_net_roi_percent_unverified": str(
+            (modeled_pnl / buy_cost * Decimal(100)).quantize(Decimal("0.01"))
+        ),
+        "policy_required_future_sell_gross_idr_unverified": str(
+            target_gross_sale.quantize(Decimal("0.01"))
+        ),
+        "policy_required_future_sell_vwap_idr_unverified": str(
+            target_gross_sale / acquired
+        ),
+        "future_sell_liquidity_and_fill_unknown": True,
+        "projected_or_realized_profit_verified": False,
+        "execution_allowed": False,
+    }
+
+
 def observe_public_quote_friction(
     obs: PublicObservation, *, illustrative_idr: Decimal = Decimal("100000"),
     owner_fee_snapshot: OwnerEnteredAllInFeeSnapshot | None = None,
@@ -355,6 +408,9 @@ def observe_public_quote_friction(
         "fee_and_slippage_scenarios": None,
         "owner_entered_fee_sensitivity": None,
         "owner_entered_fee_status": "NOT_PROVIDED",
+        "published_idr_pro_all_in_fee_table": None,
+        "published_idr_pro_taker_fee_sensitivity": None,
+        "selected_all_in_fee_basis": "NO_VALID_BOOK_WALK",
         "net_roi_verified": False,
         "eligible_live_candidates": 0,
         "g1_verified": False,
@@ -446,6 +502,50 @@ def observe_public_quote_friction(
             ),
             "realized_or_actionable_net_roi": False,
         }
+    # Published public PRO fee totals, NOT components. This is the default
+    # pricing REFERENCE for the observed immediate ASK→BID book walk even
+    # without a manually supplied account fee file. Actual account fee
+    # remains unverified. Maker fees are reference only, NOT applied to
+    # this marketable book-walk's execution assumptions.
+    pct = _M03_IDR_PRO_PUBLISHED_ALL_IN_PERCENT
+    published_buy_bps = pct["BUY_TAKER"] * Decimal(100)
+    published_sell_bps = pct["SELL_TAKER"] * Decimal(100)
+    diagnostic["published_idr_pro_all_in_fee_table"] = {
+        "market": "IDR",
+        "mode": "PRO",
+        "source": "INDODAX_OFFICIAL_HELP_PUBLIC_TABLE_NOT_ACCOUNT_ATTESTED",
+        "source_url": _M03_IDR_PRO_FEE_HELP_URL,
+        "official_help_verified_date": "2026-11-02",
+        "published_effective_since": "2026-10-01",
+        "buy_maker_percent_reference_only": str(pct["BUY_MAKER"]),
+        "buy_taker_percent_used": str(pct["BUY_TAKER"]),
+        "sell_maker_percent_reference_only": str(pct["SELL_MAKER"]),
+        "sell_taker_percent_used": str(pct["SELL_TAKER"]),
+        "fee_is_total_all_in": True,
+        "service_tax_cfx_already_included": True,
+        "component_fee_addition_allowed": False,
+        "maker_execution_not_implied": True,
+        "account_specific_fee_verified": False,
+        "schedule_can_change": True,
+    }
+    diagnostic["published_idr_pro_taker_fee_sensitivity"] = {
+        "buy_total_all_in_bps": str(published_buy_bps),
+        "sell_total_all_in_bps": str(published_sell_bps),
+        "roundtrip_taker_fee_percent_sum_reference_only": str(
+            pct["BUY_TAKER"] + pct["SELL_TAKER"]
+        ),
+        "spread_book_impact_already_in_observed_walk": True,
+        "additional_spread_fee_deduction": False,
+        "individual_fee_components_added": False,
+        "account_specific_fee_verified": False,
+        **_m03_all_in_total_fee_preview(
+            published_buy_bps, published_sell_bps,
+            illustrative_idr, proceeds, acquired,
+        ),
+    }
+    diagnostic["selected_all_in_fee_basis"] = (
+        "INDODAX_PRO_IDR_PUBLIC_TAKER_ALL_IN_TOTAL_UNVERIFIED_ACCOUNT"
+    )
     if owner_fee_snapshot is not None:
         fees = owner_fee_snapshot
         if type(fees) is not OwnerEnteredAllInFeeSnapshot:
@@ -465,19 +565,11 @@ def observe_public_quote_friction(
                                     fees.sell_all_in_bps))):
             diagnostic["owner_entered_fee_status"] = "INVALID_SCOPE_OR_RATE"
         else:
-            buy_cost = illustrative_idr * (
-                Decimal(1) + fees.buy_all_in_bps / Decimal(10000)
-            )
-            net_bid_proceeds = proceeds * (
-                Decimal(1) - fees.sell_all_in_bps / Decimal(10000)
-            )
-            modeled_pnl = net_bid_proceeds - buy_cost
-            desired_pnl = max(Decimal("10000"), buy_cost * Decimal("0.02"))
-            target_gross_sale = (buy_cost + desired_pnl) / (
-                Decimal(1) - fees.sell_all_in_bps / Decimal(10000)
-            )
             diagnostic["owner_entered_fee_status"] = (
                 "FRESH_OWNER_ENTERED_NOT_EXCHANGE_AUTHENTICATED"
+            )
+            diagnostic["selected_all_in_fee_basis"] = (
+                "OWNER_ENTERED_IDR_TAKER_ALL_IN_TOTAL_UNVERIFIED_ACCOUNT"
             )
             diagnostic["owner_entered_fee_sensitivity"] = {
                 "source_kind": fees.source_kind,
@@ -489,21 +581,10 @@ def observe_public_quote_friction(
                 "order_role": fees.order_role,
                 "tax_cfx_components_not_added_twice": True,
                 "spread_book_impact_already_in_observed_walk": True,
-                "modeled_immediate_net_profit_idr_unverified": str(
-                    modeled_pnl.quantize(Decimal("0.01"))
+                **_m03_all_in_total_fee_preview(
+                    fees.buy_all_in_bps, fees.sell_all_in_bps,
+                    illustrative_idr, proceeds, acquired,
                 ),
-                "modeled_immediate_net_roi_percent_unverified": str(
-                    (modeled_pnl / buy_cost * Decimal(100))
-                    .quantize(Decimal("0.01"))
-                ),
-                "policy_required_future_sell_gross_idr_unverified": str(
-                    target_gross_sale.quantize(Decimal("0.01"))
-                ),
-                "policy_required_future_sell_vwap_idr_unverified": str(
-                    target_gross_sale / acquired
-                ),
-                "future_sell_liquidity_and_fill_unknown": True,
-                "projected_or_realized_profit_verified": False,
                 "owner_entered_is_not_authenticated_account_fee": True,
                 "execution_allowed": False,
             }
