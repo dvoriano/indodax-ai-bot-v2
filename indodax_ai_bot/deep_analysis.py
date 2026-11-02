@@ -256,6 +256,123 @@ def replay_closed_market_structure(
 
 
 
+# M03 research-only scenarios, explicitly assumed, NOT observed exchange fees,
+# actual bid/ask spread, position-dependent depth, slippage or proven fills.
+# Never pass modeled results into source eligibility, AI, G1 or BUY.
+_M03_FRICTION_SCENARIOS = (
+    ("LOW_ASSUMED", Decimal("20"), Decimal("10"), Decimal("15")),
+    ("BASE_ASSUMED", Decimal("30"), Decimal("25"), Decimal("30")),
+    ("STRESS_ASSUMED", Decimal("50"), Decimal("50"), Decimal("60")),
+)
+_M03_SETUP_LABELS = (
+    "SURGE_BREAKOUT_OBSERVED",
+    "PULLBACK_REBOUND_OBSERVED",
+)
+_M03_TRAIN_MIN_NONOVERLAP_EVENTS = 5
+
+
+def _m03_assumed_friction_holdout(
+    training: list[tuple[int, str, Decimal]],
+    holdout: list[tuple[int, str, Decimal]],
+) -> dict:
+    """Predefined, disjoint 3m outcome windows and train-only setup choice.
+
+    The two existing M03-J labels are frozen before the split. The holdout
+    NEVER selects a setup or changes its thresholds. A cost scenario is
+    merely gross OHLC close-to-close minus explicit *hypothetical* friction;
+    it does not prove market orders, achievable fills or net PnL.
+    """
+    def disjoint(rows: list[tuple[int, str, Decimal]]) -> list[tuple[int, str, Decimal]]:
+        selected = []
+        last_index = -4
+        for index, label, gross_bps in rows:
+            if index - last_index >= 3:
+                selected.append((index, label, gross_bps))
+                last_index = index
+        return selected
+
+    train = disjoint(training)
+    test = disjoint(holdout)
+    costs = {
+        tag: {
+            "taker_fee_each_side_bps_assumed": str(fee),
+            "slippage_each_side_bps_assumed": str(slip),
+            "spread_roundtrip_bps_assumed": str(spread),
+            "total_friction_bps_assumed": str(2 * fee + 2 * slip + spread),
+        }
+        for tag, fee, slip, spread in _M03_FRICTION_SCENARIOS
+    }
+    base_cost = Decimal(costs["BASE_ASSUMED"]["total_friction_bps_assumed"])
+    counts = {
+        label: sum(name == label for _, name, _ in train)
+        for label in _M03_SETUP_LABELS
+    }
+    training_means = {
+        label: (
+            sum((ret - base_cost for _, name, ret in train if name == label), ZERO)
+            / counts[label] if counts[label] else None
+        )
+        for label in _M03_SETUP_LABELS
+    }
+    # Train-only, frozen before reading any holdout outcome.
+    possible = [
+        label for label in _M03_SETUP_LABELS
+        if counts[label] >= _M03_TRAIN_MIN_NONOVERLAP_EVENTS
+        and training_means[label] is not None
+        and training_means[label] > ZERO
+    ]
+    setup = sorted(
+        possible, key=lambda name: (-training_means[name], name)
+    )[0] if possible else None
+    selected_holdout = [ret for _, name, ret in test if name == setup]
+    sensitivity = {}
+    for tag, _, _, _ in _M03_FRICTION_SCENARIOS:
+        cost = Decimal(costs[tag]["total_friction_bps_assumed"])
+        values = [ret - cost for ret in selected_holdout]
+        count = len(values)
+        sensitivity[tag] = {
+            "holdout_events": count,
+            "mean_forward_3m_close_to_close_after_assumed_cost_bps": (
+                str((sum(values, ZERO) / count).quantize(Decimal("0.01")))
+                if count else None
+            ),
+            "events_above_assumed_cost": sum(v > ZERO for v in values),
+            "events_at_or_above_2pct_after_assumed_cost": sum(
+                v >= Decimal("200") for v in values
+            ),
+        }
+    return {
+        "stage": "M03_HOLDOUT_FRICTION_SCENARIO_ONLY",
+        "status": (
+            "TRAIN_ONLY_SETUP_SELECTED_HOLDOUT_DESCRIPTIVE"
+            if setup is not None and selected_holdout
+            else "INSUFFICIENT_TRAIN_OR_HOLDOUT_NO_EDGE_CLAIM"
+        ),
+        "setup_selected_on_training_only": setup,
+        "setup_train_nonoverlapping_count": (
+            counts[setup] if setup is not None else 0
+        ),
+        "setup_holdout_nonoverlapping_count": len(selected_holdout),
+        "all_train_nonoverlapping_events": len(train),
+        "all_holdout_nonoverlapping_events": len(test),
+        "holdout_used_to_select_setup": False,
+        "forward_outcomes_overlap_within_sample": False,
+        "training_min_events_per_setup": _M03_TRAIN_MIN_NONOVERLAP_EVENTS,
+        "scenario_costs": costs,
+        "holdout_sensitivity": sensitivity,
+        "assumptions_not_actual_exchange_fees_or_spread": True,
+        "unobserved_execution_and_slippage_fills": True,
+        "capital_for_10000_idr_net_profit_verified": False,
+        "min_net_roi_percent_policy": "2",
+        "min_net_profit_idr_policy": "10000",
+        "max_active_main_pairs_policy": 2,
+        "eligible_live_candidates": 0,
+        "source_g1_verified": False,
+        "out_of_sample_net_edge_validated": False,
+        "execution_allowed": False,
+    }
+
+
 def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict:
     """M03-K deterministic time-split/embargo evaluation of M03-J labels.
 
@@ -292,6 +409,8 @@ def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict
     holdout_start_index = n * 7 // 10
     train: list[tuple[str, Decimal, bool]] = []
     holdout: list[tuple[str, Decimal, bool]] = []
+    calibration_train: list[tuple[int, str, Decimal]] = []
+    calibration_holdout: list[tuple[int, str, Decimal]] = []
     purged = 0
     for i in range(_STRUCTURE_WINDOW - 1, n - 3):
         prior = candles[i-10:i]
@@ -316,8 +435,12 @@ def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict
         record = (label, outcome, breakout_without_volume)
         if i + 3 < holdout_start_index:
             train.append(record)
+            if label in _M03_SETUP_LABELS:
+                calibration_train.append((i, label, outcome))
         elif i >= holdout_start_index:
             holdout.append(record)
+            if label in _M03_SETUP_LABELS:
+                calibration_holdout.append((i, label, outcome))
         else:
             # Embargo outcomes straddling train/holdout cutoff.
             purged += 1
@@ -365,6 +488,9 @@ def evaluate_source_backed_candle_research(history: PublicCandleHistory) -> dict
         "holdout_start_epoch": candles[holdout_start_index].start,
         "train": stats(train),
         "holdout": stats(holdout),
+        "modeled_after_cost_holdout": _m03_assumed_friction_holdout(
+            calibration_train, calibration_holdout,
+        ),
         "purged_boundary_windows": purged,
         "ablation": "surge_breakout WITH vs WITHOUT provisional volume >=2x condition, price-only",
         "rules_fixed_prior_to_observation": True,
