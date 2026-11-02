@@ -144,12 +144,15 @@ def dedicated_owner_poll_once(
                 "READONLY_PREFLIGHT_OK_POLLING_NOT_AUTHORIZED"):
             raise TelegramTransportError("M05_DEDICATED_PREFLIGHT_UNSAFE")
 
-        outbound = _send_one_queued_market_advisory(
-            api=api, ledger=ledger,
-        )
+        # Receive command/callback first, then flush ONE owner outbox item
+        # in this SAME systemd tick. Previously new /reviewtest items waited
+        # until the NEXT timer tick and lost half their 90-second TTL.
         result = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
         ).poll_once(limit=limit)
+        outbound = _send_one_queued_market_advisory(
+            api=api, ledger=ledger,
+        )
     # The poll summary is not an owner trade proposal. Each individual
     # callback is durably recorded in the owner ledger; batch has no Final.
     if result.get("final_decision") is not None or (
