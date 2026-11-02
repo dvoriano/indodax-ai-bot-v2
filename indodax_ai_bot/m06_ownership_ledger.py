@@ -606,6 +606,24 @@ class M06OwnershipLedger:
         account_hash = self._identity(
             self.account_scope_from_exchange_uid(account_uid)
         )
+        # This OPTIONAL local import must never create an unchecked DB,
+        # follow a symlink or persist manual order IDs in a shared file.
+        try:
+            p = self.path
+            parent = p.parent.lstat()
+            file = p.lstat()
+            owner = os.getuid()
+            secure = (
+                stat.S_ISDIR(parent.st_mode)
+                and stat.S_ISREG(file.st_mode)
+                and parent.st_uid == owner and file.st_uid == owner
+                and parent.st_mode & 0o077 == 0
+                and file.st_mode & 0o077 == 0
+            )
+        except (OSError, ValueError):
+            secure = False
+        if not secure:
+            raise OwnershipConflict("M06_EXTERNAL_LOCAL_LEDGER_INSECURE")
         if (type(orders) is not tuple or type(fills) is not tuple
                 or len(orders) > 1000 or len(fills) > 1000):
             raise OwnershipConflict("M06_EXTERNAL_SCOPED_BATCH_INVALID")
