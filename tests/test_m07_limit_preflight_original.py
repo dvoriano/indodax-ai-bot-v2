@@ -193,6 +193,16 @@ class M07OriginalPreflightTests(unittest.TestCase):
             self.assertIsNone(data["final_decision"])
             self.assertFalse(data["execution_allowed"])
             self.assertFalse(data["live_trading_authorized"])
+            late=data["m07_last_moment_gate"]
+            self.assertEqual(
+                late["status"],"BLOCKED_UNVERIFIED_FULL_ORDER_PRECONDITIONS")
+            self.assertIn("M06_EXCHANGE_ACCOUNT_NOT_JOINED",
+                          late["missing_requirements"])
+            self.assertIn("M05_SAME_SOURCE_OWNER_REVIEW_NOT_PASS",
+                          late["missing_requirements"])
+            self.assertFalse(late["execution_allowed"])
+            self.assertFalse(late["order_sent"])
+
             self.assertTrue(
                 data["m07_limit_preflight"]["checks_passed_unverified"])
             self.assertFalse(
