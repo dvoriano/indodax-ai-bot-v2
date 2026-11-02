@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="EXPLICIT scoped M06 GO: view-only four private HTTPS GETs only, never trade")
     group.add_argument("--m06-account-coverage-once", action="store_true",
                         help="Owner approved ONE 18-GET four-pair private READ ONLY coverage, never orders")
+    group.add_argument("--m06-private-idr-budget-once", action="store_true",
+                       help="Two official signed View Only GETs: live IDR free/locked and ALL-pair open orders, local UID-bound FLOKI/PEPE floor; no trading")
     group.add_argument("--m06-account-diagnostic-once", action="store_true",
                        help="Owner approved ONE signed GET account; original V2, no orders")
     group.add_argument("--once", action="store_true")
@@ -247,6 +249,36 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except (OSError, ValueError, UnicodeError, ConfigurationError):
                 raise ConfigurationError("M03_OWNER_ENTERED_FEE_FILE_NOT_ACCEPTED") from None
+        if args.m06_private_idr_budget_once:
+            # Reuse ONLY the stored V2 owner-only View Only credential. No
+            # separate app, external wallet and no POST/DELETE.
+            settings.require_m01_safety()
+            try:
+                credentials_path = _existing_v2_credentials()
+                if credentials_path is None:
+                    raise M06ScopeDenied("M06_V2_VIEWONLY_FILE_NOT_FOUND")
+                api_key, secret_key = read_view_only_credentials(
+                    str(credentials_path),
+                )
+                report = DailyScalpingOrchestrator(
+                    settings, DecisionJournal(args.db),
+                ).inspect_m06_idr_budget_readonly_once(
+                    api_key=api_key, secret_key=secret_key,
+                    local_ownership_db=args.m06_ownership_db,
+                )
+            except (M06ScopeDenied, ValueError, OSError) as exc:
+                print(json.dumps({
+                    "stage": "M06_ACTUAL_IDR_VIEWONLY",
+                    "status": "UNRESOLVED",
+                    "reason": _m06_redacted_error_code(exc),
+                    "execution_allowed": False,
+                }, sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "stage": "M06_ACTUAL_IDR_VIEWONLY",
+                **report,
+            }, sort_keys=True))
+            return 0
         if args.m06_account_diagnostic_once:
             settings.require_m01_safety()
             if not all((args.m06_go_file, args.m06_credentials_file)):
