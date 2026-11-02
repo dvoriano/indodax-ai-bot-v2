@@ -11,6 +11,7 @@ from typing import Iterator
 from pathlib import Path
 
 from .contracts import FinalDecision
+from .m07_order_adapter import M07OrderDraft
 from .public_market import Candle, PublicCandleHistory, PublicDataError
 
 
@@ -62,6 +63,27 @@ class DecisionJournal:
                     starting_index INTEGER NOT NULL,
                     next_index INTEGER NOT NULL
                 )"""
+            )
+            # M07-01/03: original V2 journal owns one durable OFFLINE-only
+            # order-intent reservation namespace. This table is NOT a
+            # signed exchange execution log or authenticated ownership.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_offline_order_intents (
+                    intent_id TEXT PRIMARY KEY,
+                    client_order_id TEXT NOT NULL UNIQUE,
+                    draft_sha256 TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),
+                    state TEXT NOT NULL CHECK(state IN
+                        ('OFFLINE_RESERVED','OFFLINE_UNKNOWN_HOLD')),
+                    recorded_epoch INTEGER NOT NULL,
+                    last_observed_epoch INTEGER NOT NULL,
+                    schema_version INTEGER NOT NULL CHECK(schema_version=1)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_m07_offline_intent_active "
+                "ON m07_offline_order_intents(state,symbol)"
             )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
@@ -169,6 +191,157 @@ class DecisionJournal:
                 yield con
         finally:
             con.close()
+
+    def reserve_m07_offline_order_intent(
+        self, *, intent_id: str, draft: M07OrderDraft,
+        recorded_epoch: int,
+    ) -> dict:
+        """Atomically reserve a UNIQUE original V2 OFFLINE simulation intent.
+
+        Replayed identical ID and digest never yields new submit permission.
+        Colliding different payload, client ID, same-pair unresolved slot,
+        unknown anywhere in MAIN_IDR, or >2 unresolved slots blocks new
+        reservation, including after restart or concurrent processes.
+
+        NO method can release, submit or claim a filled exchange order.
+        """
+        if (type(draft) is not M07OrderDraft
+                or type(intent_id) is not str
+                or not 1 <= len(intent_id) <= 36
+                or type(recorded_epoch) is not int
+                or not 1 <= recorded_epoch <= 9999999999):
+            raise ValueError("M07_OFFLINE_INTENT_INVALID")
+        # Validate the same original official adapter draft contract.
+        params = draft.parameters()
+        if draft.side != "BUY":
+            # M08 verified bot-owned position/fills remain unavailable.
+            raise DecisionConflictError("M07_OFFLINE_SELL_OWNERSHIP_UNKNOWN")
+        # Make intent ID and clientOrderID the immutable one-to-one key.
+        if draft.client_order_id != intent_id:
+            raise DecisionConflictError("M07_INTENT_CLIENT_ID_MISMATCH")
+        fingerprint = hashlib.sha256(
+            json.dumps(params, separators=(",", ":"),
+                       ensure_ascii=True).encode("ascii")
+        ).hexdigest()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            prior = con.execute(
+                "SELECT client_order_id,draft_sha256,symbol,side,state "
+                "FROM m07_offline_order_intents WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
+            if prior is not None:
+                if prior[:4] != (
+                    draft.client_order_id, fingerprint,
+                    draft.symbol, draft.side,
+                ):
+                    raise DecisionConflictError("M07_INTENT_REPLAY_CONFLICT")
+                return {
+                    "status": prior[4], "intent_id": intent_id,
+                    "replay": True, "newly_reserved": False,
+                    "unknown_order_state_must_not_retry": True,
+                    "exchange_order_id": None,
+                    "order_sent": False, "execution_allowed": False,
+                }
+            # Even a brand-new UUID with the same old client ID must fail.
+            used = con.execute(
+                "SELECT 1 FROM m07_offline_order_intents "
+                "WHERE client_order_id=?",
+                (draft.client_order_id,),
+            ).fetchone()
+            if used is not None:
+                raise DecisionConflictError("M07_CLIENT_ID_ALREADY_RESERVED")
+            if con.execute(
+                "SELECT 1 FROM m07_offline_order_intents "
+                "WHERE state='OFFLINE_UNKNOWN_HOLD' LIMIT 1"
+            ).fetchone() is not None:
+                # No proof which exchange commitment consumed IDR.
+                raise DecisionConflictError("M07_UNKNOWN_BLOCKS_ALL_NEW_BUYS")
+            if con.execute(
+                "SELECT 1 FROM m07_offline_order_intents "
+                "WHERE symbol=? LIMIT 1", (draft.symbol,)
+            ).fetchone() is not None:
+                raise DecisionConflictError("M07_UNRESOLVED_PAIR_INTENT")
+            count = con.execute(
+                "SELECT COUNT(*) FROM m07_offline_order_intents"
+            ).fetchone()[0]
+            if count >= 2:
+                raise DecisionConflictError("M07_MAX_TWO_UNRESOLVED_INTENTS")
+            con.execute(
+                "INSERT INTO m07_offline_order_intents "
+                "(intent_id,client_order_id,draft_sha256,symbol,side,"
+                "state,recorded_epoch,last_observed_epoch,schema_version) "
+                "VALUES (?,?,?,?,?,'OFFLINE_RESERVED',?,?,1)",
+                (intent_id,draft.client_order_id,fingerprint,
+                 draft.symbol,draft.side,recorded_epoch,recorded_epoch),
+            )
+        return {
+            "status": "OFFLINE_RESERVED", "intent_id": intent_id,
+            "replay": False, "newly_reserved": True,
+            "unknown_order_state_must_not_retry": True,
+            "exchange_order_id": None,
+            "order_sent": False, "execution_allowed": False,
+        }
+
+    def mark_m07_offline_unknown_hold(
+        self, *, intent_id: str, observed_epoch: int,
+    ) -> dict:
+        """Simulated timeout/ambiguity is PERMANENTLY blocking, not canceled.
+
+        This endpoint is OFFLINE-only; no client may mark FILLED/CANCELED/
+        FAILED or retry. Future source-attested reconciliation must be
+        implemented separately with independent owner approval.
+        """
+        if (type(intent_id) is not str or not 1 <= len(intent_id) <= 36
+                or type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999):
+            raise ValueError("M07_UNKNOWN_HOLD_INPUT_INVALID")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            state = con.execute(
+                "SELECT state,recorded_epoch,last_observed_epoch "
+                "FROM m07_offline_order_intents WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
+            if state is None:
+                raise DecisionConflictError("M07_UNKNOWN_INTENT_NOT_RESERVED")
+            if observed_epoch < state[1]:
+                raise DecisionConflictError("M07_UNKNOWN_EPOCH_BEFORE_RESERVE")
+            if observed_epoch < state[2]:
+                raise DecisionConflictError("M07_UNKNOWN_EPOCH_REGRESSION")
+            if state[0] == "OFFLINE_RESERVED":
+                con.execute(
+                    "UPDATE m07_offline_order_intents SET "
+                    "state='OFFLINE_UNKNOWN_HOLD', last_observed_epoch=? "
+                    "WHERE intent_id=? AND state='OFFLINE_RESERVED'",
+                    (observed_epoch, intent_id),
+                )
+        return {
+            "status": "OFFLINE_UNKNOWN_HOLD", "intent_id": intent_id,
+            "unknown_order_state_must_not_retry": True,
+            "release_requires_authenticated_exchange_reconciliation": True,
+            "exchange_order_id": None, "order_sent": False,
+            "execution_allowed": False,
+        }
+
+    def m07_offline_intent_summary(self) -> dict:
+        """Anonymized original journal status; no account/API/order secrets."""
+        with self._connect() as con:
+            total, unknown = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM("
+                "CASE WHEN state='OFFLINE_UNKNOWN_HOLD' THEN 1 ELSE 0 END"
+                "),0) FROM m07_offline_order_intents"
+            ).fetchone()
+        return {
+            "stage": "M07_ORIGINAL_OFFLINE_INTENT_GUARD",
+            "unresolved_simulated_intents": total,
+            "offline_unknown_holds": unknown,
+            "additional_buy_reservations_blocked": unknown > 0 or total >= 2,
+            "exchange_order_state_authenticated": False,
+            "owner_spendable_balance_verified": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
 
     def record_reject(self, trace_id: str, reason: str) -> None:
         if not trace_id or not trace_id.strip() or not reason:
