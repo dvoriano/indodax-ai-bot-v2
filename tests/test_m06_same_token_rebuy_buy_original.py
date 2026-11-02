@@ -172,6 +172,32 @@ class M06RebuyBuyPersistOriginalV2Tests(unittest.TestCase):
         self.assertEqual(report.floki_idr_local_protected,D("0"))
         self.assertEqual(report.floki_rebuy_buy_observed_outflow_idr,D("10025"))
 
+    def test_original_v2_bot_sell_fill_cannot_reuse_rebuy_buy_trade_id(self):
+        self.put()
+        sells,fs=records(side="SELL",oid="legacy-sell",
+                         tid="buy-fill-1")
+        self.ledger.record_local_intent(
+            account_key=self.key,order_id="legacy-sell",
+            client_id="client-synthetic-1",symbol="flokiidr",side="SELL")
+        with self.assertRaisesRegex(OwnershipConflict,"TRADE_COLLISION"):
+            self.ledger.observe(account_key=self.key,
+                                order=sells[0],fills=fs)
+        now=self.ledger.review_protected_rebuy(account_key=self.key)
+        self.assertEqual(now.distinct_sell_fills,0)
+        self.assertEqual(now.floki_rebuy_buy_observed_outflow_idr,D("10025"))
+
+    def test_unknown_nonzero_fee_currency_cannot_claim_buy_outflow(self):
+        orders,fills=records()
+        for raw in (replace(fills[0],commission_asset=None),
+                    replace(fills[0],commission_asset="usdt")):
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(OwnershipConflict,"ECONOMICS_INVALID"):
+                    self.ledger.observe_scoped_same_token_rebuy_buy_offline(
+                        account_uid=UID,symbol="flokiidr",
+                        orders=orders,fills=(raw,))
+        self.assertEqual(self.ledger.review_protected_rebuy(
+            account_key=self.key).local_rebuy_buy_observation_count,0)
+
     def test_no_implicit_new_table_on_existing_normal_m06_startup(self):
         with sqlite3.connect(self.path) as db:
             self.assertIsNone(db.execute(
