@@ -24,7 +24,7 @@ from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, Protected
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
-from .m07_order_adapter import OfficialV2OrderAdapter
+from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
@@ -170,6 +170,24 @@ class DailyScalpingOrchestrator:
         funds/ownership, Risk, Final and atomic intent reconciliation.
         """
         return OfficialV2OrderAdapter().contract_status()
+
+    def reserve_m07_offline_intent_once(self, *,
+            intent_id: str, draft: M07OrderDraft,
+            observed_epoch: int) -> dict:
+        """Only original V2 journal simulation, never exchange permission."""
+        return self.journal.reserve_m07_offline_order_intent(
+            intent_id=intent_id, draft=draft, recorded_epoch=observed_epoch,
+        )
+
+    def simulate_m07_unknown_timeout_once(self, *,
+            intent_id: str, observed_epoch: int) -> dict:
+        """Persistent UNKNOWN under original journal, no network retry."""
+        return self.journal.mark_m07_offline_unknown_hold(
+            intent_id=intent_id, observed_epoch=observed_epoch,
+        )
+
+    def inspect_m07_offline_intent_guard_once(self) -> dict:
+        return self.journal.m07_offline_intent_summary()
 
     def review_m06_account(self, *, observation: AccountObservation | None = None,
                            now_epoch: int) -> M06AccountDecision:
