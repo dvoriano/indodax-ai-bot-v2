@@ -4,6 +4,8 @@
 
 > **Status, bukti, blocker dan satu milestone aktif selalu dibaca dari [ROADMAP.md](docs/ROADMAP.md).** M03-I accepted for 8/8 VPS tests and real aligned 8-of-20 public cohort. M04-A shadow source guard passed 18/18 scoped VPS tests and real 20-pair no-provider run. M04-B Sumopod mock adapter passed 11/11 scoped VPS tests; M04-A 10/10. M04-C independent G1 issuer receipt guard CODED, not yet VPS-proven. Paid models and trading remain OFF. Telegram, capital and executor are not enabled. **Trading LIVE OFF.** Target laba bukan jaminan.
 
+**Kebijakan modal terkini (2 November 2026):** modal utama hanya **IDR**. Bukti hasil konversi historis yang sudah bersih dari fee dan pajak adalah **Rp920.078**, bukan bukti saldo tersedia saat ini dan bukan parameter trading yang di-hardcode. Untuk modal yang benar-benar bisa digunakan, verifikasi saldo `free_idr`, order terkunci, komitmen akun, serta alokasi khusus FLOKI/PEPE. Nominal stablecoin sebelumnya tidak lagi digunakan sebagai baseline, target saldo, atau alokasi utama. Tidak ada BUY/SELL LIVE yang diizinkan.
+
 ## Mulai di sini
 
 - **[PROJECT GUIDELINE & MASTER CHECKPOINT](docs/PROJECT_GUIDELINE.md)** — **satu sumber kebenaran** untuk seluruh fitur, keputusan owner, arsitektur, acceptance criteria, roadmap, dan progres pengembangan.

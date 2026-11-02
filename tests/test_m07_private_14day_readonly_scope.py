@@ -44,7 +44,7 @@ def final_status(*, created_ms=NOW_MS-9*DAY_MS):
         "symbol":"USDTIDR","clientOrderId":C,
         "orderId":31,"fullOrderId":"usdtidr-limit-31",
         "side":"SELL","type":"LIMIT","status":"FILLED",
-        "origQty":"51","executedQty":"51","time":created_ms,
+        "origQty":"9","executedQty":"9","time":created_ms,
     }
 
 
