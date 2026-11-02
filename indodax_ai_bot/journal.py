@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 import hashlib
 import json
+import re
 from decimal import Decimal
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from .contracts import FinalDecision
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
+from .m07_private_order_readonly import M07ReadOnlyOrder
 from .public_market import Candle, PublicCandleHistory, PublicDataError
 
 
@@ -105,6 +107,28 @@ class DecisionJournal:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS idx_m07_offline_status_order "
                 "ON m07_offline_status_observations(intent_id,observed_epoch)"
+            )
+            # Authenticated PRIVATE READ ONLY observations are kept apart from
+            # synthetic intent events. Neither table grants order ownership.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_exchange_readonly_orders (
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    exchange_order_id INTEGER NOT NULL,
+                    full_order_id TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    order_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    original_qty TEXT NOT NULL,
+                    executed_qty TEXT NOT NULL,
+                    created_ms INTEGER NOT NULL,
+                    observed_ms INTEGER NOT NULL,
+                    provenance TEXT NOT NULL CHECK (
+                       provenance='INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER'
+                    ),
+                    PRIMARY KEY(account_fingerprint,symbol,client_order_id)
+                )"""
             )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
@@ -457,6 +481,82 @@ class DecisionJournal:
             "order_sent": False,
             "execution_allowed": False,
         }
+
+    def record_m07_authenticated_readonly_order_status(
+        self, *, account_fingerprint: str, order: M07ReadOnlyOrder,
+        observed_ms: int,
+    ) -> dict:
+        """Atomic, strict, separately scoped EXCHANGE READ ONLY observation.
+
+        No mutation of synthetic intents, no order release or asset ownership.
+        Missing fill fees/trade-history means no SELL quantity is trusted.
+        """
+        if (type(account_fingerprint) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", account_fingerprint)
+                or type(order) is not M07ReadOnlyOrder
+                or type(observed_ms) is not int
+                or not 1_000_000_000_000 <= observed_ms <= 9_999_999_999_999):
+            raise DecisionConflictError("M07_READONLY_JOURNAL_INPUT_DENIED")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            old = con.execute(
+                "SELECT exchange_order_id,full_order_id,side,order_type,"
+                "status,original_qty,executed_qty,created_ms,observed_ms "
+                "FROM m07_exchange_readonly_orders "
+                "WHERE account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (account_fingerprint, order.symbol, order.client_order_id),
+            ).fetchone()
+            old_qty = old[6] if old is not None else None
+            if old is not None:
+                if old[:4] != (
+                        order.order_id, order.full_order_id,
+                        order.side, order.order_type) or old[7] != order.created_ms:
+                    raise DecisionConflictError("M07_READONLY_ORDER_IDENTITY_CHANGED")
+                if Decimal(old[5]) != order.original_qty:
+                    raise DecisionConflictError("M07_READONLY_ORDER_SIZE_CHANGED")
+                if order.executed_qty < Decimal(old_qty):
+                    raise DecisionConflictError("M07_READONLY_EXECUTED_REGRESSION")
+                if old[4] in ("FILLED", "CANCELLED", "REJECTED") and (
+                        order.status != old[4] or
+                        order.executed_qty != Decimal(old_qty)):
+                    raise DecisionConflictError("M07_READONLY_TERMINAL_CONFLICT")
+                if old[4] == "PARTIALLY_FILLED" and order.status in (
+                        "NEW", "REJECTED"):
+                    raise DecisionConflictError("M07_READONLY_STATE_REGRESSION")
+                if old[4] == "NEW" and order.status == "REJECTED":
+                    # Rejected after NEW is not automatically a zero-fill release.
+                    pass
+                if old[4] == order.status and Decimal(old_qty) == order.executed_qty:
+                    return {"replay": True, "execution_allowed": False}
+                if observed_ms <= old[8]:
+                    raise DecisionConflictError("M07_READONLY_OBSERVATION_NOT_NEWER")
+            values = (
+                account_fingerprint, order.symbol, order.client_order_id,
+                order.order_id, order.full_order_id, order.side,
+                order.order_type, order.status,
+                format(order.original_qty, "f"),
+                format(order.executed_qty, "f"),
+                order.created_ms, observed_ms,
+                "INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER",
+            )
+            if old is None:
+                con.execute(
+                    "INSERT INTO m07_exchange_readonly_orders "
+                    "(account_fingerprint,symbol,client_order_id,"
+                    "exchange_order_id,full_order_id,side,order_type,"
+                    "status,original_qty,executed_qty,created_ms,"
+                    "observed_ms,provenance) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", values,
+                )
+            else:
+                con.execute(
+                    "UPDATE m07_exchange_readonly_orders "
+                    "SET status=?,executed_qty=?,observed_ms=? "
+                    "WHERE account_fingerprint=? AND symbol=? AND client_order_id=?",
+                    (order.status, format(order.executed_qty,"f"), observed_ms,
+                     account_fingerprint, order.symbol, order.client_order_id),
+                )
+        return {"replay": False, "execution_allowed": False}
 
     def m07_offline_intent_summary(self) -> dict:
         """Anonymized original journal status; no account/API/order secrets."""
