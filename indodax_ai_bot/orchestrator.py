@@ -13,7 +13,7 @@ from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
 from .scanner import DailyPairScanner, rank_scanner_with_early_momentum
 from .volume_screening import apply_deep_volume_floor
-from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research
+from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research, observe_public_quote_friction
 from .three_role_ai import ThreeRoleShadow
 from .source_coverage import assess_public_ws_btc_for_g1
 from .g1_receipt import G1ReceiptVerifier
@@ -316,7 +316,14 @@ class DailyScalpingOrchestrator:
     def _attach_public_wall_experience(self, candidate, observation):
         """Same original deep path, no extra fetch, provider or trade."""
         wall = self.journal.record_and_compare_public_wall(candidate, observation)
-        return replace(candidate, wall_temporal_evidence=wall)
+        # Same original observed REST quote and bounded top-book depth. An
+        # illustrative fixed ticket is NOT owner spendable IDR; the per-user
+        # all-in fee remains unknown. No extra REST or provider call.
+        cost = observe_public_quote_friction(observation)
+        return replace(
+            candidate, wall_temporal_evidence=wall,
+            public_quote_friction_diagnostic=cost,
+        )
 
     def run_cycle(self, trace_id: str, *, public_scanner: bool = False,
                   ws_db_path: str | None = None,

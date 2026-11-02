@@ -53,6 +53,9 @@ class DeepCandidate:
     surge_experience_context: dict | None = None
     surge_pattern: dict | None = None
     public_maintenance_flag: bool = False
+    # M03 observed PUBLIC quote+depth hypothetical ticket economics only.
+    # Account-specific all-in fees are unknown. Never a tradable quote.
+    public_quote_friction_diagnostic: dict | None = None
 
     def summary(self) -> dict:
         return {
@@ -80,6 +83,8 @@ class DeepCandidate:
             "surge_experience_context": self.surge_experience_context,
             "surge_pattern": self.surge_pattern,
             "public_maintenance_flag": self.public_maintenance_flag,
+            "public_quote_friction_diagnostic":
+                self.public_quote_friction_diagnostic,
             "market_tradability_verified": False,
             "eligible_for_same_window_comparison": self.score is not None and not self.anomaly_flags,
             "trade_history_complete": False,
@@ -269,6 +274,130 @@ _M03_SETUP_LABELS = (
     "PULLBACK_REBOUND_OBSERVED",
 )
 _M03_TRAIN_MIN_NONOVERLAP_EVENTS = 5
+
+
+def observe_public_quote_friction(
+    obs: PublicObservation, *, illustrative_idr: Decimal = Decimal("100000"),
+) -> dict:
+    """Bounded hypothetical roundtrip book walk on ONE existing M03 observation.
+
+    Ticker and book originate in different REST responses and are never a
+    simultaneous executable exchange quote. Fee schedule may vary by account
+    and maker/taker and is NOT provided by these PUBLIC endpoints. Keep
+    measured quote/depth observations apart from *assumed* fees/slippage.
+    """
+    src = obs.snapshot.source
+    diagnostic = {
+        "stage": "M03_PUBLIC_QUOTE_DEPTH_FRICTION_RESEARCH",
+        "pair": obs.pair,
+        "closed_1m_epoch": src.closed_1m_epoch,
+        "observed_epoch": src.observed_epoch,
+        "public_source_provenance": src.provenance,
+        "status": "UNAVAILABLE",
+        "illustrative_not_owned_idr": str(illustrative_idr),
+        "observed_ticker_spread_bps": None,
+        "book_walk_immediate_exit_before_fees_idr": None,
+        "book_walk_immediate_exit_before_fees_bps": None,
+        "public_book_ticker_cross_request_coherent": False,
+        "public_book_depth_guaranteed": False,
+        "fees_all_in_account_verified": False,
+        "fees_source": "INDODAX_ACCOUNT_PROFILE_ALL_IN_FEES_NOT_CONNECTED",
+        "fee_schedule_oct_2026_can_change": True,
+        "tax_cfx_components_not_double_counted": True,
+        "model_assumptions_not_actual_all_in_fee": True,
+        "fee_and_slippage_scenarios": None,
+        "net_roi_verified": False,
+        "eligible_live_candidates": 0,
+        "g1_verified": False,
+        "execution_allowed": False,
+    }
+    if (type(illustrative_idr) is not Decimal
+            or not illustrative_idr.is_finite()
+            or illustrative_idr <= ZERO
+            or illustrative_idr.adjusted() > 9):
+        return dict(diagnostic, status="INVALID_HYPOTHETICAL_TICKET")
+    bid, ask = obs.snapshot.best_bid_idr, obs.snapshot.best_ask_idr
+    if (src.pair != obs.pair
+            or src.observed_epoch < src.closed_1m_epoch
+            or src.observed_epoch - src.closed_1m_epoch > 120
+            or not bid.is_finite() or not ask.is_finite()
+            or bid <= ZERO or ask <= bid):
+        return dict(diagnostic, status="STALE_OR_INVALID_PUBLIC_QUOTE")
+    spread_bps = (ask-bid)*Decimal(10000)/ask
+    diagnostic["observed_ticker_spread_bps"] = str(spread_bps.quantize(Decimal("0.01")))
+    bids, asks = obs.bid_book_levels, obs.ask_book_levels
+    if not bids or not asks or len(bids) > 10 or len(asks) > 10:
+        return dict(diagnostic, status="PUBLIC_BOOK_DEPTH_UNAVAILABLE")
+    for side, levels in (("bid", bids), ("ask", asks)):
+        for price, qty in levels:
+            if (type(price) is not Decimal or type(qty) is not Decimal
+                    or not price.is_finite() or not qty.is_finite()
+                    or price <= ZERO or qty <= ZERO
+                    or price.adjusted() > 24 or qty.adjusted() > 24):
+                return dict(diagnostic, status="INVALID_PUBLIC_BOOK_LEVEL")
+        if any((a[0] <= b[0] if side == "bid" else a[0] >= b[0])
+               for a, b in zip(levels, levels[1:])):
+            return dict(diagnostic, status="UNORDERED_PUBLIC_BOOK")
+    if bids[0][0] >= asks[0][0]:
+        return dict(diagnostic, status="CROSSED_PUBLIC_BOOK")
+    # REST ticker and REST depth are NOT atomic. A large discrepancy blocks
+    # this indicative arithmetic rather than combining two market epochs.
+    if (abs(bids[0][0]-bid)*Decimal(10000)/bid > Decimal("30")
+            or abs(asks[0][0]-ask)*Decimal(10000)/ask > Decimal("30")):
+        return dict(diagnostic, status="TICKER_BOOK_QUOTE_MISMATCH")
+    diagnostic["public_book_ticker_cross_request_coherent"] = True
+    remaining_idr = illustrative_idr
+    acquired = ZERO
+    for price, qty in asks:
+        spent = min(remaining_idr, qty*price)
+        acquired += spent / price
+        remaining_idr -= spent
+        if remaining_idr == ZERO:
+            break
+    if remaining_idr > ZERO:
+        return dict(diagnostic, status="VISIBLE_ASK_DEPTH_INSUFFICIENT")
+    remaining_qty = acquired
+    proceeds = ZERO
+    for price, qty in bids:
+        sold = min(remaining_qty, qty)
+        proceeds += price*sold
+        remaining_qty -= sold
+        if remaining_qty == ZERO:
+            break
+    if remaining_qty > ZERO:
+        return dict(diagnostic, status="VISIBLE_BID_DEPTH_INSUFFICIENT")
+    gross = proceeds - illustrative_idr
+    diagnostic.update({
+        "status": "VISIBLE_BOOK_WALK_ILLUSTRATIVE_ONLY",
+        "illustrative_base_qty_from_asks": str(acquired),
+        "illustrative_immediate_bid_proceeds_idr": str(proceeds),
+        "book_walk_immediate_exit_before_fees_idr": str(gross.quantize(Decimal("0.01"))),
+        "book_walk_immediate_exit_before_fees_bps": str(
+            (gross / illustrative_idr * Decimal(10000)).quantize(Decimal("0.01"))
+        ),
+        "fee_and_slippage_scenarios": {},
+    })
+    # The observed book walk ALREADY embeds spread and depth impact. Do not
+    # subtract the PR46 hypothetical SPREAD again. Fees and additional slip
+    # below are strictly illustrative, NEVER account/Indodax fee attestation.
+    for name, fee_bps, extra_slip_bps, _unused_spread in _M03_FRICTION_SCENARIOS:
+        buy_extra = illustrative_idr * (fee_bps + extra_slip_bps)/Decimal(10000)
+        sell_extra = proceeds * (fee_bps + extra_slip_bps)/Decimal(10000)
+        pnl = gross - buy_extra - sell_extra
+        diagnostic["fee_and_slippage_scenarios"][name] = {
+            "buy_fee_bps_assumed": str(fee_bps),
+            "sell_fee_bps_assumed": str(fee_bps),
+            "additional_slippage_each_side_bps_assumed": str(extra_slip_bps),
+            "spread_or_book_impact_already_included": True,
+            "hypothetical_immediate_exit_after_assumed_cost_idr": str(
+                pnl.quantize(Decimal("0.01"))
+            ),
+            "hypothetical_immediate_exit_after_assumed_cost_bps": str(
+                (pnl / illustrative_idr * Decimal(10000)).quantize(Decimal("0.01"))
+            ),
+            "realized_or_actionable_net_roi": False,
+        }
+    return diagnostic
 
 
 def _m03_assumed_friction_holdout(
