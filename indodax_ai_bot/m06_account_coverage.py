@@ -18,6 +18,9 @@ from .m06_account_review import reconcile_readonly_private_snapshot
 from .m06_private_payloads import parse_account, parse_orders, parse_fills
 from .m06_signed_readonly import prepare_signed_get
 from .m06_ownership_ledger import M06OwnershipLedger, OwnershipConflict
+from .m06_special_sale_window import (
+    observe_m06_special_sale_window, M06SpecialSaleWindowRejected,
+)
 
 COVERAGE_ID = "M06_PRIVATE_ACCOUNT_COVERAGE_20261101"
 START_EPOCH_MS = 1792774800000  # 2026-10-24 00:00 WIB
@@ -53,6 +56,11 @@ class M06CoverageResult:
     local_receipts_matched: int
     local_receipts_unlinked: int
     unresolved_requirements: tuple[str, ...]
+    # Redacted bounded observation of verified View Only myTrades in EXACT
+    # scoped windows; never all-time or available MAIN budget proof.
+    scoped_special_sell_gross_idr: tuple[tuple[str, str], ...] = ()
+    scoped_special_sell_fill_count: tuple[tuple[str, int], ...] = ()
+    scoped_special_unresolved_fills: tuple[tuple[str, int], ...] = ()
     # Evidence-gated per original checklist; observation != LIVE acceptance.
     m06_02_balance_and_open_orders_observed: bool = False
     m06_03_special_pool_ratio_observed: bool = False
@@ -279,6 +287,7 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
                 local = None
         all_orders = 0
         all_fills = 0
+        special_window_reports = []
         receipt_matches = 0
         receipt_unlinked = 0
         # These are scoped facts, NOT client-supplied authority booleans.
@@ -329,6 +338,18 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
                     raise boundary.M06ScopeDenied("M06_COVERAGE_FILL_WINDOW_CONFLICT")
             history_rows = list(unique_orders.values())
             fill_rows = list(unique_fills.values())
+            if symbol in ("flokiidr", "pepeidr"):
+                # Use only the SAME signed GET fills already collected for
+                # this exact pair and fixed two-window admission. A zero
+                # amount is *observed in the bounded window* only, NEVER
+                # confirmation of no historic sale or no rebuy liability.
+                sale = observe_m06_special_sale_window(
+                    symbol=symbol, orders=tuple(history_rows),
+                    fills=tuple(fill_rows),
+                )
+                special_window_reports.append(sale)
+                if sale.scope_has_unresolved_fills:
+                    unresolved.add("M06_SPECIAL_SCOPED_FILL_IDENTITY_UNRESOLVED")
             review = reconcile_readonly_private_snapshot(
                 account=account, open_orders=open_orders,
                 order_history=tuple(history_rows),
@@ -369,6 +390,19 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
             local_receipts_matched=receipt_matches,
             local_receipts_unlinked=receipt_unlinked,
             unresolved_requirements=tuple(sorted(unresolved)),
+            scoped_special_sell_gross_idr=tuple(
+                (x.asset, format(x.scoped_sell_gross_idr, "f"))
+                for x in special_window_reports
+            ),
+            scoped_special_sell_fill_count=tuple(
+                (x.asset, x.scoped_sell_fill_count)
+                for x in special_window_reports
+            ),
+            scoped_special_unresolved_fills=tuple(
+                (x.asset, x.scoped_unlinked_fill_count
+                 + x.scoped_unknown_side_fill_count)
+                for x in special_window_reports
+            ),
             m06_02_balance_and_open_orders_observed=True,
             m06_03_special_pool_ratio_observed=(
                 special_ratios_seen == {"flokiidr", "pepeidr"}
@@ -382,5 +416,5 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
         )
     except boundary.M06ScopeDenied:
         raise
-    except (M06PayloadError, OwnershipConflict, ValueError):
+    except (M06PayloadError, OwnershipConflict, M06SpecialSaleWindowRejected, ValueError):
         raise boundary.M06ScopeDenied("M06_COVERAGE_RECONCILIATION_REJECT") from None
