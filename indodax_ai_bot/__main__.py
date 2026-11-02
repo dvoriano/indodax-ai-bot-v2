@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
                        help="Record UNTRUSTED synthetic normalized order status in original M07 journal, no exchange request")
     group.add_argument("--m07-private-14day-order-once", action="store_true",
                        help="Owner View Only 14-day account/history/order GET, max 4 GET; no trading")
-    group.add_argument("--m07-private-latest-order-once",
+    group.add_argument("--m07-private-latest-order-once", action="store_true",
                        help="One View Only account/history/latest-order GET chain, 3 GET max; no known client ID required")
     group.add_argument("--m07-private-order-status-once", action="store_true",
                        help="Explicit TAPI V2 View Only account + order GET, no trade/cancel/auto retry")
