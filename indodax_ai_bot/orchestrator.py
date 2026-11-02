@@ -28,6 +28,7 @@ from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_co
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
 from .m07_private_order_readonly import read_m07_order_status_once, read_m07_latest_order_status_once, read_m07_14day_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
+from .m06_idr_live_readonly import inspect_idr_budget_readonly_once
 from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
 from .public_ws_supervisor import supervised_public_ws_batch, PublicWSSupervisorError
@@ -374,6 +375,20 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         return run_scoped_private_probe(
             approval=approval, budget=budget,
+            api_key=api_key, secret_key=secret_key,
+            local_ownership_db=local_ownership_db,
+        )
+
+    def inspect_m06_idr_budget_readonly_once(
+            self, *, api_key: str, secret_key: str,
+            local_ownership_db: str | None = None) -> dict:
+        """Original V2: 2 signed owner View Only GETs + existing local ledger.
+
+        Observed real free/locked IDR and known local rebuy protection, never
+        LIVE sizing or account-wide special sale provenance.
+        """
+        self.settings.require_m01_safety()
+        return inspect_idr_budget_readonly_once(
             api_key=api_key, secret_key=secret_key,
             local_ownership_db=local_ownership_db,
         )
