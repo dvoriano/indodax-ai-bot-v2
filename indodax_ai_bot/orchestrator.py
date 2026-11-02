@@ -445,6 +445,41 @@ class DailyScalpingOrchestrator:
             local_ownership_db=local_ownership_db,
         )
 
+    def store_m06_scoped_special_sell_observation_offline(
+            self, *, db_path: str, account_uid: int, symbol: str,
+            orders: tuple, fills: tuple,
+    ) -> dict:
+        """Original V2 ledger LOCAL source hold, never private GET/order.
+
+        The caller must already possess a scoped View Only window; this
+        offline method does not attest it and cannot release capital.
+        Unlike bot-owned fills, manual/external sells have NO V2 intent.
+        """
+        self.settings.require_m01_safety()
+        report = M06OwnershipLedger(
+            db_path,
+        ).observe_scoped_external_special_sells_offline(
+            account_uid=account_uid, symbol=symbol,
+            orders=orders, fills=fills,
+        )
+        return {
+            "stage": "M06_SCOPED_EXTERNAL_SELL_LOCAL_OBSERVATION",
+            "status": "LOCAL_SCOPED_RECEIPT_HOLD_ONLY",
+            "floki_gross_proceeds_local_hold_idr": str(
+                report.floki_idr_local_protected),
+            "pepe_gross_proceeds_local_hold_idr": str(
+                report.pepe_idr_local_protected),
+            "distinct_local_sell_fills": report.distinct_sell_fills,
+            "locally_observed_external_special_sell_fills":
+                report.locally_observed_external_special_sell_fills,
+            "all_time_sale_history_verified": False,
+            "all_rebuy_consumption_verified": False,
+            "peer_liabilities_verified": False,
+            "spendable_idr_verified": False,
+            "execution_allowed": False,
+            "order_sent": False,
+        }
+
     def inspect_m06_idr_budget_readonly_once(
             self, *, api_key: str, secret_key: str,
             local_ownership_db: str | None = None) -> dict:
