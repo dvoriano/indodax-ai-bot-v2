@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal as D
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -73,6 +74,34 @@ class M06PersistentScopedSpecialSellTests(unittest.TestCase):
                 account_uid=UID,symbol="flokiidr",
                 orders=orders,fills=fills)
         self.assertFalse(other.exists())
+
+    def test_default_m06_init_does_not_migrate_manual_sell_table(self):
+        # Only the new explicit optional import may add the new table.
+        # Existing normal M06 ledger startup and readonly code stay usable.
+        with sqlite3.connect(self.path) as con:
+            old=con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name='m06_scoped_external_sell_receipts'"
+            ).fetchone()
+        self.assertIsNone(old)
+        self.ledger.protect_manual_asset_floor(
+            account_key=self.key,asset="FLOKI",minimum_qty=D("0"))
+        inspected=M06OwnershipLedger.inspect_existing_account_readonly(
+            db_path=str(self.path),account_uid=UID)
+        self.assertEqual(inspected.floki_idr_local_protected,D("0"))
+        self.assertEqual(inspected.locally_observed_external_special_sell_fills,0)
+        self.assertFalse(inspected.exchange_proceeds_verified)
+        with sqlite3.connect(self.path) as con:
+            self.assertIsNone(con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name='m06_scoped_external_sell_receipts'"
+            ).fetchone())
+        self.put()
+        with sqlite3.connect(self.path) as con:
+            self.assertIsNotNone(con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name='m06_scoped_external_sell_receipts'"
+            ).fetchone())
 
     def test_manual_sell_is_protected_same_asset_no_bot_intent(self):
         out=self.put()
