@@ -16,6 +16,7 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal
 from .orchestrator import DailyScalpingOrchestrator
+from .deep_analysis import OwnerEnteredAllInFeeSnapshot
 from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
 from .m06_account_coverage import read_coverage_approval, COVERAGE_ID
 from .m06_account_coverage import read_account_diagnostic_approval, ACCOUNT_DIAG_ID
@@ -124,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Opt-in PUBLIC 20..40-pair deep limit; default 20. Never trades")
     parser.add_argument("--bulk-min-volume-idr", default="0",
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
+    parser.add_argument("--m03-owner-fee-snapshot-file", default=None,
+                        help="Owner-entered 0600 IDR taker all-in fee JSON; NOT verified account evidence or permission to trade")
     parser.add_argument("--ws-db", default=None,
                         help="Existing BTC WS SQLite: required by --once --public-scanner-mainpath; optional for --bulk-deep-once, never G1 approval")
     parser.add_argument("--sumopod-shadow", action="store_true",
@@ -144,6 +147,26 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        m03_owner_fee_snapshot = None
+        if args.m03_owner_fee_snapshot_file is not None:
+            if not (
+                args.deep_once or args.rolling_deep_once
+                or args.bulk_deep_once or args.scheduled_public_scanner_once
+                or (args.once and args.public_scanner_mainpath)
+            ):
+                raise ConfigurationError("M03_OWNER_FEE_REQUIRES_ORIGINAL_PUBLIC_DEEP_PATH")
+            settings.require_m01_safety()
+            try:
+                private_path = _existing_private_owner_file(
+                    args.m03_owner_fee_snapshot_file
+                )
+                if private_path.stat().st_size > 4096:
+                    raise ValueError("FEE_SNAPSHOT_TOO_LARGE")
+                m03_owner_fee_snapshot = OwnerEnteredAllInFeeSnapshot.from_mapping(
+                    json.loads(private_path.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError, UnicodeError, ConfigurationError):
+                raise ConfigurationError("M03_OWNER_ENTERED_FEE_FILE_NOT_ACCEPTED") from None
         if args.m06_account_diagnostic_once:
             settings.require_m01_safety()
             if not all((args.m06_go_file, args.m06_credentials_file)):
@@ -542,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
         app = DailyScalpingOrchestrator(
             settings, DecisionJournal(args.db), ai_role_caller=provider,
             owner_control=owner_control,
+            m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
         if args.health:
             result = app.health()
