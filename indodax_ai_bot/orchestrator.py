@@ -500,6 +500,54 @@ class DailyScalpingOrchestrator:
             "order_sent": False,
         }
 
+    def store_m06_same_token_rebuy_buy_observation_offline(
+            self, *, db_path: str, account_uid: int,
+            symbol: str, orders: tuple, fills: tuple) -> dict:
+        """Original V2 offline BUY receipt evidence, never reserve release.
+
+        Same existing M06 UID-scoped SQLite, not a new ledger. This does
+        NOT run a private GET, not an M05 order permission and never
+        decreases any previous protected FLOKI/PEPE SELL proceeds.
+        """
+        self.settings.require_m01_safety()
+        # Preserve the secure existing-file check BEFORE ledger constructor,
+        # which initializes legacy schema. Avoid implicit database creation.
+        if type(db_path) is not str or not db_path.startswith("/"):
+            raise ValueError("M06_REBUY_BUY_EXISTING_DB_PATH_REQUIRED")
+        p = Path(db_path)
+        try:
+            d=p.parent.lstat()
+            f=p.lstat()
+        except OSError:
+            raise ValueError("M06_REBUY_BUY_EXISTING_DB_REQUIRED") from None
+        if (not stat.S_ISDIR(d.st_mode) or d.st_uid != os.getuid()
+                or d.st_mode & 0o077
+                or not stat.S_ISREG(f.st_mode) or f.st_uid != os.getuid()
+                or f.st_mode & 0o077):
+            raise ValueError("M06_REBUY_BUY_DB_INSECURE")
+        result = M06OwnershipLedger(db_path).observe_scoped_same_token_rebuy_buy_offline(
+            account_uid=account_uid,symbol=symbol,orders=orders,fills=fills)
+        return {
+            "stage":"M06_SAME_TOKEN_REBUY_BUY_OFFLINE",
+            "status":"OBSERVED_LOCAL_BUY_FILL_NOT_SETTLED",
+            "floki_sell_proceeds_protected_idr":str(
+                result.floki_idr_local_protected),
+            "pepe_sell_proceeds_protected_idr":str(
+                result.pepe_idr_local_protected),
+            "floki_rebuy_buy_observed_idr":str(
+                result.floki_rebuy_buy_observed_outflow_idr),
+            "pepe_rebuy_buy_observed_idr":str(
+                result.pepe_rebuy_buy_observed_outflow_idr),
+            "locally_observed_rebuy_fill_count":
+                result.local_rebuy_buy_observation_count,
+            "rebuy_consumption_settled_verified":False,
+            "all_time_special_sale_history_verified":False,
+            "all_peer_liabilities_verified":False,
+            "spendable_idr_verified":False,
+            "execution_allowed":False,
+            "order_sent":False,
+        }
+
     def inspect_m06_idr_budget_readonly_once(
             self, *, api_key: str, secret_key: str,
             local_ownership_db: str | None = None) -> dict:
