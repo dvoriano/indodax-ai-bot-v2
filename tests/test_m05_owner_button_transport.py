@@ -184,6 +184,44 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
             "sendMessage", "answerCallbackQuery", "editMessageReplyMarkup",
         } for m, _ in self.calls))
 
+    def test_wrong_bot_message_id_cannot_record_or_clear_buttons(self):
+        self.incoming = [self.command()]
+        self.tick()
+        buttons = self.sent_buttons["reply_markup"]["inline_keyboard"][0]
+        bad = self.callback(buttons[0]["callback_data"])
+        bad["callback_query"]["message"]["message_id"] = 999
+        self.incoming = [bad]
+        second = self.tick()
+        self.assertEqual(second["processed"], 1)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state FROM m05_proposals"
+            ).fetchone()[0], "PENDING")
+        self.assertEqual(
+            len([m for m, _ in self.calls if m == "editMessageReplyMarkup"]), 0
+        )
+        self.assertEqual(
+            len([m for m, p in self.calls if m == "sendMessage"
+                 and "TERCATAT satu kali" in p.get("text", "")]), 0
+        )
+
+    def test_reject_generates_one_persistent_confirmation(self):
+        self.incoming = [self.command()]
+        self.tick()
+        reject_cb = self.sent_buttons["reply_markup"]["inline_keyboard"][0][1][
+            "callback_data"]
+        self.incoming = [self.callback(reject_cb)]
+        self.tick()
+        notices = [p["text"] for m, p in self.calls if m == "sendMessage"
+                   and "TERCATAT satu kali" in p.get("text", "")]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("REJECT", notices[0])
+        self.assertIn("Trading OFF", notices[0])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT state,execution_allowed FROM m05_proposals"
+            ).fetchone(), ("REJECT", 0))
+
     def test_untrusted_chat_and_nonowner_cannot_queue(self):
         view = OfflineTelegramOwnerInterface(self.ledger)
         for user, chat in ((OWNER + 1, OWNER + 1), (OWNER, -123)):
