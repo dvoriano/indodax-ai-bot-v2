@@ -183,6 +183,17 @@ class M06OriginalCoverageSpecialSaleJoinTests(unittest.TestCase):
             self.assertEqual(
                 dict(result.scoped_special_unresolved_fills),
                 {"FLOKI":0,"PEPE":0})
+            gap=result.scoped_special_history_gaps
+            self.assertEqual(
+                gap["status"],"M06_SPECIAL_SALE_HISTORY_GAPS_UNRESOLVED")
+            self.assertEqual(gap["queried_consecutive_windows"],2)
+            self.assertEqual(gap["scoped_sell_gross_idr_observed"],
+                             {"FLOKI":"1000","PEPE":"1010"})
+            self.assertTrue(gap["special_sale_before_first_window_unverified"])
+            self.assertTrue(gap["special_sale_after_last_window_unverified"])
+            self.assertTrue(gap["rebuy_consumption_provenance_unverified"])
+            self.assertFalse(gap["balance_source_funds_verified"])
+            self.assertIsNone(gap["safe_general_idr_from_this_report"])
             self.assertFalse(result.full_account_history_verified)
             self.assertFalse(result.spendable_idr_verified)
             self.assertFalse(result.execution_allowed)
