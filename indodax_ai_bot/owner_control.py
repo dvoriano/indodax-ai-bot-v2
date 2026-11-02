@@ -658,7 +658,8 @@ class OwnerDecisionLedger:
         Stale/expired callback cannot change Final. This verifies the
         *exact* original owner/private bot-delivered message, proposal token
         and durable final state before allowing one UI cleanup attempt.
-        Called after an authenticated original owner decision or an invalid\n        expired/replayed click, never before applying the owner ledger.
+        Called after an authenticated original owner decision or an invalid
+        expired/replayed click, never before applying the owner ledger.
         """
         if not self._is_owner(user_id, chat_id, chat_type):
             return _blocked("OWNER_NOT_AUTHORIZED")
