@@ -223,6 +223,18 @@ class OwnerDecisionLedger:
                        FROM m05_market_advisory_outbox WHERE proposal_id=?""",
                     (proposal_id,),
                 ).fetchone()
+                # Even MANUAL→AUTO→MANUAL must not resurrect a previously
+                # reviewed advisory after an owner-mode transition.
+                mode_flipped = (
+                    db.execute(
+                        """SELECT 1 FROM m05_audit
+                           WHERE event='OWNER_MODE_CHANGED'
+                             AND event_epoch>=? AND event_epoch<=? LIMIT 1""",
+                        (row[4],now_epoch),
+                    ).fetchone() is not None
+                    if row is not None and type(row[4]) is int
+                    else True
+                )
         except (OSError, sqlite3.Error, ValueError):
             return dict(result, status="M05_ADVISORY_LEDGER_UNAVAILABLE")
         if row is None or config is None:
@@ -241,6 +253,8 @@ class OwnerDecisionLedger:
                 or not created <= now_epoch < expires
                 or expires - created > TTL_MAX):
             return dict(result, status="M05_ADVISORY_EXPIRED_OR_UNDELIVERED")
+        if mode_flipped:
+            return dict(result, status="M05_ADVISORY_OWNER_MODE_TRANSITION")
         if can_exec != 0 or price != "0" or quantity != "0":
             return dict(result, status="M05_ADVISORY_SCHEMA_EXECUTION_CONFLICT")
         if (state == "PASS" and reason == "OWNER_BUTTON"
