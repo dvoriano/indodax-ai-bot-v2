@@ -14,7 +14,7 @@ from typing import Any
 from .owner_control import OwnerDecisionLedger
 
 _LABEL = re.compile(r"^[A-Za-z0-9_:.-]{1,100}$")
-_EXCLUDED = frozenset(("floki_idr", "pepe_idr", "usdt_idr", "usdc_idr"))
+_EXCLUDED = frozenset(("floki_idr", "pepe_idr", "usdt_idr", "usdc_idr", "reviewtest_idr"))
 
 
 def _label(value: Any, fallback: str) -> str:
