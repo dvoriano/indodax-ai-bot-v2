@@ -21,6 +21,8 @@ from .m06_ownership_ledger import M06OwnershipLedger, OwnershipConflict
 from .m06_special_sale_window import (
     observe_m06_special_sale_window, M06SpecialSaleWindowRejected,
 )
+from .m06_special_history_gaps import review_m06_special_history_gaps
+
 
 COVERAGE_ID = "M06_PRIVATE_ACCOUNT_COVERAGE_20261101"
 START_EPOCH_MS = 1792774800000  # 2026-10-24 00:00 WIB
@@ -61,6 +63,7 @@ class M06CoverageResult:
     scoped_special_sell_gross_idr: tuple[tuple[str, str], ...] = ()
     scoped_special_sell_fill_count: tuple[tuple[str, int], ...] = ()
     scoped_special_unresolved_fills: tuple[tuple[str, int], ...] = ()
+    scoped_special_history_gaps: dict | None = None
     # Evidence-gated per original checklist; observation != LIVE acceptance.
     m06_02_balance_and_open_orders_observed: bool = False
     m06_03_special_pool_ratio_observed: bool = False
@@ -379,6 +382,9 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
                 receipt_unlinked += receipt.unlinked_fills
             else:
                 receipt_unlinked += len(fill_rows)
+        gap_report = review_m06_special_history_gaps(
+            windows=windows, assets=special_window_reports, checked_at_ms=now,
+        )
         # Even after eighteen successful GETs, pair list != all account
         # history, and Indodax cannot attest local/external peer commitments.
         return M06CoverageResult(
@@ -390,6 +396,7 @@ def run_coverage_readonly_once(*, approval: M06CoverageApproval,
             local_receipts_matched=receipt_matches,
             local_receipts_unlinked=receipt_unlinked,
             unresolved_requirements=tuple(sorted(unresolved)),
+            scoped_special_history_gaps=gap_report.safe_summary(),
             scoped_special_sell_gross_idr=tuple(
                 (x.asset, format(x.scoped_sell_gross_idr, "f"))
                 for x in special_window_reports
