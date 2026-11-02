@@ -14,7 +14,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config import ConfigurationError, Settings
-from .journal import DecisionJournal
+from .journal import DecisionJournal, DecisionConflictError
+from .m07_order_adapter import M07OrderDraft
 from .orchestrator import DailyScalpingOrchestrator
 from .deep_analysis import OwnerEnteredAllInFeeSnapshot
 from .m06_scoped_https import (M06RequestBudget, M06ScopeDenied, read_approval, read_view_only_credentials)
@@ -63,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m07-offline-intent-once", action="store_true",
+                       help="EXPLICIT synthetic-only BUY reservation in original M07 journal; NO network, real position, or trade")
+    group.add_argument("--m07-offline-unknown-once", action="store_true",
+                       help="Simulate UNKNOWN for an already reserved synthetic M07 intent; permanent retry hold, no exchange GET")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
                        help="Inspect ORIGINAL hardlocked TAPI V2 order/status/cancel contract without API keys, network or orders")
     group.add_argument("--m06-account-review-once", action="store_true",
@@ -127,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Opt-in PUBLIC 20..40-pair deep limit; default 20. Never trades")
     parser.add_argument("--bulk-min-volume-idr", default="0",
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
+    parser.add_argument("--m07-intent-id", default=None,
+                        help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
     parser.add_argument("--m03-owner-fee-snapshot-file", default=None,
                         help="Owner-entered 0600 IDR taker all-in fee JSON; NOT verified account evidence or permission to trade")
     parser.add_argument("--ws-db", default=None,
@@ -149,6 +156,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m07_offline_intent_once or args.m07_offline_unknown_once:
+            settings.require_m01_safety()
+            if (type(args.m07_intent_id) is not str
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}", args.m07_intent_id)
+                    or not Path(args.db).is_absolute()
+                    or args.m07_intent_id == "LIVE"):
+                raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
+        elif args.m07_intent_id is not None:
+            raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
         m03_owner_fee_snapshot = None
         if args.m03_owner_fee_snapshot_file is not None:
             if not (
@@ -569,6 +585,41 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m07_offline_intent_once or args.m07_offline_unknown_once:
+            try:
+                if args.m07_offline_intent_once:
+                    result = app.reserve_m07_offline_intent_once(
+                        intent_id=args.m07_intent_id,
+                        draft=M07OrderDraft(
+                            "BTCIDR", "BUY", "MARKET",
+                            args.m07_intent_id, quote_order_qty=10000,
+                        ),
+                        observed_epoch=int(time.time()),
+                    )
+                else:
+                    result = app.simulate_m07_unknown_timeout_once(
+                        intent_id=args.m07_intent_id,
+                        observed_epoch=int(time.time()),
+                    )
+            except DecisionConflictError as exc:
+                print(json.dumps({
+                    "m07_offline_intent": {
+                        "status": "BLOCKED",
+                        "reason": str(exc),
+                        "execution_allowed": False,
+                        "order_sent": False,
+                    },
+                    "final_decision": None,
+                    "execution_allowed": False,
+                }, sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m07_offline_intent": result,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
         if args.m07_order_adapter_offline_once:
             settings.require_m01_safety()
             report = app.inspect_m07_official_order_adapter_once()
