@@ -26,6 +26,7 @@ from .policy import ScalpingPolicy, IDRFundingRouteReview
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
+from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview
 from .m07_private_order_readonly import read_m07_order_status_once, read_m07_latest_order_status_once, read_m07_14day_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .m06_idr_live_readonly import inspect_idr_budget_readonly_once
@@ -173,6 +174,33 @@ class DailyScalpingOrchestrator:
         funds/ownership, Risk, Final and atomic intent reconciliation.
         """
         return OfficialV2OrderAdapter().contract_status()
+
+    def assess_m07_limit_buy_preflight_offline(
+            self, *, draft: M07OrderDraft, pair_rules: dict,
+            best_bid_idr: Decimal, best_ask_idr: Decimal,
+            free_idr: Decimal, locked_idr: Decimal,
+            floki_rebuy_idr: Decimal, pepe_rebuy_idr: Decimal,
+            commitments_not_locked_idr: Decimal,
+            buy_all_in_fee_bps: Decimal, sell_all_in_fee_bps: Decimal,
+            max_spread_bps: Decimal,
+    ) -> M07LimitBuyPreflightPreview:
+        """Same original M07 caller, preliminary hypothetical order gates.
+
+        Nothing here is G1, actual exchange funds, live executable quote,
+        owner PASS or permission to send an order.
+        """
+        self.settings.require_m01_safety()
+        return assess_m07_limit_buy_preflight_offline(
+            draft=draft, pair_rules=pair_rules,
+            best_bid_idr=best_bid_idr, best_ask_idr=best_ask_idr,
+            free_idr=free_idr, locked_idr=locked_idr,
+            floki_rebuy_idr=floki_rebuy_idr,
+            pepe_rebuy_idr=pepe_rebuy_idr,
+            commitments_not_locked_idr=commitments_not_locked_idr,
+            buy_all_in_fee_bps=buy_all_in_fee_bps,
+            sell_all_in_fee_bps=sell_all_in_fee_bps,
+            max_spread_bps=max_spread_bps,
+        )
 
     def reserve_m07_offline_intent_once(self, *,
             intent_id: str, draft: M07OrderDraft,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import re
 import sqlite3
@@ -16,6 +17,8 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal, DecisionConflictError
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
+from .m07_limit_preflight import M07PreflightBlocked
+from .m06_scoped_https import _owner_private_file
 from .m07_private_order_readonly import M07ReadOnlyError
 from .m06_owner_coverage import _existing_v2_credentials
 from .m06_scoped_https import read_view_only_credentials
@@ -81,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="One View Only account/history/latest-order GET chain, 3 GET max; no known client ID required")
     group.add_argument("--m07-private-order-status-once", action="store_true",
                        help="Explicit TAPI V2 View Only account + order GET, no trade/cancel/auto retry")
+    group.add_argument("--m07-limit-preflight-offline-once", action="store_true",
+                       help="Original V2 LIMIT BUY pair/min-step/fee/general IDR scenario preflight, 0600 JSON fixture, no API/trade")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
                        help="Inspect ORIGINAL hardlocked TAPI V2 order/status/cancel contract without API keys, network or orders")
     group.add_argument("--m06-account-review-once", action="store_true",
@@ -149,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
+    parser.add_argument("--m07-limit-preflight-file", default=None,
+                        help="Absolute 0600 JSON of hypothetical rules, quote and IDR buckets, never exchange-verified or order authorization")
     parser.add_argument("--m07-private-symbol", default=None)
     parser.add_argument("--m07-private-client-order-id", default=None)
     parser.add_argument("--m07-observation-id", default=None)
@@ -188,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if (args.m07_limit_preflight_file is not None
+                and not args.m07_limit_preflight_offline_once):
+            raise ConfigurationError("M07_PREFLIGHT_FILE_ONLY_FOR_OFFLINE_REVIEW")
         status_fields = (
             args.m07_observation_id, args.m07_observed_status,
             args.m07_cumulative_base, args.m07_cumulative_quote,
@@ -779,6 +789,62 @@ def main(argv: list[str] | None = None) -> int:
                 return 3
             print(json.dumps({
                 "m07_offline_intent": result,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
+        if args.m07_limit_preflight_offline_once:
+            settings.require_m01_safety()
+            try:
+                if (type(args.m07_limit_preflight_file) is not str
+                        or not args.m07_limit_preflight_file.startswith("/")):
+                    raise M07PreflightBlocked("M07_PREFLIGHT_FILE_REQUIRED")
+                raw = _owner_private_file(args.m07_limit_preflight_file)
+                required = {
+                    "symbol", "client_order_id", "limit_price_idr",
+                    "quantity_base", "pair_rules",
+                    "best_bid_idr", "best_ask_idr",
+                    "free_idr", "locked_idr", "floki_rebuy_idr",
+                    "pepe_rebuy_idr", "commitments_not_locked_idr",
+                    "buy_all_in_fee_bps", "sell_all_in_fee_bps",
+                    "max_spread_bps",
+                }
+                if set(raw) != required:
+                    raise M07PreflightBlocked("M07_PREFLIGHT_FILE_SCHEMA_INVALID")
+                fields = required - {"symbol","client_order_id","pair_rules"}
+                if any(type(raw[k]) is not str or len(raw[k]) > 48
+                       for k in fields):
+                    raise M07PreflightBlocked("M07_PREFLIGHT_FILE_AMOUNT_INVALID")
+                draft = M07OrderDraft(
+                    raw["symbol"], "BUY", "LIMIT", raw["client_order_id"],
+                    price=Decimal(raw["limit_price_idr"]),
+                    quantity=Decimal(raw["quantity_base"]),
+                )
+                preview = app.assess_m07_limit_buy_preflight_offline(
+                    draft=draft, pair_rules=raw["pair_rules"],
+                    **{k: Decimal(raw[k]) for k in (
+                        "best_bid_idr", "best_ask_idr", "free_idr",
+                        "locked_idr", "floki_rebuy_idr", "pepe_rebuy_idr",
+                        "commitments_not_locked_idr", "buy_all_in_fee_bps",
+                        "sell_all_in_fee_bps", "max_spread_bps",
+                    )}
+                )
+            except (M07PreflightBlocked, M06ScopeDenied,
+                    ArithmeticError, ValueError, TypeError) as exc:
+                reason = str(exc)
+                if not re.fullmatch(r"M07_PREFLIGHT_[A-Z0-9_]{1,90}", reason):
+                    reason = "M07_PREFLIGHT_INVALID_UNTRUSTED_INPUT"
+                print(json.dumps({
+                    "m07_limit_preflight": {
+                        "status": "BLOCKED", "reason": reason,
+                        "execution_allowed": False, "order_sent": False,
+                    },
+                    "final_decision": None, "execution_allowed": False,
+                }, sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m07_limit_preflight": asdict(preview),
                 "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
