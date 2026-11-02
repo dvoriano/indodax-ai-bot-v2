@@ -194,6 +194,27 @@ class M07OriginalM06M05LastMomentTests(unittest.TestCase):
             self.assertFalse(after["source_bound_owner_review_pass"])
             self.assertFalse(after["execution_allowed"])
 
+    def test_manual_auto_manual_switch_cannot_resurrect_previously_passed_card(self):
+        with TemporaryDirectory() as td:
+            _,owner=app_and_owner(Path(td))
+            _,sent=issued(owner)
+            consent=owner.apply_callback(
+                user_id=UID,chat_id=UID,callback_data=sent["pass_callback"],
+                now_epoch=MINUTE+5,telegram_message_id=1337)
+            self.assertEqual(consent["final_decision"],"PASS")
+            owner.switch_mode(
+                user_id=UID,chat_id=UID,mode="AUTO",now_epoch=MINUTE+7)
+            owner.switch_mode(
+                user_id=UID,chat_id=UID,mode="MANUAL",now_epoch=MINUTE+8)
+            after=owner.inspect_market_advisory_preflight_readonly(
+                proposal_id=sent["proposal_id"],pair="btc_idr",
+                source_digest=DIGEST,closed_1m_epoch=MINUTE,
+                now_epoch=NOW)
+            self.assertEqual(after["status"],
+                             "M05_ADVISORY_OWNER_MODE_TRANSITION")
+            self.assertFalse(after["source_bound_owner_review_pass"])
+            self.assertFalse(after["execution_allowed"])
+
     def test_fake_complete_spendable_flags_must_not_grant_authority(self):
         with TemporaryDirectory() as td:
             app,_=app_and_owner(Path(td),include_owner=False)
