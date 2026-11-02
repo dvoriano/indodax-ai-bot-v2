@@ -375,6 +375,110 @@ def _m03_all_in_total_fee_preview(
     }
 
 
+def assess_public_pair_order_constraints(
+    obs: PublicObservation, *,
+    illustrative_idr: Decimal, observed_book_acquired: Decimal,
+) -> dict:
+    """Same /api/pairs public metadata; no per-account EXECUTION authority.
+
+    Official `price_precision` is a PRICE STEP in documented pair examples,
+    not the number of decimal places. `quantity_increment` is the quantity
+    step. Missing, ambiguous, invalid or rounded-down quantities are retained
+    as UNKNOWN or public warnings, NEVER used for a tradable order.
+    """
+    result = {
+        "stage": "M07_PUBLIC_PAIR_RULES_SAME_DISCOVERY_BATCH",
+        "pair": obs.pair,
+        "status": "PUBLIC_PAIR_RULES_UNAVAILABLE",
+        "metadata_source": "INDODAX_PUBLIC_PAIRS_UNATTESTED",
+        "metadata_observed_epoch": obs.snapshot.source.observed_epoch,
+        "price_step_idr": None,
+        "quantity_increment_base": None,
+        "min_order_idr": None,
+        "min_order_base_qty": None,
+        "quoted_bid_ask_on_published_price_step": False,
+        "illustrative_idr_meets_public_minimum": False,
+        "illustrative_base_qty_meets_public_minimum": False,
+        "illustrative_base_qty_rounded_down": None,
+        "illustrative_qty_exactly_on_increment": False,
+        "illustrative_rounded_qty_meets_public_minimum": False,
+        "public_market_suspended_flag_explicit_zero": False,
+        "public_wallet_maintenance_caution": None,
+        "same_public_pair_rule_batch": bool(obs.pair_rule_fields),
+        "exchange_order_tradability_verified": False,
+        "actual_order_precision_and_balance_verified": False,
+        "min_order_for_real_account_verified": False,
+        "g1_verified": False,
+        "execution_allowed": False,
+    }
+    rules = obs.pair_rule_fields
+    if not isinstance(rules, dict):
+        return dict(result, status="INVALID_PUBLIC_RULES_CONTAINER")
+    names = (
+        "price_precision", "quantity_increment",
+        "trade_min_base_currency", "trade_min_traded_currency",
+        "is_market_suspended",
+    )
+    if any(name not in rules for name in names):
+        return dict(result, status="MISSING_PUBLIC_RULES_UNVERIFIED")
+    if rules["is_market_suspended"] not in (0, False, "0"):
+        return dict(result, status="PUBLIC_MARKET_SUSPENDED_OR_UNKNOWN")
+    result["public_market_suspended_flag_explicit_zero"] = True
+    maintenance = rules.get("is_maintenance")
+    if maintenance in (0, False, "0"):
+        result["public_wallet_maintenance_caution"] = False
+    elif maintenance in (1, True, "1"):
+        result["public_wallet_maintenance_caution"] = True
+    try:
+        parsed = []
+        for name in names[:4]:
+            raw = rules[name]
+            if type(raw) not in (str, int, float, Decimal):
+                raise ValueError("INVALID_PUBLIC_PRICE_OR_QTY_RULE")
+            val = Decimal(str(raw))
+            if (not val.is_finite() or val <= ZERO or
+                    not -30 <= val.adjusted() <= 24):
+                raise ValueError("INVALID_PUBLIC_PRICE_OR_QTY_RULE")
+            parsed.append(val)
+        tick, increment, min_idr, min_qty = parsed
+        if (type(illustrative_idr) is not Decimal
+                or type(observed_book_acquired) is not Decimal
+                or not illustrative_idr.is_finite()
+                or not observed_book_acquired.is_finite()
+                or illustrative_idr <= ZERO or observed_book_acquired <= ZERO):
+            raise ValueError("INVALID_ILLUSTRATIVE_QUANTITY")
+    except (ArithmeticError, ValueError):
+        return dict(result, status="INVALID_PUBLIC_PRICE_OR_QTY_RULE")
+    bid = obs.snapshot.best_bid_idr
+    ask = obs.snapshot.best_ask_idr
+    on_step = bid % tick == ZERO and ask % tick == ZERO
+    # For observed book-walk BUY quantities: market buys are funded in IDR,
+    # not assured to return a particular base precision after fees.
+    rounded_qty = (observed_book_acquired // increment) * increment
+    notional_enough = illustrative_idr >= min_idr
+    qty_enough = observed_book_acquired >= min_qty
+    rounded_enough = rounded_qty >= min_qty
+    increment_aligned = rounded_qty == observed_book_acquired
+    result.update({
+        "status": (
+            "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
+            if on_step and notional_enough and qty_enough and rounded_enough
+            else "PUBLIC_RULE_CONSTRAINT_WARNING"
+        ),
+        "price_step_idr": str(tick),
+        "quantity_increment_base": str(increment),
+        "min_order_idr": str(min_idr),
+        "min_order_base_qty": str(min_qty),
+        "quoted_bid_ask_on_published_price_step": on_step,
+        "illustrative_idr_meets_public_minimum": notional_enough,
+        "illustrative_base_qty_meets_public_minimum": qty_enough,
+        "illustrative_base_qty_rounded_down": str(rounded_qty),
+        "illustrative_qty_exactly_on_increment": increment_aligned,
+        "illustrative_rounded_qty_meets_public_minimum": rounded_enough,
+    })
+    return result
+
+
 def observe_public_quote_friction(
     obs: PublicObservation, *, illustrative_idr: Decimal = Decimal("100000"),
     owner_fee_snapshot: OwnerEnteredAllInFeeSnapshot | None = None,
@@ -411,6 +515,11 @@ def observe_public_quote_friction(
         "published_idr_pro_all_in_fee_table": None,
         "published_idr_pro_taker_fee_sensitivity": None,
         "selected_all_in_fee_basis": "NO_VALID_BOOK_WALK",
+        "public_pair_order_constraints": {
+            "status": "NOT_EVALUATED_NO_VALID_BOOK_WALK",
+            "exchange_order_tradability_verified": False,
+            "execution_allowed": False,
+        },
         "net_roi_verified": False,
         "eligible_live_candidates": 0,
         "g1_verified": False,
@@ -482,6 +591,14 @@ def observe_public_quote_friction(
         ),
         "fee_and_slippage_scenarios": {},
     })
+    # Verify public precision/minimum constraints against the SAME
+    # previously observed /api/pairs response, no extra HTTP or order.
+    diagnostic["public_pair_order_constraints"] = (
+        assess_public_pair_order_constraints(
+            obs, illustrative_idr=illustrative_idr,
+            observed_book_acquired=acquired,
+        )
+    )
     # The observed book walk ALREADY embeds spread and depth impact. Do not
     # subtract the PR46 hypothetical SPREAD again. Fees and additional slip
     # below are strictly illustrative, NEVER account/Indodax fee attestation.
