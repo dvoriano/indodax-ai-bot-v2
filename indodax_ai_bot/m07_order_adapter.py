@@ -257,7 +257,9 @@ class M07OfflineStatusObservation:
         quantities = []
         for value in (self.cumulative_base, self.cumulative_quote):
             if (type(value) is not Decimal or not value.is_finite()
-                    or value < 0 or value >= Decimal("1e24")):
+                    or value < 0 or value >= Decimal("1e24")
+                    or len(value.as_tuple().digits) > 48
+                    or (value != 0 and value.adjusted() < -18)):
                 raise ValueError("M07_OBSERVATION_CUMULATIVE_INVALID")
             quantities.append(format(value, "f"))
         base, quote = quantities
