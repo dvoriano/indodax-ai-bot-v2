@@ -276,8 +276,55 @@ _M03_SETUP_LABELS = (
 _M03_TRAIN_MIN_NONOVERLAP_EVENTS = 5
 
 
+@dataclass(frozen=True)
+class OwnerEnteredAllInFeeSnapshot:
+    """Owner-transcribed IDR taker buy/sell fee, NEVER account-authenticated."""
+    pair: str
+    buy_all_in_bps: Decimal
+    sell_all_in_bps: Decimal
+    profile_seen_epoch: int
+    market: str = "IDR"
+    order_role: str = "TAKER"
+    source_kind: str = "OWNER_ENTERED_INDODAX_PROFILE_UNATTESTED"
+
+    @classmethod
+    def from_mapping(cls, data: object) -> "OwnerEnteredAllInFeeSnapshot":
+        if (type(data) is not dict or set(data) != {
+            "pair", "buy_all_in_bps", "sell_all_in_bps",
+            "profile_seen_epoch", "market", "order_role", "source_kind",
+        }):
+            raise ValueError("M03_OWNER_FEE_SNAPSHOT_SCHEMA_INVALID")
+        pair = data["pair"]
+        if (type(pair) is not str or not pair.endswith("_idr")
+                or len(pair) > 30 or not pair[:-4].isalnum()
+                or pair.lower() != pair):
+            raise ValueError("M03_OWNER_FEE_PAIR_INVALID")
+        if (data["market"] != "IDR"
+                or data["order_role"] != "TAKER"
+                or data["source_kind"] != "OWNER_ENTERED_INDODAX_PROFILE_UNATTESTED"):
+            raise ValueError("M03_OWNER_FEE_UNSUPPORTED_SCOPE")
+        epoch = data["profile_seen_epoch"]
+        if type(epoch) is not int or epoch <= 0:
+            raise ValueError("M03_OWNER_FEE_EPOCH_INVALID")
+        vals = []
+        for field in ("buy_all_in_bps", "sell_all_in_bps"):
+            value = data[field]
+            if (type(value) is not str or len(value) > 16
+                    or not value.isascii()):
+                raise ValueError("M03_OWNER_FEE_DECIMAL_INVALID")
+            try:
+                bps = Decimal(value)
+            except (ArithmeticError, ValueError):
+                raise ValueError("M03_OWNER_FEE_DECIMAL_INVALID") from None
+            if not bps.is_finite() or not ZERO <= bps <= Decimal("500"):
+                raise ValueError("M03_OWNER_FEE_RATE_OUT_OF_BOUNDS")
+            vals.append(bps)
+        return cls(pair, vals[0], vals[1], epoch)
+
+
 def observe_public_quote_friction(
     obs: PublicObservation, *, illustrative_idr: Decimal = Decimal("100000"),
+    owner_fee_snapshot: OwnerEnteredAllInFeeSnapshot | None = None,
 ) -> dict:
     """Bounded hypothetical roundtrip book walk on ONE existing M03 observation.
 
@@ -306,6 +353,8 @@ def observe_public_quote_friction(
         "tax_cfx_components_not_double_counted": True,
         "model_assumptions_not_actual_all_in_fee": True,
         "fee_and_slippage_scenarios": None,
+        "owner_entered_fee_sensitivity": None,
+        "owner_entered_fee_status": "NOT_PROVIDED",
         "net_roi_verified": False,
         "eligible_live_candidates": 0,
         "g1_verified": False,
@@ -397,6 +446,67 @@ def observe_public_quote_friction(
             ),
             "realized_or_actionable_net_roi": False,
         }
+    if owner_fee_snapshot is not None:
+        fees = owner_fee_snapshot
+        if type(fees) is not OwnerEnteredAllInFeeSnapshot:
+            diagnostic["owner_entered_fee_status"] = "INVALID_TYPE"
+        elif fees.pair != obs.pair:
+            diagnostic["owner_entered_fee_status"] = "PAIR_MISMATCH"
+        elif (type(fees.profile_seen_epoch) is not int
+              or fees.profile_seen_epoch > src.observed_epoch
+              or src.observed_epoch - fees.profile_seen_epoch > 86400):
+            diagnostic["owner_entered_fee_status"] = "STALE_OR_FUTURE"
+        elif not (fees.market == "IDR" and fees.order_role == "TAKER"
+                  and fees.source_kind ==
+                  "OWNER_ENTERED_INDODAX_PROFILE_UNATTESTED"
+                  and all(type(v) is Decimal and v.is_finite()
+                          and ZERO <= v <= Decimal("500")
+                          for v in (fees.buy_all_in_bps,
+                                    fees.sell_all_in_bps))):
+            diagnostic["owner_entered_fee_status"] = "INVALID_SCOPE_OR_RATE"
+        else:
+            buy_cost = illustrative_idr * (
+                Decimal(1) + fees.buy_all_in_bps / Decimal(10000)
+            )
+            net_bid_proceeds = proceeds * (
+                Decimal(1) - fees.sell_all_in_bps / Decimal(10000)
+            )
+            modeled_pnl = net_bid_proceeds - buy_cost
+            desired_pnl = max(Decimal("10000"), buy_cost * Decimal("0.02"))
+            target_gross_sale = (buy_cost + desired_pnl) / (
+                Decimal(1) - fees.sell_all_in_bps / Decimal(10000)
+            )
+            diagnostic["owner_entered_fee_status"] = (
+                "FRESH_OWNER_ENTERED_NOT_EXCHANGE_AUTHENTICATED"
+            )
+            diagnostic["owner_entered_fee_sensitivity"] = {
+                "source_kind": fees.source_kind,
+                "profile_seen_epoch": fees.profile_seen_epoch,
+                "pair": fees.pair,
+                "buy_all_in_bps_owner_entered": str(fees.buy_all_in_bps),
+                "sell_all_in_bps_owner_entered": str(fees.sell_all_in_bps),
+                "market": fees.market,
+                "order_role": fees.order_role,
+                "tax_cfx_components_not_added_twice": True,
+                "spread_book_impact_already_in_observed_walk": True,
+                "modeled_immediate_net_profit_idr_unverified": str(
+                    modeled_pnl.quantize(Decimal("0.01"))
+                ),
+                "modeled_immediate_net_roi_percent_unverified": str(
+                    (modeled_pnl / buy_cost * Decimal(100))
+                    .quantize(Decimal("0.01"))
+                ),
+                "policy_required_future_sell_gross_idr_unverified": str(
+                    target_gross_sale.quantize(Decimal("0.01"))
+                ),
+                "policy_required_future_sell_vwap_idr_unverified": str(
+                    (target_gross_sale / acquired).quantize(Decimal("0.00000001"))
+                ),
+                "future_sell_liquidity_and_fill_unknown": True,
+                "projected_or_realized_profit_verified": False,
+                "owner_entered_is_not_authenticated_account_fee": True,
+                "execution_allowed": False,
+            }
     return diagnostic
 
 
