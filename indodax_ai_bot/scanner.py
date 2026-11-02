@@ -176,6 +176,11 @@ class DailyPairScanner:
                 maintenance_pair_ids=getattr(
                     self.market, "public_maintenance_pairs", frozenset()
                 ),
+                pair_rule_fields={
+                    pair: dict(fields) for pair, fields in getattr(
+                        self.market, "public_pair_rule_fields", {}
+                    ).items() if pair in pairs
+                },
             ),
         )
 

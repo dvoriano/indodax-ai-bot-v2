@@ -5,6 +5,7 @@ Deep callback and bulk orchestrator are traversed with local fakes only.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal as D
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
@@ -23,7 +24,8 @@ from indodax_ai_bot.deep_analysis import (
 from indodax_ai_bot.contracts import MarketSnapshot, SourceReceipt
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator, CycleResult
-from indodax_ai_bot.public_market import Candle, PublicObservation
+from indodax_ai_bot.public_market import Candle, PublicObservation, IndodaxPublicMarket
+from indodax_ai_bot.scanner import DailyPairScanner
 
 
 def public_observation(
@@ -369,6 +371,185 @@ class M03PublicQuoteFrictionTests(unittest.TestCase):
             self.assertIn("M03_OWNER_FEE_REQUIRES_ORIGINAL_PUBLIC_DEEP_PATH",
                           err.getvalue())
             self.assertFalse(db3.exists())
+
+    def test_actual_original_scanner_preserves_same_public_pair_rules(self):
+        """One real original scanner caller, only 3 injected public GETs."""
+        clock = 1800000070
+        calls = []
+        def fetch(path):
+            calls.append(path)
+            if path == "/api/pairs":
+                return [{
+                    "ticker_id": "btc_idr", "id": "btcidr",
+                    "symbol": "BTCIDR", "base_currency": "idr",
+                    "traded_currency": "btc", "is_market_suspended": 0,
+                    "is_maintenance": 0, "price_precision": "1",
+                    "quantity_increment": "0.1",
+                    "trade_min_base_currency": "50000",
+                    "trade_min_traded_currency": "500",
+                }]
+            if path == "/api/server_time":
+                return {"server_time": clock}
+            if path == "/api/ticker_all":
+                return {"tickers": {"btc_idr": {
+                    "server_time": clock, "buy": "99", "sell": "100",
+                    "last": "100", "high": "110", "low": "90",
+                    "vol_idr": "200000000",
+                }}}
+            self.fail("UNEXPECTED_PUBLIC_REQUEST: " + path)
+        market = IndodaxPublicMarket(fetch=fetch, clock=lambda: clock)
+        screen = DailyPairScanner(market).scan()
+        self.assertEqual(calls, [
+            "/api/pairs", "/api/server_time", "/api/ticker_all"
+        ])
+        rules = screen.scan_context.pair_rule_fields["btc_idr"]
+        self.assertEqual(rules["quantity_increment"], "0.1")
+        self.assertEqual(rules["price_precision"], "1")
+        self.assertEqual(rules["trade_min_base_currency"], "50000")
+        self.assertEqual(rules["trade_min_traded_currency"], "500")
+        quote = replace(public_observation(), pair_rule_fields=rules)
+        report = observe_public_quote_friction(quote)
+        constraints = report["public_pair_order_constraints"]
+        self.assertEqual(
+            constraints["status"], "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
+        )
+        self.assertEqual(constraints["min_order_idr"], "50000")
+        self.assertEqual(constraints["min_order_base_qty"], "500")
+        self.assertEqual(constraints["quantity_increment_base"], "0.1")
+        self.assertTrue(constraints["quoted_bid_ask_on_published_price_step"])
+        self.assertTrue(constraints["illustrative_qty_exactly_on_increment"])
+        self.assertFalse(constraints["exchange_order_tradability_verified"])
+        self.assertFalse(constraints["actual_order_precision_and_balance_verified"])
+        self.assertFalse(constraints["execution_allowed"])
+
+    def test_original_public_observe_reuses_scan_rule_metadata_without_new_get(self):
+        clock = 1800000070
+        requests = []
+        rows = [{
+            "ticker_id": "btc_idr", "id": "btcidr", "symbol": "BTCIDR",
+            "base_currency": "idr", "traded_currency": "btc",
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "50000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0, "is_maintenance": 0,
+        }]
+        minute = [
+            {"Time": 1800000000 - i*60, "Open": "99", "High": "101",
+             "Low": "98", "Close": "100", "Volume": "10"}
+            for i in range(35)
+        ]
+        fifteen = [
+            {"Time": 1799999100 - i*900, "Open": "99",
+             "High": "101", "Low": "98", "Close": "100", "Volume": "50"}
+            for i in range(3)
+        ]
+        def fetch(path):
+            requests.append(path)
+            if path == "/api/pairs":
+                return rows
+            if path == "/api/server_time":
+                return {"server_time": clock}
+            if path == "/api/ticker_all":
+                return {"tickers": {"btc_idr": {
+                    "server_time": clock, "buy": "99", "sell": "100",
+                    "last": "100", "high": "110", "low": "90",
+                    "vol_idr": "200000000",
+                }}}
+            if "/tradingview/history_v2?" in path:
+                return fifteen if "tf=15" in path else minute
+            if path == "/api/trades/btcidr":
+                return [{"date": 1800000000, "price": "100",
+                         "amount": "1", "type": "buy"}]
+            if path == "/api/depth/btcidr":
+                return {"buy": [["99", "2000"], ["98", "2000"]],
+                        "sell": [["100", "2000"], ["101", "2000"]]}
+            self.fail("UNEXPECTED_PUBLIC_GET: " + path)
+
+        market = IndodaxPublicMarket(fetch=fetch, clock=lambda: clock)
+        screen = DailyPairScanner(market).scan()
+        observed = market.observe("btc_idr", scan_context=screen.scan_context)
+        self.assertEqual(len(requests), 7)
+        self.assertEqual(requests.count("/api/pairs"), 1)
+        self.assertEqual(observed.pair_rule_fields,
+                         screen.scan_context.pair_rule_fields["btc_idr"])
+        report = observe_public_quote_friction(observed)
+        self.assertEqual(
+            report["public_pair_order_constraints"]["status"],
+            "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
+        )
+        self.assertEqual(report["published_idr_pro_all_in_fee_table"][
+            "buy_taker_percent_used"], "0.20555")
+        self.assertFalse(report["public_pair_order_constraints"][
+            "exchange_order_tradability_verified"])
+        self.assertFalse(report["execution_allowed"])
+
+    def test_public_pair_rules_missing_invalid_and_quote_steps_are_fail_closed(self):
+        base = {
+            "price_precision": "1", "quantity_increment": "0.1",
+            "trade_min_base_currency": "50000",
+            "trade_min_traded_currency": "500",
+            "is_market_suspended": 0, "is_maintenance": 0,
+        }
+        for mod, expected in (
+            ({"price_precision": None}, "INVALID_PUBLIC_PRICE_OR_QTY_RULE"),
+            ({"quantity_increment": "NaN"}, "INVALID_PUBLIC_PRICE_OR_QTY_RULE"),
+            ({"quantity_increment": "0"}, "INVALID_PUBLIC_PRICE_OR_QTY_RULE"),
+            ({"trade_min_base_currency": "-2"}, "INVALID_PUBLIC_PRICE_OR_QTY_RULE"),
+            ({"is_market_suspended": 1}, "PUBLIC_MARKET_SUSPENDED_OR_UNKNOWN"),
+            ({"is_market_suspended": None}, "PUBLIC_MARKET_SUSPENDED_OR_UNKNOWN"),
+            ({"price_precision": "3"}, "PUBLIC_RULE_CONSTRAINT_WARNING"),
+            ({"trade_min_base_currency": "150000"}, "PUBLIC_RULE_CONSTRAINT_WARNING"),
+            ({"trade_min_traded_currency": "1500"}, "PUBLIC_RULE_CONSTRAINT_WARNING"),
+            ({"quantity_increment": "0.3"}, "PUBLIC_RULES_QTY_ROUND_DOWN_REQUIRED"),
+        ):
+            with self.subTest(mod=mod):
+                quote = replace(
+                    public_observation(), pair_rule_fields={**base, **mod},
+                )
+                report = observe_public_quote_friction(quote)
+                x = report["public_pair_order_constraints"]
+                self.assertEqual(x["status"], expected)
+                self.assertFalse(x["execution_allowed"])
+                self.assertFalse(x["exchange_order_tradability_verified"])
+                self.assertFalse(report["execution_allowed"])
+        missing = replace(
+            public_observation(), pair_rule_fields={
+                k: v for k, v in base.items() if k != "quantity_increment"
+            },
+        )
+        x = observe_public_quote_friction(missing)["public_pair_order_constraints"]
+        self.assertEqual(x["status"], "MISSING_PUBLIC_RULES_UNVERIFIED")
+        self.assertFalse(x["exchange_order_tradability_verified"])
+
+    def test_original_orchestrator_includes_pair_constraints_and_all_in_fees(self):
+        with TemporaryDirectory() as d:
+            bot = DailyScalpingOrchestrator(
+                Settings(), DecisionJournal(Path(d)/"journal.sqlite3"),
+            )
+            rules = {
+                "price_precision": "1", "quantity_increment": "0.1",
+                "trade_min_base_currency": "50000",
+                "trade_min_traded_currency": "500",
+                "is_market_suspended": 0,
+            }
+            quote = replace(public_observation(), pair_rule_fields=rules)
+            with patch.object(bot.journal, "record_and_compare_public_wall",
+                              return_value={"status": "UNATTESTED"}):
+                candidate = bot._attach_public_wall_experience(
+                    DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None), quote,
+                )
+            result = candidate.summary()["public_quote_friction_diagnostic"]
+            self.assertEqual(
+                result["public_pair_order_constraints"]["status"],
+                "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
+            )
+            self.assertEqual(
+                result["published_idr_pro_all_in_fee_table"][
+                    "buy_taker_percent_used"], "0.20555"
+            )
+            self.assertFalse(result["public_pair_order_constraints"][
+                "exchange_order_tradability_verified"])
+            self.assertFalse(result["execution_allowed"])
 
     def test_existing_bulk_mainpath_only_attaches_cost_to_public_candidate(self):
         with TemporaryDirectory() as d:
