@@ -161,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             if (type(args.m07_intent_id) is not str
                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}", args.m07_intent_id)
                     or not Path(args.db).is_absolute()
+                    or not Path(args.db).resolve().is_relative_to(Path("/tmp"))
                     or args.m07_intent_id == "LIVE"):
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
