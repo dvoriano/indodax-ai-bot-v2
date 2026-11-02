@@ -27,6 +27,7 @@ from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivatePro
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview
+from .m07_same_candidate_public import assess_m07_same_candidate_public_boundary
 from .m07_private_order_readonly import read_m07_order_status_once, read_m07_latest_order_status_once, read_m07_14day_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .m06_idr_live_readonly import inspect_idr_budget_readonly_once
@@ -482,9 +483,18 @@ class DailyScalpingOrchestrator:
         cost = observe_public_quote_friction(
             observation, owner_fee_snapshot=self._m03_owner_fee_snapshot,
         )
+        # One extra deterministic M07 check from the EXACT observed M03
+        # candidate, original /api/pairs fields, and same friction source.
+        # The public-only gate never reads account IDR, M05 decision or
+        # private keys and cannot fabricate an executable LIMIT draft.
+        m07 = assess_m07_same_candidate_public_boundary(
+            candidate_pair=candidate.pair, observation=observation,
+            observed_friction=cost,
+        )
         return replace(
             candidate, wall_temporal_evidence=wall,
             public_quote_friction_diagnostic=cost,
+            m07_same_candidate_public_preflight=m07,
         )
 
     def run_cycle(self, trace_id: str, *, public_scanner: bool = False,
