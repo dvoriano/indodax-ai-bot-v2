@@ -352,9 +352,9 @@ def observe_public_quote_friction(
         spent = min(remaining_idr, qty*price)
         acquired += spent / price
         remaining_idr -= spent
-        if remaining_idr <= Decimal("0.000000000001"):
+        if remaining_idr == ZERO:
             break
-    if remaining_idr > Decimal("0.000000000001"):
+    if remaining_idr > ZERO:
         return dict(diagnostic, status="VISIBLE_ASK_DEPTH_INSUFFICIENT")
     remaining_qty = acquired
     proceeds = ZERO
@@ -362,9 +362,9 @@ def observe_public_quote_friction(
         sold = min(remaining_qty, qty)
         proceeds += price*sold
         remaining_qty -= sold
-        if remaining_qty <= Decimal("0.000000000001"):
+        if remaining_qty == ZERO:
             break
-    if remaining_qty > Decimal("0.000000000001"):
+    if remaining_qty > ZERO:
         return dict(diagnostic, status="VISIBLE_BID_DEPTH_INSUFFICIENT")
     gross = proceeds - illustrative_idr
     diagnostic.update({
