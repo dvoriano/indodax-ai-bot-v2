@@ -735,6 +735,15 @@ class M06OwnershipLedger:
                 receipt_sha256 TEXT NOT NULL
             )""")
             for entry in prepared:
+                rebuy_collision = db.execute(
+                    "SELECT 1 FROM m06_scoped_rebuy_buy_observations "
+                    "WHERE trade_id=?", (entry[0],),
+                ).fetchone() if db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='m06_scoped_rebuy_buy_observations'"
+                ).fetchone() else None
+                if rebuy_collision is not None:
+                    raise OwnershipConflict("M06_SPECIAL_SELL_BUY_TRADE_COLLISION")
                 prior = db.execute(
                     "SELECT account_hash,asset,order_id,gross_idr,receipt_sha256 "
                     "FROM m06_scoped_external_sell_receipts WHERE trade_id=?",
@@ -860,7 +869,8 @@ class M06OwnershipLedger:
                         or fill.commission_asset.lower() not in (
                             "idr", "floki", "pepe")):
                     raise ValueError("M06_REBUY_BUY_FEE_ASSET_UNKNOWN")
-                if fill.commission_asset == "idr":
+                if (type(fill.commission_asset) is str
+                        and fill.commission_asset.lower() == "idr"):
                     outflow=_amount(outflow+fill.commission)
                 if outflow<=0:
                     raise ValueError("M06_REBUY_BUY_SPEND_INVALID")
@@ -902,6 +912,12 @@ class M06OwnershipLedger:
                     raise OwnershipConflict("M06_REBUY_BUY_COLLIDES_WITH_SELL")
                 # A bot-owned receipt with the same trade ID must match
                 # immutable raw fill economics; otherwise hard conflict.
+                local_sell=db.execute(
+                    "SELECT 1 FROM m06_special_rebuy_observations "
+                    "WHERE trade_id=?", (entry[0],),
+                ).fetchone()
+                if local_sell is not None:
+                    raise OwnershipConflict("M06_REBUY_BUY_COLLIDES_WITH_LOCAL_SELL")
                 local=db.execute(
                     "SELECT order_id,symbol,qty,price,fee "
                     "FROM m06_observed_fills WHERE trade_id=?",
