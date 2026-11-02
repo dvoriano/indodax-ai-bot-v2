@@ -24,6 +24,7 @@ from .m06_ownership_ledger import M06OwnershipLedger, OwnershipReview, Protected
 from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconciliation
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
+from .m07_order_adapter import OfficialV2OrderAdapter
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
@@ -160,6 +161,15 @@ class DailyScalpingOrchestrator:
         if m03_owner_fee_snapshot is not None and type(m03_owner_fee_snapshot) is not OwnerEnteredAllInFeeSnapshot:
             raise TypeError("M03_INVALID_OWNER_ENTERED_FEE_SNAPSHOT")
         self._m03_owner_fee_snapshot = m03_owner_fee_snapshot
+
+    def inspect_m07_official_order_adapter_once(self) -> dict:
+        """Original V2 mainpath, bounded offline signed-contract status ONLY.
+
+        No caller can turn this into a submit/status/cancel request. A real
+        exchange order and any permission require future independent GO,
+        funds/ownership, Risk, Final and atomic intent reconciliation.
+        """
+        return OfficialV2OrderAdapter().contract_status()
 
     def review_m06_account(self, *, observation: AccountObservation | None = None,
                            now_epoch: int) -> M06AccountDecision:
