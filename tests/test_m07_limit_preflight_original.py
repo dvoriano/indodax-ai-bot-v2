@@ -67,7 +67,7 @@ class M07OriginalPreflightTests(unittest.TestCase):
         report=assess_m07_limit_buy_preflight_offline(**args())
         self.assertTrue(report.checks_passed_unverified)
         self.assertEqual(report.status,"M07_DRAFT_RULES_MATCH_UNTRUSTED")
-        self.assertEqual(report.estimated_buy_max_cost_idr,"10020.00")
+        self.assertEqual(D(report.estimated_buy_max_cost_idr),D("10020.00"))
         self.assertEqual(report.general_idr_scenario_budget,"16000")
         self.assertIsNotNone(report.required_future_sell_vwap_idr_unverified)
         for attr in ("public_pair_rule_provenance_verified",
