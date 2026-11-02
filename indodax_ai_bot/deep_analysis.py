@@ -490,6 +490,7 @@ def assess_public_pair_order_constraints(
 def _m07_post_round_sell_research(
     obs: PublicObservation, *,
     pair_rules: dict, illustrative_idr: Decimal,
+    acquired_before_real_buy_fees: Decimal,
     buy_all_in_bps: Decimal, sell_all_in_bps: Decimal,
 ) -> dict:
     """Original M07-02 read-only minimum SELL and price-grid sensitivity.
@@ -527,7 +528,6 @@ def _m07_post_round_sell_research(
         return result
     try:
         qty = Decimal(pair_rules["illustrative_base_qty_rounded_down"])
-        original = qty if pair_rules["illustrative_qty_exactly_on_increment"] else None
         tick = Decimal(pair_rules["price_step_idr"])
         min_idr = Decimal(pair_rules["min_order_idr"])
         min_qty = Decimal(pair_rules["min_order_base_qty"])
@@ -540,6 +540,10 @@ def _m07_post_round_sell_research(
                 or sell_all_in_bps >= Decimal("10000")
                 or qty < min_qty):
             return dict(result, status="INVALID_POST_ROUND_PUBLIC_CONSTRAINTS")
+        if (type(acquired_before_real_buy_fees) is not Decimal
+                or not acquired_before_real_buy_fees.is_finite()
+                or acquired_before_real_buy_fees < qty):
+            return dict(result, status="INVALID_ASK_BOOK_ACQUIRED_QUANTITY")
         if qty != (
             (qty // Decimal(pair_rules["quantity_increment_base"]))
             * Decimal(pair_rules["quantity_increment_base"])
@@ -583,8 +587,8 @@ def _m07_post_round_sell_research(
                 else "PUBLIC_POST_ROUND_SELL_BELOW_MIN_IDR"
             ),
             "sell_qty_rounded_down_before_real_buy_fees": str(qty),
-            "round_down_unallocated_base_qty": (
-                "0" if original is not None else "UNKNOWN_WITHOUT_ASK_GROSS"
+            "round_down_unallocated_base_qty": str(
+                acquired_before_real_buy_fees - qty
             ),
             "visible_bid_book_sell_gross_idr": str(sell_gross),
             "visible_bid_book_sell_after_all_in_fee_idr": str(sell_net),
@@ -844,6 +848,7 @@ def observe_public_quote_friction(
     diagnostic["public_post_round_sell_research"] = (
         _m07_post_round_sell_research(
             obs, pair_rules=pair_rules, illustrative_idr=illustrative_idr,
+            acquired_before_real_buy_fees=acquired,
             buy_all_in_bps=source_buy, sell_all_in_bps=source_sell,
         )
     )
