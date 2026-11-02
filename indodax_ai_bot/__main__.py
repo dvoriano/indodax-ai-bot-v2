@@ -843,7 +843,13 @@ def main(argv: list[str] | None = None) -> int:
                     "final_decision": None, "execution_allowed": False,
                 }, sort_keys=True), file=sys.stderr)
                 return 3
+            # Same original M07 journal/owner/account gate; synthetic CLI
+            # fixture never becomes trusted M06 or M03 evidence.
+            late_gate = app.review_m07_last_moment_gate_offline(
+                limit_preview=preview, now_epoch=int(time.time()),
+            )
             print(json.dumps({
+                "m07_last_moment_gate": late_gate,
                 "m07_limit_preflight": asdict(preview),
                 "final_decision": None,
                 "execution_allowed": False,
