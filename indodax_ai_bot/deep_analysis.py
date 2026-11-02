@@ -500,7 +500,7 @@ def observe_public_quote_friction(
                     target_gross_sale.quantize(Decimal("0.01"))
                 ),
                 "policy_required_future_sell_vwap_idr_unverified": str(
-                    (target_gross_sale / acquired).quantize(Decimal("0.00000001"))
+                    target_gross_sale / acquired
                 ),
                 "future_sell_liquidity_and_fill_unknown": True,
                 "projected_or_realized_profit_verified": False,
