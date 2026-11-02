@@ -463,6 +463,9 @@ def assess_public_pair_order_constraints(
         "status": (
             "PUBLIC_RULES_CONSISTENT_RESEARCH_ONLY"
             if on_step and notional_enough and qty_enough and rounded_enough
+            and increment_aligned
+            else "PUBLIC_RULES_QTY_ROUND_DOWN_REQUIRED"
+            if on_step and notional_enough and qty_enough and rounded_enough
             else "PUBLIC_RULE_CONSTRAINT_WARNING"
         ),
         "price_step_idr": str(tick),
