@@ -28,6 +28,7 @@ from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_co
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview
 from .m07_same_candidate_public import assess_m07_same_candidate_public_boundary
+from .m07_last_moment_sources import review_m07_last_moment_sources_offline
 from .m07_private_order_readonly import read_m07_order_status_once, read_m07_latest_order_status_once, read_m07_14day_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .m06_idr_live_readonly import inspect_idr_budget_readonly_once
@@ -201,6 +202,42 @@ class DailyScalpingOrchestrator:
             buy_all_in_fee_bps=buy_all_in_fee_bps,
             sell_all_in_fee_bps=sell_all_in_fee_bps,
             max_spread_bps=max_spread_bps,
+        )
+
+    def review_m07_last_moment_gate_offline(
+            self, *, limit_preview: M07LimitBuyPreflightPreview,
+            public_candidate: dict | None = None,
+            account_snapshot: dict | None = None,
+            owner_advisory_proposal_id: str | None = None,
+            source_digest: str | None = None,
+            closed_1m_epoch: int | None = None,
+            now_epoch: int,
+    ) -> dict:
+        """Same M03/M06/M05/M07 caller, read-only, never exchange order.
+
+        A View Only balance or a genuine M05 advisory callback cannot
+        authorize an execution; original journal still blocks UNKNOWNs.
+        Source-bound M05 inspection uses original owner SQLite if injected.
+        """
+        self.settings.require_m01_safety()
+        advisory = None
+        if (self._owner_control is not None
+                and owner_advisory_proposal_id is not None
+                and source_digest is not None
+                and closed_1m_epoch is not None):
+            pair = limit_preview.symbol[:-3].lower() + "_idr"
+            advisory = self._owner_control.inspect_market_advisory_preflight_readonly(
+                proposal_id=owner_advisory_proposal_id, pair=pair,
+                source_digest=source_digest,
+                closed_1m_epoch=closed_1m_epoch, now_epoch=now_epoch,
+            )
+        return review_m07_last_moment_sources_offline(
+            limit_preview=limit_preview,
+            public_candidate=public_candidate,
+            account_snapshot=account_snapshot,
+            owner_advisory=advisory,
+            offline_intent_guard=self.journal.m07_offline_intent_summary(),
+            now_epoch=now_epoch,
         )
 
     def reserve_m07_offline_intent_once(self, *,

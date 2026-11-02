@@ -172,6 +172,99 @@ class OwnerDecisionLedger:
             "live_execution_authorized": False,
         }
 
+    def inspect_market_advisory_preflight_readonly(
+        self, *, proposal_id: str, pair: str, source_digest: str,
+        closed_1m_epoch: int, now_epoch: int,
+    ) -> dict[str, Any]:
+        """Exact original M05 source/TTL/owner ledger check, NEVER order consent.
+
+        A real button PASS on a PUBLIC market advisory only acknowledged
+        owner review. In this schema advisory rows carry ZERO price/quantity,
+        and the immutable execution_allowed column is always 0. Read the
+        same SQLite in mode=ro; do not change callback state or consume a
+        second time. No Telegram network, crypto wallet or new M05 ledger.
+        """
+        result = {
+            "stage": "M05_SOURCE_BOUND_ADVISORY_READONLY",
+            "status": "M05_ADVISORY_NOT_VERIFIED",
+            "source_bound_owner_review_pass": False,
+            "advisory_only": True,
+            "order_price_quantity_bound": False,
+            "owner_order_execution_consent_verified": False,
+            "final_decision_for_trading": None,
+            "execution_allowed": False,
+        }
+        if (type(proposal_id) is not str or not PROPOSAL_ID.fullmatch(proposal_id)
+                or type(pair) is not str or not PAIR.fullmatch(pair)
+                or type(source_digest) is not str or not DIGEST.fullmatch(source_digest)
+                or type(closed_1m_epoch) is not int or closed_1m_epoch <= 0
+                or type(now_epoch) is not int or now_epoch <= 0):
+            return dict(result, status="M05_ADVISORY_INPUT_INVALID")
+        try:
+            with sqlite3.connect(
+                self.db_path.resolve().as_uri() + "?mode=ro",
+                uri=True, timeout=2,
+            ) as db:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                config = db.execute(
+                    "SELECT owner_user_id,mode FROM m05_config WHERE singleton=1"
+                ).fetchone()
+                row = db.execute(
+                    """SELECT owner_user_id,pair,digest,closed_1m_epoch,
+                              created_epoch,expires_epoch,mode_at_create,
+                              state,reason,decision_epoch,execution_allowed,
+                              entry_price_idr,quantity
+                       FROM m05_proposals WHERE proposal_id=?""",
+                    (proposal_id,),
+                ).fetchone()
+                outbound = db.execute(
+                    """SELECT delivery_state,sent_message_id
+                       FROM m05_market_advisory_outbox WHERE proposal_id=?""",
+                    (proposal_id,),
+                ).fetchone()
+                # Even MANUAL→AUTO→MANUAL must not resurrect a previously
+                # reviewed advisory after an owner-mode transition.
+                mode_flipped = (
+                    db.execute(
+                        """SELECT 1 FROM m05_audit
+                           WHERE event='OWNER_MODE_CHANGED'
+                             AND event_epoch>=? AND event_epoch<=? LIMIT 1""",
+                        (row[4],now_epoch),
+                    ).fetchone() is not None
+                    if row is not None and type(row[4]) is int
+                    else True
+                )
+        except (OSError, sqlite3.Error, ValueError):
+            return dict(result, status="M05_ADVISORY_LEDGER_UNAVAILABLE")
+        if row is None or config is None:
+            return dict(result, status="M05_ADVISORY_SOURCE_NOT_FOUND")
+        (uid, row_pair, digest, minute, created, expires, original_mode,
+         state, reason, decision, can_exec, price, quantity) = row
+        if (config != (self.owner_user_id, "MANUAL")
+                or uid != self.owner_user_id
+                or (row_pair,digest,minute) !=
+                   (pair,source_digest,closed_1m_epoch)
+                or original_mode != "MANUAL"):
+            return dict(result, status="M05_ADVISORY_SOURCE_OR_MODE_MISMATCH")
+        if (outbound is None or outbound[0] != "SENT"
+                or type(outbound[1]) is not int or outbound[1] <= 0
+                or type(created) is not int or type(expires) is not int
+                or not created <= now_epoch < expires
+                or expires - created > TTL_MAX):
+            return dict(result, status="M05_ADVISORY_EXPIRED_OR_UNDELIVERED")
+        if mode_flipped:
+            return dict(result, status="M05_ADVISORY_OWNER_MODE_TRANSITION")
+        if can_exec != 0 or price != "0" or quantity != "0":
+            return dict(result, status="M05_ADVISORY_SCHEMA_EXECUTION_CONFLICT")
+        if (state == "PASS" and reason == "OWNER_BUTTON"
+                and type(decision) is int and created <= decision < expires
+                and decision <= now_epoch):
+            return dict(result,
+                        status="M05_OWNER_BUTTON_PASS_ADVISORY_ONLY",
+                        source_bound_owner_review_pass=True)
+        return dict(result, status="M05_NO_VALID_SOURCE_BOUND_PASS")
+
     def owner_review_snapshot(
         self, *, user_id: int, chat_id: int,
         now_epoch: int, chat_type: str = "private",
