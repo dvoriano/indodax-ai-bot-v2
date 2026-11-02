@@ -114,14 +114,6 @@ class M06OwnershipLedger:
                 order_id TEXT NOT NULL,
                 gross_idr TEXT NOT NULL
             )""")
-            db.execute("""CREATE TABLE IF NOT EXISTS m06_scoped_external_sell_receipts (
-                trade_id TEXT PRIMARY KEY,
-                account_hash TEXT NOT NULL,
-                asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
-                order_id TEXT NOT NULL,
-                gross_idr TEXT NOT NULL,
-                receipt_sha256 TEXT NOT NULL
-            )""")
             db.execute("""CREATE TABLE IF NOT EXISTS m06_manual_asset_floors (
                 account_hash TEXT NOT NULL,
                 asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
@@ -178,6 +170,14 @@ class M06OwnershipLedger:
             with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=2)) as db:
                 db.execute("PRAGMA query_only=ON")
                 db.execute("BEGIN")
+                # Older V2 databases may not yet have the OPTIONAL manual
+                # SELL receipt table. A readonly inspection must not mutate
+                # its schema or incorrectly claim a missing table is a fill.
+                present = {
+                    row[0] for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
                 bound = any(
                     db.execute(
                         "SELECT 1 FROM " + table
@@ -190,6 +190,7 @@ class M06OwnershipLedger:
                         "m06_scoped_external_sell_receipts",
                         "m06_manual_asset_floors",
                     )
+                    if table in present
                 )
                 if not bound:
                     raise OwnershipConflict("M06_LOCAL_ACCOUNT_UNBOUND")
@@ -677,6 +678,16 @@ class M06OwnershipLedger:
                              order.order_id, str(gross), digest))
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            # Explicit offline ingestion only. Normal M06 startup/read-only
+            # and existing historical ledgers never create this new table.
+            db.execute("""CREATE TABLE IF NOT EXISTS m06_scoped_external_sell_receipts (
+                trade_id TEXT PRIMARY KEY,
+                account_hash TEXT NOT NULL,
+                asset TEXT NOT NULL CHECK(asset IN ('FLOKI','PEPE')),
+                order_id TEXT NOT NULL,
+                gross_idr TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL
+            )""")
             for entry in prepared:
                 prior = db.execute(
                     "SELECT account_hash,asset,order_id,gross_idr,receipt_sha256 "
