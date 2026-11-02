@@ -57,7 +57,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
             "M05_TELEGRAM_TOKEN_FILE": str(self.token),
         }
 
-    def fake_api(self, _client, method, payload):
+    def fake_api(self, method, payload):
         self.calls.append((method, dict(payload)))
         if method == "getMe":
             return {"id": BOT, "is_bot": True, "username": "SyntheticOwner"}
@@ -78,7 +78,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         raise AssertionError("UNEXPECTED_METHOD")
 
     def tick(self):
-        with patch.object(TelegramBotApiClient, "call", new=self.fake_api):
+        with patch.object(TelegramBotApiClient, "call", side_effect=self.fake_api):
             return service_tick_once(env=self.env)
 
     def command(self, name="/reviewtest", *, user=OWNER, chat=OWNER, update=101):
