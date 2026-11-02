@@ -481,6 +481,7 @@ class M06OwnershipLedger:
             raise OwnershipConflict("M06_REBUY_LEDGER_LIMIT_EXCEEDED")
         by_trade = {tid: (asset, oid, raw) for tid,asset,oid,raw in rows}
         external_count = 0
+        external_only_count = 0
         has_external = db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='m06_scoped_external_sell_receipts'"
@@ -512,6 +513,7 @@ class M06OwnershipLedger:
                             "M06_DUPLICATE_SPECIAL_SELL_SOURCE_CONFLICT")
                 else:
                     by_trade[tid] = (asset,oid,raw)
+                    external_only_count += 1
         if len(by_trade) > 10000:
             raise OwnershipConflict("M06_REBUY_LEDGER_LIMIT_EXCEEDED")
         floki, pepe = Decimal("0"), Decimal("0")
@@ -550,7 +552,9 @@ class M06OwnershipLedger:
             "SELECT 1 FROM sqlite_master WHERE type='table' "
             "AND name='m06_local_fill_receipts'"
         ).fetchone() is not None
-        linked = has_receipts
+        # External/manual fills do not have a bot-intent receipt. A table
+        # existing for other fills must not certify these as V2 bot-owned.
+        linked = has_receipts and external_only_count == 0
         receipt_count = 0
         if has_receipts:
             receipt_rows = db.execute(
