@@ -184,6 +184,23 @@ class M06PersistentScopedSpecialSellTests(unittest.TestCase):
         self.assertEqual(again.distinct_sell_fills,1)
         self.assertEqual(again.locally_observed_external_special_sell_fills,1)
 
+    def test_local_bot_source_same_gross_but_changed_fee_never_merges(self):
+        self.ledger.record_local_intent(
+            account_key=self.key,order_id="original-external-order-2",
+            client_id="manual-1",symbol="flokiidr",side="SELL")
+        orders,fills=source()
+        self.ledger.observe(account_key=self.key,
+                            order=orders[0],fills=fills)
+        altered=(replace(fills[0],commission=D("51")),)
+        with self.assertRaisesRegex(OwnershipConflict,
+                                    "M06_EXTERNAL_OVERLAP_FILL_CONFLICT"):
+            self.ledger.observe_scoped_external_special_sells_offline(
+                account_uid=UID,symbol="flokiidr",orders=orders,
+                fills=altered)
+        again=self.ledger.review_protected_rebuy(account_key=self.key)
+        self.assertEqual(again.distinct_sell_fills,1)
+        self.assertEqual(again.locally_observed_external_special_sell_fills,0)
+
     def test_original_v2_orchestrator_and_secure_local_readonly_inspection(self):
         orders,fills=source()
         app=DailyScalpingOrchestrator(
