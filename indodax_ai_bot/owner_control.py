@@ -197,7 +197,8 @@ class OwnerDecisionLedger:
                                     AND p.state='PENDING'),0),
                        COUNT(*)
                    FROM m05_market_advisory_outbox o
-                   JOIN m05_proposals p ON p.proposal_id=o.proposal_id""",
+                   JOIN m05_proposals p ON p.proposal_id=o.proposal_id
+                   WHERE o.pair!='reviewtest_idr'""",
                 (now_epoch, now_epoch),
             ).fetchone()
             reviewed = db.execute(
@@ -206,7 +207,8 @@ class OwnerDecisionLedger:
                                     AND reason='OWNER_BUTTON'),0),
                        COALESCE(SUM(state='REJECT'
                                     AND reason='OWNER_BUTTON'),0)
-                   FROM m05_proposals"""
+                   FROM m05_proposals
+                   WHERE pair!='reviewtest_idr'"""
             ).fetchone()
         return {
             "accepted": True,
@@ -319,7 +321,7 @@ class OwnerDecisionLedger:
         eligible for an inline-button review. This is NOT G1 authentication.
         """
         if (not isinstance(pair, str) or not PAIR.fullmatch(pair)
-                or pair in ("usdt_idr", "usdc_idr", "floki_idr", "pepe_idr")
+                or pair in ("usdt_idr", "usdc_idr", "floki_idr", "pepe_idr", "reviewtest_idr")
                 or not isinstance(digest, str) or not DIGEST.fullmatch(digest)
                 or type(closed_1m_epoch) is not int or closed_1m_epoch <= 0
                 or closed_1m_epoch % 60 != 0
@@ -394,6 +396,90 @@ class OwnerDecisionLedger:
             "outbox_delivery": "QUEUED", "owner_mode": "MANUAL",
             "shadow_only": True, "final_decision": None,
             "execution_allowed": False,
+        }
+
+    def queue_owner_review_button_test(
+        self, *, user_id: int, chat_id: int, now_epoch: int,
+        chat_type: str = "private",
+    ) -> dict[str, Any]:
+        """Explicit owner-only transport rehearsal via SAME original outbox.
+
+        This is NOT an M03 candidate, M04 AI result, G1 receipt, order,
+        or authorization. A synthetic reserved pair NEVER enters real scans.
+        Owner invokes the command himself in his private dedicated chat.
+        """
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        if type(now_epoch) is not int or now_epoch <= 0:
+            return _blocked("INVALID_M05_TEST_CLOCK")
+        pair = "reviewtest_idr"
+        candle = now_epoch - (now_epoch % 60)
+        expires = now_epoch + TTL_MAX
+        proposal_id = secrets.token_hex(12)
+        secret = secrets.token_hex(16)
+        digest = sha256(
+            ("M05_OWNER_BUTTON_TRANSPORT_TEST:" + proposal_id).encode()
+        ).hexdigest()
+        msg = (
+            "M05 BUTTON TEST | SIMULASI, BUKAN SINYAL PASAR\n"
+            "Hanya uji komunikasi Telegram owner PASS/REJECT.\n"
+            "Tidak ada pair pasar, G1, AI berbayar, saldo, harga, "
+            "jumlah maupun order.\n"
+            "Tombol berlaku maksimal 90 detik dari perintah.\n"
+            "PASS dan REJECT hanya menyimpan hasil uji di SQLite V2. "
+            "BUY/SELL TIDAK AKAN DIKIRIM. Trading OFF."
+        )
+        with self._tx() as db:
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if mode != "MANUAL":
+                return _blocked("M05_TEST_REQUIRES_MANUAL_MODE")
+            if db.execute(
+                """SELECT 1
+                   FROM m05_market_advisory_outbox o
+                   JOIN m05_proposals p ON p.proposal_id=o.proposal_id
+                   WHERE o.pair=? AND p.state='PENDING'
+                     AND o.expires_epoch>?""",
+                (pair, now_epoch),
+            ).fetchone():
+                return _blocked("M05_TEST_ALREADY_PENDING")
+            if db.execute(
+                """SELECT 1 FROM m05_market_advisory_outbox
+                   WHERE pair=? AND closed_1m_epoch=?""",
+                (pair, candle),
+            ).fetchone():
+                return _blocked("M05_TEST_ONCE_PER_MINUTE")
+            db.execute(
+                """INSERT INTO m05_proposals(
+                   proposal_id,owner_user_id,pair,digest,closed_1m_epoch,
+                   entry_price_idr,quantity,created_epoch,expires_epoch,
+                   token_hash,mode_at_create,state,execution_allowed)
+                   VALUES (?,?,?,?,?,'0','0',?,?,?,'MANUAL','PENDING',0)""",
+                (proposal_id, self.owner_user_id, pair, digest, candle,
+                 now_epoch, expires, sha256(secret.encode()).hexdigest()),
+            )
+            db.execute(
+                """INSERT INTO m05_market_advisory_outbox(
+                   proposal_id,pair,closed_1m_epoch,expires_epoch,
+                   message_text,pass_callback,reject_callback,delivery_state)
+                   VALUES (?,?,?,?,?,?,?,'QUEUED')""",
+                (proposal_id, pair, candle, expires, msg,
+                 f"m5:{proposal_id}:P:{secret}",
+                 f"m5:{proposal_id}:R:{secret}"),
+            )
+            db.execute(
+                """INSERT INTO m05_audit(
+                   event_epoch,owner_user_id,proposal_id,event,detail)
+                   VALUES (?,?,?,?,?)""",
+                (now_epoch, user_id, proposal_id,
+                 "OWNER_BUTTON_TRANSPORT_TEST_QUEUED",
+                 "SYNTHETIC_NO_MARKET_NO_ORDER"),
+            )
+        return {
+            "accepted": True, "reason": "M05_OWNER_BUTTON_TEST_QUEUED",
+            "shadow_only": True, "expires_epoch": expires,
+            "final_decision": None, "execution_allowed": False,
         }
 
     def claim_market_advisory_delivery(self, *, now_epoch: int) -> dict[str, Any] | None:
