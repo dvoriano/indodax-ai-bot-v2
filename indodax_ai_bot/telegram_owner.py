@@ -55,18 +55,56 @@ class OfflineTelegramOwnerInterface:
                     + " tersimpan. AUTO tidak mengaktifkan order."
                 ),
             }
-        # Commands exist as a real UI contract, not fabricated account data.
-        known = {
-            "/scanner", "/market", "/ai", "/buy", "/positions", "/sell",
-            "/balance", "/profit", "/history", "/risk", "/health",
-        }
-        if command in known and len(parts) == 1:
+        # Original M05 SQLite review records are genuine local evidence,
+        # never exchange trade/fill evidence. Read the SAME owner ledger.
+        if command in ("/market", "/history") and len(parts) == 1:
+            review = self.ledger.owner_review_snapshot(
+                user_id=user_id, chat_id=chat_id, now_epoch=now_epoch,
+                chat_type=chat_type,
+            )
+            if review.get("accepted") is not True:
+                return review
+            if command == "/market":
+                details = (
+                    "M05 market advisory lokal: antre " +
+                    str(review["fresh_queued_market_advisories"]) +
+                    ", terkirim & belum kedaluwarsa " +
+                    str(review["fresh_sent_market_advisories"]) +
+                    ", tercatat total " +
+                    str(review["market_advisories_recorded"]) + ". "
+                    "Sumber G1 independen belum terverifikasi; "
+                    "ini BUKAN sinyal BUY. Trading OFF."
+                )
+            else:
+                details = (
+                    "M05 riwayat tombol review owner (bukan transaksi): "
+                    "PASS " + str(review["owner_review_pass_count"]) +
+                    ", REJECT " + str(review["owner_review_reject_count"]) +
+                    ". Riwayat order/fill Indodax belum diverifikasi. "
+                    "Trading OFF."
+                )
             return {
                 **_blocked("LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED"),
-                "text": (
-                    "Belum terhubung ke sumber live tepercaya atau akun; "
-                    "tidak ada data transaksi yang akan direkayasa."
-                ),
+                "observed_owner_review": review,
+                "text": details,
+            }
+        # Every other original V2 owner command gives a precise, safe
+        # unavailable status without pretending to access private APIs.
+        unavailable = {
+            "/scanner": "Scanner M03 terjadwal belum berizin aktif; /market hanya menampilkan ledger M05. Trading OFF.",
+            "/ai": "MARKET, RISK, STRATEGY belum mempunyai respons provider berbayar dan sumber G1 tervalidasi. Trading OFF.",
+            "/buy": "BUY tidak tersedia: G1, risk, saldo akun, izin LIVE dan executor belum terverifikasi. Tidak mengirim order.",
+            "/positions": "Posisi milik bot belum diverifikasi dari fill Indodax. Tidak mengarang posisi atau saldo.",
+            "/sell": "SELL tidak tersedia: kepemilikan lot/fill dan executor belum terverifikasi. Tidak mengirim order.",
+            "/balance": "Saldo IDR spendable belum terverifikasi dari private Indodax View Only. Tidak menampilkan saldo perkiraan.",
+            "/profit": "Profit bersih realisasi WIB belum terverifikasi dari BUY/SELL fill serta settlement. Tidak menampilkan PnL fiktif.",
+            "/risk": "RISK belum mempunyai sumber G1, respons AI dan preflight saldo terverifikasi. Trading tetap OFF.",
+            "/health": "Layanan perintah M05 tersedia; kesehatan pasar G1 dan account trading belum diverifikasi. Trading OFF.",
+        }
+        if command in unavailable and len(parts) == 1:
+            return {
+                **_blocked("LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED"),
+                "text": unavailable[command],
             }
         return _blocked("UNKNOWN_TELEGRAM_COMMAND")
 
