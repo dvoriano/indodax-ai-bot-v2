@@ -25,6 +25,7 @@ from .m06_capital_reconcile import reconcile_unverified_capital, CapitalReconcil
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
+from .m07_private_order_readonly import read_m07_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
 from .owner_control import OwnerDecisionLedger
 from .trade_stream import PublicTradeStreamJournal, probe_official_public_ws, collect_official_public_ws, StreamEvidenceError
@@ -191,6 +192,17 @@ class DailyScalpingOrchestrator:
         """Original V2 caller: untrusted synthetic status; never exchange proof."""
         self.settings.require_m01_safety()
         return self.journal.record_m07_offline_status_observation(observation)
+
+    def inspect_m07_private_readonly_order_once(
+            self, *, symbol: str, client_order_id: str,
+            api_key: str, secret_key: str) -> dict:
+        """One original V2 mainpath READ ONLY account+order GET; no trade."""
+        self.settings.require_m01_safety()
+        return read_m07_order_status_once(
+            journal=self.journal, symbol=symbol,
+            client_order_id=client_order_id,
+            api_key=api_key, secret_key=secret_key,
+        )
 
     def inspect_m07_offline_intent_guard_once(self) -> dict:
         return self.journal.m07_offline_intent_summary()
