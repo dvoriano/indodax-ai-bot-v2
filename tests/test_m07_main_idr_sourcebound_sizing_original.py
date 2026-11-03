@@ -7,11 +7,16 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal as D
 from pathlib import Path
+from io import StringIO
+from contextlib import redirect_stdout, redirect_stderr
+import json
+import os
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import unittest
 
 from indodax_ai_bot.config import Settings
+from indodax_ai_bot.__main__ import main
 from indodax_ai_bot.deep_analysis import DeepCandidate
 from indodax_ai_bot.journal import DecisionJournal
 from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
@@ -162,6 +167,68 @@ class OwnerClassifiedMainSizingOriginalTests(unittest.TestCase):
                     out["status"], "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY")
                 self.assertFalse(out["execution_allowed"])
 
+
+    def test_original_cli_calls_same_orchestrator_and_never_places_an_order(self):
+        bot, public = self.build()
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "m07-sizing-0600.json"
+            v = inputs(public)
+            payload = {k: (str(value) if isinstance(value, D) else value)
+                       for k, value in v.items() if k != "now_epoch"}
+            path.write_text(json.dumps(payload))
+            os.chmod(path, 0o600)
+            db = Path(temp) / "cli-original.sqlite3"
+            out = StringIO()
+            with (patch("indodax_ai_bot.__main__.time.time", return_value=NOW),
+                  patch("indodax_ai_bot.m07_private_order_readonly._https_json",
+                        side_effect=AssertionError("PRIVATE_API_MUST_NOT_RUN")),
+                  redirect_stdout(out)):
+                code = main([
+                    "--m07-main-sizing-offline-once",
+                    "--m07-main-sizing-file", str(path),
+                    "--db", str(db),
+                ])
+            self.assertEqual(code, 0)
+            response = json.loads(out.getvalue())
+            self.assertEqual(
+                response["m07_main_sizing"]["main_idr_pool_scenario"], "920147")
+            self.assertEqual(
+                response["m07_main_sizing"]["status"],
+                "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY")
+            self.assertEqual(
+                response["source_scope"], "UNTRUSTED_LOCAL_FIXTURE_OFFLINE_ONLY")
+            self.assertIsNone(response["final_decision"])
+            self.assertFalse(response["execution_allowed"])
+            self.assertFalse(response["live_trading_authorized"])
+            self.assertEqual(DecisionJournal(db).m07_offline_intent_summary()[
+                "unresolved_simulated_intents"], 0)
+
+    def test_cli_refuses_insecure_or_injected_source_schema(self):
+        bot, public = self.build()
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "m07-sizing-0600.json"
+            v = inputs(public)
+            payload = {k: (str(value) if isinstance(value, D) else value)
+                       for k, value in v.items() if k != "now_epoch"}
+            path.write_text(json.dumps(payload))
+            os.chmod(path, 0o644)
+            db = Path(temp) / "cli-original.sqlite3"
+            with (patch("indodax_ai_bot.__main__.time.time", return_value=NOW),
+                  redirect_stderr(StringIO())):
+                code = main([
+                    "--m07-main-sizing-offline-once",
+                    "--m07-main-sizing-file", str(path), "--db", str(db),
+                ])
+            self.assertEqual(code, 3)
+            os.chmod(path, 0o600)
+            path.write_text(json.dumps({**payload, "hidden_override":True}))
+            with (patch("indodax_ai_bot.__main__.time.time", return_value=NOW),
+                  redirect_stderr(StringIO())):
+                code = main([
+                    "--m07-main-sizing-offline-once",
+                    "--m07-main-sizing-file", str(path), "--db", str(db),
+                ])
+            self.assertEqual(code, 3)
 
 if __name__ == "__main__":
     unittest.main()
