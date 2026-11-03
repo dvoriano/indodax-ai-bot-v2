@@ -30,6 +30,15 @@ if [[ ! -x "$PYTHON" || ! -s "$WS" || ! -d "$ROOT/runtime" ]]; then
   exit 3
 fi
 
+# Prevent two overlapping original M03/M06 sessions from one operator.
+# File is a 0600 local lock with no credential, account IDs or raw payload.
+LOCK="$ROOT/runtime/.m07-readonly-once.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  printf 'M07_ABORT_CONCURRENT_VIEWONLY_SESSION\n' >&2
+  exit 3
+fi
+
 # Owner's one-time 3 Nov 2026 scenario: MAIN source is current free IDR.
 # Do not infer a historical special-token sale hold. If a NEW real FLOKI/
 # PEPE sale or unsettled commitment occurs, do NOT reuse these zero holds.
