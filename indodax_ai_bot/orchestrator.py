@@ -596,6 +596,43 @@ class DailyScalpingOrchestrator:
         return M06OwnershipLedger(db_path).observe(
             account_key=account_key, order=order, fills=fills)
 
+    def review_m07_sell_quantity_ownership_offline(self, *,
+            local_m06_ledger_db: str, account_uid: int,
+            draft: M07OrderDraft) -> dict:
+        """Original V2 M07-05: READ ONLY guard before any hypothetical SELL.
+
+        Uses existing M06 local receipt ledger plus same DecisionJournal
+        original intent state. A wallet holding or synthetic/unattributed
+        fill can NEVER be presented as an executable bot-owned SELL lot.
+        No order transport, order reservation, or token ownership upgrade.
+        """
+        self.settings.require_m01_safety()
+        if (type(draft) is not M07OrderDraft or draft.side != "SELL"
+                or draft.quantity is None):
+            raise ValueError("M07_SELL_OWNERSHIP_LIMIT_DRAFT_INVALID")
+        draft.parameters()
+        reviewed = M06OwnershipLedger.inspect_m07_sell_quantity_readonly(
+            db_path=local_m06_ledger_db, account_uid=account_uid,
+            symbol=draft.symbol[:-3].lower()+"_idr",
+            requested_base=draft.quantity,
+        )
+        guard = self.journal.m07_offline_intent_summary()
+        return {
+            **reviewed,
+            "stage": "M07_ORIGINAL_SELL_OWNERSHIP_LAST_MOMENT_GUARD",
+            "original_journal_unresolved_intents": guard[
+                "unresolved_simulated_intents"],
+            "original_journal_unknown_holds": guard["offline_unknown_holds"],
+            "original_journal_recovery_reference_count": guard[
+                "viewonly_recovery_references_not_bot_owned"],
+            "owned_position_manager_actual_fills_connected": False,
+            "risk_executable_veto_cleared": False,
+            "owner_order_specific_final_verified": False,
+            "sell_reservation_created": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def protect_m06_manual_holding_floor_offline(self, *, db_path: str,
             account_key: str, asset: str,
             minimum_qty: Decimal) -> ProtectedRebuyReview:
