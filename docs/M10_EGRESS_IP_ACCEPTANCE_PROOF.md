@@ -94,6 +94,24 @@ measured rolling 60-second Indodax REST peak, and V2 active consumer/DB
 consistency. Neither diagnostic changes the owner-only rate policy or
 creates an M03 timer GO.
 
+## Owner VPS read-only V2 unit metadata snapshot (4 November 2026)
+
+The owner fetched the exact V2 main source `ebddc0fb9b1e7eb5a76468072b1b8d19d96a6769`, used a temporary isolated detached worktree, ran the fixed allowlist read-only diagnostic and received `M10_V2_UNITS_READONLY_COMPLETED`.
+
+| V2 named user unit | Load | Active | Unit file state |
+| --- | --- | --- | --- |
+| BTC public WS `.service` | loaded | **inactive** | **disabled** |
+| M05 Telegram `.service` | loaded | inactive | static |
+| M05 Telegram `.timer` | loaded | **active** | **enabled** |
+| M03 scanner `.service` | loaded | inactive | static |
+| M03 scanner `.timer` | loaded | **inactive** | **disabled** |
+
+All five unit fragment locations matched only the expected V2 user-unit naming and none needed daemon reload. `m03_timer_disabled_metadata_observed=true`; `m03_timer_unexpected_activation_attention=false`. These are systemd **metadata at one instant**, not evidence that Python services executed from the pinned checkout, use the V2 default REST SQLite DB, or share all external egress bandwidth.
+
+**Separate M10-06 operational finding:** BTC public WS service was **inactive/disabled**, in contrast to the historically successful bounded live pilot accepted in M10-01. Historical batch PASS remains authentic; it does **not** establish current collector uptime or prove that the service should be restarted. The current inactivity might be intentional and must be reviewed through V2-owned read-only status/last-batch artifacts, without changing any timer or unit. An inactive M05 Telegram service with an active timer is not by itself proof of a fault because a timer can trigger a oneshot service when needed.
+
+**Remaining unknowns unchanged:** all running V2 clients' SHA/DB path, true outward egress IP, all peers under the same egress/NAT, and actual external rolling-60s REST GET peak all remained `false`/not verified. `m10_05_full_acceptance=false`, `m03_timer_go_authorized=false`. No V1/Hermes inspection, no private GET, paid AI, or trading orders.
+
 ## NEXT one gate
 
 **Single remaining acceptance dependency for M10-05:** independently obtain infrastructure-level evidence identifying every consumer sharing the egress IP and their actual **rolling-60s REST peak** (not V2 SQLite-only reservations), plus observe that cooperating V2 runtime clients share the same quota file/cap. **Owner V2-only default DB inspection is already complete and must not be mistaken for this evidence.** Treat unknown demand, unknown IP or unknown peer scope as **UNVERIFIED**. Do not inspect or mutate V1/Hermes/other repos, start scanner timer, alter quota DB, enable GO, private GET, paid AI or orders.
