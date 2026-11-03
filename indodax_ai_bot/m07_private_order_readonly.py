@@ -295,6 +295,13 @@ def _read_and_record_order(*, journal, symbol: str,
                                 "BUY_COST_INCLUDING_FEE_IDR"),
             "fills_and_fee_history_reconciled": True,
             "read_only_fill_journal_replay": rec["replay"],
+            # M08 is a projection of this SAME original View Only journal.
+            # It adds zero HTTP calls and cannot turn account BUY fills or a
+            # matching synthetic M07 client ID into a bot-owned position.
+            "m08_buy_position_source": journal.review_m08_account_buy_position_admission_readonly(
+                account_fingerprint=fingerprint, symbol=order.symbol,
+                client_order_id=order.client_order_id,
+            ),
             "bot_ownership_verified": False,
             "unknown_intent_released": False,
             "execution_allowed": False,
