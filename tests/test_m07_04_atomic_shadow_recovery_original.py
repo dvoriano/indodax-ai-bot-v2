@@ -5,7 +5,7 @@ No BUY/SELL/CANCEL, no paid provider, and no live credential are used.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 import sqlite3
@@ -192,6 +192,37 @@ class OriginalM07ReadOnlyRecoveryShadow(unittest.TestCase):
         self.assertEqual(self.shadow()[1:3], ("FILLED", "4"))
         self.assertEqual(self.journal.m07_offline_intent_summary()[
             "unresolved_simulated_intents"], 1)
+
+    def test_parallel_same_status_has_one_atomic_shadow_no_duplicate(self):
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            reports = list(pool.map(lambda _: self.record(order()), range(8)))
+        self.assertEqual(sum(not result["replay"] for result in reports), 1)
+        self.assertEqual(sum(result["replay"] for result in reports), 7)
+        self.assertEqual(self.shadow()[1:3], ("NEW", "0"))
+        with sqlite3.connect(self.db) as con:
+            rows = con.execute(
+                "SELECT COUNT(*) FROM m07_readonly_intent_recovery_shadow"
+            ).fetchone()[0]
+        self.assertEqual(rows, 1)
+        self.assertEqual(self.journal.m07_offline_intent_summary()[
+            "unresolved_simulated_intents"], 1)
+
+    def test_restart_status_summary_never_reclassifies_as_owned_or_retryable(self):
+        self.bot.simulate_m07_unknown_timeout_once(
+            intent_id=CLIENT, observed_epoch=EPOCH + 1,
+        )
+        self.record(order(status="PARTIALLY_FILLED", executed="3"))
+        restarted_bot = DailyScalpingOrchestrator(
+            Settings(), DecisionJournal(self.db))
+        status = restarted_bot.inspect_m07_offline_intent_guard_once()
+        self.assertEqual(status["viewonly_recovery_references_not_bot_owned"], 1)
+        self.assertEqual(status["viewonly_recovery_partial_status_observed"], 1)
+        self.assertEqual(status["viewonly_recovery_terminal_status_observed"], 0)
+        self.assertEqual(status["viewonly_recovery_unknown_hold_still_blocked"], 1)
+        self.assertTrue(status["viewonly_recovery_does_not_release_or_retry"])
+        self.assertEqual(status["offline_unknown_holds"], 1)
+        self.assertTrue(status["additional_buy_reservations_blocked"])
+        self.assertFalse(status["execution_allowed"])
 
     def test_unrelated_account_order_does_not_become_bot_owned(self):
         result = self.record(order(client="MANUAL_OTHER_ORDER"))
