@@ -208,6 +208,23 @@ class DecisionJournal:
                     FOREIGN KEY(intent_id) REFERENCES m07_offline_order_intents(intent_id)
                 )"""
             )
+            # M08-05: same ORIGINAL SQLite journal, non-executing SELL
+            # preflight receipts only. Neither a reservation nor ownership.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m08_offline_sell_preflight_receipts (
+                    sell_client_order_id TEXT PRIMARY KEY,
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    source_buy_client_order_id TEXT NOT NULL,
+                    draft_digest TEXT NOT NULL,
+                    scenario_digest TEXT NOT NULL,
+                    exchange_state_digest TEXT NOT NULL,
+                    observed_epoch INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(
+                        state='NONEXECUTING_REVIEW_ONLY'
+                    )
+                )"""
+            )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
             con.execute(
@@ -993,6 +1010,220 @@ class DecisionJournal:
                     if first_epoch is not None else "UNAVAILABLE"),
                 "local_synthetic_intent_correlation_only": shadow is not None,
             }
+
+    @staticmethod
+    def _m08_sell_state_in_txn(
+            con: sqlite3.Connection, *, account_fingerprint: str,
+            symbol: str, source_buy_client_order_id: str,
+            sell_client_order_id: str) -> dict:
+        """Immutable-source View Only liability snapshot, never sell coverage.
+
+        Includes all previously observed SAME-account SELL statuses, plus
+        global M07 synthetic UNKNOWN and any candidate ID collision. An
+        empty View Only table NEVER means that all live orders were checked.
+        No holdings, order/fill ownership or settlement inferred.
+        """
+        rows = con.execute(
+            "SELECT client_order_id,full_order_id,status,original_qty,"
+            "executed_qty,observed_ms,provenance FROM "
+            "m07_exchange_readonly_orders WHERE "
+            "account_fingerprint=? AND symbol=? AND side='SELL' "
+            "ORDER BY client_order_id",
+            (account_fingerprint,symbol),
+        ).fetchall()
+        pending = Decimal(0)
+        part = cancelled = filled = rejected = open_count = 0
+        for client_id, full_id, status, original_raw, done_raw, ms, src in rows:
+            try:
+                total, done = Decimal(original_raw), Decimal(done_raw)
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M08_SELL_ACCOUNT_STATUS_CORRUPT") from None
+            if (not total.is_finite() or not done.is_finite()
+                    or total <= 0 or done < 0 or done > total
+                    or src != "INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER"
+                    or status not in (
+                        "NEW","PARTIALLY_FILLED","FILLED","CANCELLED",
+                        "REJECTED"
+                    )
+                    or type(ms) is not int):
+                raise DecisionConflictError("M08_SELL_ACCOUNT_STATUS_CORRUPT")
+            if status in ("NEW","PARTIALLY_FILLED"):
+                open_count += 1
+                pending += total - done
+            if status == "PARTIALLY_FILLED":
+                part += 1
+            elif status == "CANCELLED":
+                cancelled += 1
+            elif status == "FILLED":
+                filled += 1
+            elif status == "REJECTED":
+                rejected += 1
+        unknown, reserved = con.execute(
+            "SELECT COALESCE(SUM(CASE WHEN state='OFFLINE_UNKNOWN_HOLD' "
+            "THEN 1 ELSE 0 END),0),COUNT(*) "
+            "FROM m07_offline_order_intents"
+        ).fetchone()
+        collision = con.execute(
+            "SELECT 1 FROM m07_offline_order_intents "
+            "WHERE client_order_id=? UNION ALL "
+            "SELECT 1 FROM m07_exchange_readonly_orders "
+            "WHERE client_order_id=? LIMIT 1",
+            (sell_client_order_id,sell_client_order_id),
+        ).fetchone() is not None
+        buy_order = con.execute(
+            "SELECT full_order_id,side,status,executed_qty,observed_ms "
+            "FROM m07_exchange_readonly_orders WHERE "
+            "account_fingerprint=? AND symbol=? AND client_order_id=?",
+            (account_fingerprint,symbol,source_buy_client_order_id),
+        ).fetchone()
+        buy_fills = con.execute(
+            "SELECT full_order_id,qty_base,net_quote_idr,fill_digest,"
+            "verified_at_ms FROM m07_exchange_readonly_fill_summaries "
+            "WHERE account_fingerprint=? AND symbol=? AND client_order_id=?",
+            (account_fingerprint,symbol,source_buy_client_order_id),
+        ).fetchone()
+        buy_clock = con.execute(
+            "SELECT fill_digest,first_trade_ms,last_trade_ms "
+            "FROM m08_account_buy_trade_times WHERE "
+            "account_fingerprint=? AND symbol=? AND client_order_id=?",
+            (account_fingerprint,symbol,source_buy_client_order_id),
+        ).fetchone()
+        data = (
+            account_fingerprint,symbol,source_buy_client_order_id,
+            sell_client_order_id,rows,unknown,reserved,collision,
+            buy_order,buy_fills,buy_clock,
+        )
+        digest = hashlib.sha256(json.dumps(
+            data, separators=(",",":"),ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
+        if unknown:
+            status = "M08_SELL_UNKNOWN_HOLD_BLOCKED"
+        elif collision:
+            status = "M08_SELL_DUPLICATE_CLIENT_ID_BLOCKED"
+        elif open_count:
+            status = "M08_SELL_ACCOUNT_ORDER_UNSETTLED"
+        elif cancelled:
+            status = "M08_SELL_CANCELLED_NOT_RELEASED"
+        elif filled:
+            status = "M08_SELL_FILLED_NOT_OWNERSHIP"
+        else:
+            status = "M08_SELL_ACCOUNT_COVERAGE_UNVERIFIED"
+        return {
+            "status": status,
+            "snapshot_digest": digest,
+            "account_seen_sell_count": len(rows),
+            "account_seen_open_sell_count": open_count,
+            "account_seen_partial_sell_count": part,
+            "account_seen_cancelled_sell_count": cancelled,
+            "account_seen_filled_sell_count": filled,
+            "account_seen_rejected_sell_count": rejected,
+            "account_seen_pending_sell_qty_reference": format(pending,"f"),
+            "global_m07_unknown_holds": unknown,
+            "global_m07_offline_unresolved_intents": reserved,
+            "sell_client_id_collision": collision,
+            "all_exchange_open_sells_covered": False,
+            "cancel_or_fill_releases_owned_inventory": False,
+            "executed_sell_qty_attested_bot_owned": False,
+            "execution_allowed": False,
+        }
+
+    def review_m08_sell_account_liabilities_offline(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str,
+            sell_client_order_id: str) -> dict:
+        """Same original journal order states, no extra private GET."""
+        if (type(account_fingerprint) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}",account_fingerprint)
+                or type(symbol) is not str
+                or not re.fullmatch(r"[A-Z0-9]{2,20}IDR",symbol)
+                or type(source_buy_client_order_id) is not str
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_-]{1,36}",source_buy_client_order_id)
+                or type(sell_client_order_id) is not str
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_-]{1,36}",sell_client_order_id)
+                or source_buy_client_order_id == sell_client_order_id):
+            raise DecisionConflictError("M08_SELL_PREFLIGHT_IDENTITY_INVALID")
+        with self._connect() as con:
+            return self._m08_sell_state_in_txn(
+                con,account_fingerprint=account_fingerprint,symbol=symbol,
+                source_buy_client_order_id=source_buy_client_order_id,
+                sell_client_order_id=sell_client_order_id,
+            )
+
+    def record_m08_sell_preflight_denied_once(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str,
+            sell_client_order_id: str, draft_digest: str,
+            scenario_digest: str, exchange_state_digest: str,
+            observed_epoch: int) -> dict:
+        """Idempotent non-order receipt. Recheck fresh LOCAL state atomically.
+
+        This never touches M07 order intents, account balances or sellable
+        quantity. Replay with changed local exchange status, UNKNOWN state,
+        account identity, scenario or size is always CONFLICT, not a retry.
+        """
+        if (any(type(d) is not str
+                or re.fullmatch(r"[0-9a-f]{64}",d) is None
+                for d in (draft_digest,scenario_digest,exchange_state_digest))
+                or type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999):
+            raise DecisionConflictError("M08_SELL_PREFLIGHT_RECEIPT_INVALID")
+        # Reuse the public scope validation rather than duplicating IDs.
+        self.review_m08_sell_account_liabilities_offline(
+            account_fingerprint=account_fingerprint, symbol=symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+            sell_client_order_id=sell_client_order_id,
+        )
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            current = self._m08_sell_state_in_txn(
+                con, account_fingerprint=account_fingerprint,
+                symbol=symbol,
+                source_buy_client_order_id=source_buy_client_order_id,
+                sell_client_order_id=sell_client_order_id,
+            )
+            if current["snapshot_digest"] != exchange_state_digest:
+                raise DecisionConflictError(
+                    "M08_SELL_PREFLIGHT_EXCHANGE_STATE_CHANGED")
+            expected = (
+                account_fingerprint,symbol,source_buy_client_order_id,
+                draft_digest,scenario_digest,exchange_state_digest,
+                observed_epoch,"NONEXECUTING_REVIEW_ONLY",
+            )
+            old = con.execute(
+                "SELECT account_fingerprint,symbol,source_buy_client_order_id,"
+                "draft_digest,scenario_digest,exchange_state_digest,"
+                "observed_epoch,state FROM m08_offline_sell_preflight_receipts "
+                "WHERE sell_client_order_id=?",
+                (sell_client_order_id,),
+            ).fetchone()
+            if old is not None:
+                if old != expected:
+                    raise DecisionConflictError(
+                        "M08_SELL_PREFLIGHT_REPLAY_OR_DUPLICATE_CONFLICT")
+                return {
+                    "status": "M08_SELL_NONEXECUTING_REVIEW_REPLAY",
+                    "replay": True,"new_order_intent_created": False,
+                    "new_sell_reservation_created": False,
+                    "execution_allowed": False,"order_sent": False,
+                }
+            con.execute(
+                "INSERT INTO m08_offline_sell_preflight_receipts "
+                "(sell_client_order_id,account_fingerprint,symbol,"
+                "source_buy_client_order_id,draft_digest,scenario_digest,"
+                "exchange_state_digest,observed_epoch,state) "
+                "VALUES (?,?,?,?,?,?,?,?,'NONEXECUTING_REVIEW_ONLY')",
+                (sell_client_order_id,account_fingerprint,symbol,
+                 source_buy_client_order_id,draft_digest,scenario_digest,
+                 exchange_state_digest,observed_epoch),
+            )
+        return {
+            "status": "M08_SELL_NONEXECUTING_REVIEW_RECORDED",
+            "replay": False,"new_order_intent_created": False,
+            "new_sell_reservation_created": False,
+            "execution_allowed": False,"order_sent": False,
+        }
 
     def m07_offline_intent_summary(self) -> dict:
         """Anonymized original journal status; no account/API/order secrets."""
