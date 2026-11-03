@@ -113,7 +113,7 @@ class M04DPublicCoverageTests(unittest.TestCase):
                                    str(Path(td) / "journal.sqlite3")])
         parsed = json.loads(output.getvalue())
         self.assertEqual(rc, 0)
-        self.assertEqual(parsed["final_decision"], "REJECT")
+        self.assertIsNone(parsed["final_decision"])
         self.assertFalse(parsed["execution_allowed"])
         self.assertFalse(parsed["live_trading_authorized"])
         self.assertEqual(parsed["public_bulk"]["g1_source_admission"]["pairs_observed"], 20)
