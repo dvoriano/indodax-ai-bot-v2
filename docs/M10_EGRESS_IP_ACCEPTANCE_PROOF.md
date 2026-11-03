@@ -53,6 +53,47 @@ Owner performed **detached pinned source** checkout `f590e80d772e269924c4f1b34be
 
 This closes only the **read-only local observation step**. The already accepted **25/25** source-scoped VPS tests for `bb399fa` and **31/31** for `ee12315` do not need to be rerun. The absence of V2 reservations at one instant or a persisted lower quota cannot prove other peers are silent, all traffic is seen, or a timer may run.
 
+## Read-only installed V2 user-unit metadata, not egress-wide proof
+
+A second original V2-only diagnostic checks exactly five **allowlisted** user
+systemd units: BTC public WS, M05 Telegram (service/timer), and M03 scanner
+(service/timer). It requests only `LoadState`, `ActiveState`, `UnitFileState`,
+`FragmentPath` (reduced to a boolean exact-match under the owner's V2 user
+unit directory), and `NeedDaemonReload`. It does **not** read Environment,
+ExecStart, processes' environments, PIDs, other projects, or systemd journals;
+it never starts/stops/restarts a unit or sends requests. The CLI returns only
+fixed status enums and boolean gates, never raw paths or credentials.
+
+```bash
+(
+  set -euo pipefail
+  ROOT="$HOME/indodax-ai-bot-v2"
+  cd "$ROOT"
+  "$ROOT/.venv/bin/python" -B -m indodax_ai_bot.m10_v2_units_readonly
+)
+```
+
+The installed checkout must contain this new module. If it doesn't, run from
+an isolated **pinned merged GitHub V2** worktree instead of installing, updating,
+or starting existing services. The command needs access to the owner's
+`systemctl --user` bus. If unavailable, report `unknown`, never PASS.
+
+**Meaning of the output:**
+- `m03_timer_disabled_metadata_observed=true` means that *one known V2 user timer* was observed loaded, inactive, disabled, without a daemon reload pending, with an expected V2-owned user unit fragment. It is **not** authorization to enable it.
+- `m03_timer_unexpected_activation_attention=true` is a warning if the known M03 timer was reported active/enabled. The diagnostic **does not stop** anything.
+- `active_v2_source_sha_independently_verified=false`,
+  `all_v2_rest_clients_identified=false`,
+  `all_live_v2_rest_clients_same_quota_db_verified=false`, and the
+  IP-wide/peak proof booleans are **always false**. User-unit metadata alone
+  cannot prove actual process source, runtime environment DB path, all hosts
+  behind NAT, or complete REST request accounting.
+
+**M10-05 full acceptance remains ☐** until the infrastructure operator
+supplies independently verifiable all-peer outbound egress-IP evidence,
+measured rolling 60-second Indodax REST peak, and V2 active consumer/DB
+consistency. Neither diagnostic changes the owner-only rate policy or
+creates an M03 timer GO.
+
 ## NEXT one gate
 
 **Single remaining acceptance dependency for M10-05:** independently obtain infrastructure-level evidence identifying every consumer sharing the egress IP and their actual **rolling-60s REST peak** (not V2 SQLite-only reservations), plus observe that cooperating V2 runtime clients share the same quota file/cap. **Owner V2-only default DB inspection is already complete and must not be mistaken for this evidence.** Treat unknown demand, unknown IP or unknown peer scope as **UNVERIFIED**. Do not inspect or mutate V1/Hermes/other repos, start scanner timer, alter quota DB, enable GO, private GET, paid AI or orders.
