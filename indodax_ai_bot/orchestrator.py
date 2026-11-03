@@ -1152,6 +1152,46 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def run_m09_original_paper_cycle_offline_once(self, *,
+            action: str, details: dict) -> dict:
+        """M09-04: original V2 journal only, never exchange execution.
+
+        Details are user-entered hypothetical PAPER quantities, prices
+        and fees. No M03/G1/RISK/M05 proposal or real account IDR is
+        minted. Uses distinct paper-only namespace in original
+        DecisionJournal; projected PAPER realization is a SIMULATED
+        SELL receipt only, not wallet-confirmed realized PnL.
+        """
+        self.settings.require_m01_safety()
+        if type(details) is not dict or type(action) is not str:
+            raise ValueError("M09_PAPER_SCENARIO_INVALID")
+        if action == "BUY":
+            result=self.journal.record_m09_paper_buy_offline(**details)
+        elif action == "SELL":
+            result=self.journal.record_m09_paper_sell_offline(**details)
+        elif action == "SUMMARY":
+            result=self.journal.review_m09_paper_pnl_offline(**details)
+        else:
+            raise ValueError("M09_PAPER_ACTION_INVALID")
+        actual=self.journal.review_m09_original_m08_position_and_idr_readonly()
+        if (actual["wallet_settled_idr_verified"] is not False
+                or actual["realized_net_pnl_wib_verified"] is not False
+                or result["execution_allowed"] is not False
+                or result["real_exchange_realized_pnl_idr"] is not None):
+            raise ValueError("M09_PAPER_EXCHANGE_REALITY_CROSSING")
+        return {
+            "stage":"M09_ORIGINAL_PAPER_ACCOUNTING_OFFLINE",
+            "action":action,"paper":result,
+            "m08_original_settlement_source":actual["status"],
+            "paper_can_be_spendable_capital":False,
+            "paper_may_publish_position_settled_idr":False,
+            "owner_order_final":None,
+            "paid_ai_called":False,
+            "private_exchange_get_called":False,
+            "order_sent":False,
+            "execution_allowed":False,
+        }
+
     def run_m09_original_recovery_shadow_once(self, trace_id: str, *,
             account_fingerprint: str, symbol: str,
             source_buy_client_order_id: str,
