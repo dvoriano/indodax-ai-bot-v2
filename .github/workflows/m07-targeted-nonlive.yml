@@ -6,6 +6,7 @@ on:
       - "indodax_ai_bot/**"
       - "scripts/m07_readonly_once.sh"
       - "tests/test_m07_*.py"
+      - "tests/test_m08_original_exchange_buy_admission.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - "indodax_ai_bot/**"
       - "scripts/m07_readonly_once.sh"
       - "tests/test_m07_*.py"
+      - "tests/test_m08_original_exchange_buy_admission.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   workflow_dispatch:
 
@@ -40,6 +42,7 @@ jobs:
             tests.test_m07_original_m03_m06_readonly_cycle \
             tests.test_m07_04_atomic_shadow_recovery_original \
             tests.test_m07_05_original_sell_ownership_guard \
+            tests.test_m08_original_exchange_buy_admission \
             tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath
