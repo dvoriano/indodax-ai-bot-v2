@@ -111,9 +111,9 @@ class V2SharedEgressCapTests(unittest.TestCase):
                 "import sys; "
                 "guard=SharedPublicRestBudget(sys.argv[1],"
                 "clock=lambda:1800000001.0); "
-                "\\ntry:\\n guard.reserve(); sys.exit(3)\\n"
-                "except SharedRestBudgetError as e:\\n"
-                " print(str(e)); sys.exit(0)\\n"
+                "\ntry:\n guard.reserve(); sys.exit(3)\n"
+                "except SharedRestBudgetError as e:\n"
+                " print(str(e)); sys.exit(0)\n"
             )
             # Keep a NEW interpreter without an admission-policy environment.
             env = dict(os.environ)
