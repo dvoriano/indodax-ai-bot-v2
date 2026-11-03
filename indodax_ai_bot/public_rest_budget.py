@@ -39,12 +39,17 @@ class SharedPublicRestBudget:
         )
         self.clock = clock or time.time
 
-    def reserve(self) -> int:
+    def reserve(self, *, limit_override: int | None = None) -> int:
         """Atomic reservation with BEGIN IMMEDIATE; no automatic refunds.
 
         A request that times out may still reach the exchange, so its
         reservation remains until the 60-second rolling window expires.
         """
+        if (limit_override is not None
+                and (type(limit_override) is not int
+                     or not 1 <= limit_override <= 168)):
+            raise SharedRestBudgetError("INVALID_PUBLIC_SHARED_RATE_LIMIT")
+        effective_limit = min(self.limit, limit_override) if limit_override is not None else self.limit
         now = self.clock()
         if isinstance(now, bool) or not isinstance(now, (int, float)) or not (0 < now < 1e12):
             raise SharedRestBudgetError("INVALID_PUBLIC_SHARED_RATE_CLOCK")
@@ -63,7 +68,7 @@ class SharedPublicRestBudget:
                 used = int(con.execute(
                     "SELECT COUNT(*) FROM rest_get_reservations"
                 ).fetchone()[0])
-                if used >= self.limit:
+                if used >= effective_limit:
                     raise SharedRestBudgetError("PUBLIC_SHARED_REST_RATE_BUDGET_EXCEEDED")
                 con.execute(
                     "INSERT INTO rest_get_reservations (requested_at) VALUES (?)",
