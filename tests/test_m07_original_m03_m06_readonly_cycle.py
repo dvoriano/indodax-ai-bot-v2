@@ -28,7 +28,7 @@ class MainSourceJoinTest(unittest.TestCase):
                 report = bot.run_m07_original_source_join_readonly_once(
                     "once", api_key="test", secret_key="test", funding=funding)
             private.assert_not_called()
-            self.assertEqual(report["status"], "M07_NO_ELIGIBLE_M03_SAME_CYCLE_CANDIDATE")
+            self.assertEqual(report["status"], "M07_M03_COHORT_NOT_ALIGNED_NO_PRIVATE_GET")
             self.assertFalse(report["execution_allowed"])
 
 from dataclasses import replace
@@ -75,6 +75,83 @@ class SourceJoinWithBoundCandidate(unittest.TestCase):
                 "once", api_key="viewonly", secret_key="viewonly",
                 funding=self.funding)
         return result, scanner, reader
+
+    def run_ranked_only(self, *, fallback_row=None, cohort_status="ALIGNED_PUBLIC_UNATTESTED"):
+        # Exact M03 ranked rows are from this invocation, not a new REST GET.
+        # Quality watchlist is intentionally EMPTY despite an aligned cohort.
+        evidence = CycleResult("once", None, "PUBLIC_UNVERIFIED", bulk={
+            "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
+            "shared_public_scan_context": True,
+            "coverage_status": "PARTIAL_INVALID_PAIR_EVIDENCE",
+            "eligible_cohort": {
+                "status": cohort_status,
+                "eligible_pair_ids": ["btc_idr"],
+                "provisional_watchlist_preview": [],
+                "provisional_quality_reviews": [{
+                    "pair": "btc_idr",
+                    "clear_of_provisional_cautions": False,
+                }],
+            },
+            "provisional_market_evidence": [],
+            "ranked_diagnostics_top10": [
+                self.row if fallback_row is None else fallback_row,
+            ],
+        })
+        with (patch("indodax_ai_bot.orchestrator.time.time", return_value=NOW),
+              patch.object(self.bot, "run_bulk_deep_cycle",
+                           return_value=evidence) as scanner,
+              patch.object(self.bot, "inspect_m06_idr_budget_readonly_once",
+                           return_value=account()) as reader):
+            result = self.bot.run_m07_original_source_join_readonly_once(
+                "once", api_key="viewonly", secret_key="viewonly",
+                funding=self.funding)
+        return result, scanner, reader
+
+    def test_ranked_fallback_joins_but_never_promotes_to_trade_signal(self):
+        result, scanner, reader = self.run_ranked_only()
+        scanner.assert_called_once()
+        reader.assert_called_once()
+        self.assertEqual(result["status"], "M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER")
+        self.assertEqual(result["m03_quality_clean_watchlist_count"], 0)
+        self.assertEqual(result["m03_ranked_diagnostic_rows"], 1)
+        self.assertEqual(result["m03_candidate_selection_lane"],
+                         "M03_RANKED_CAUTION_DIAGNOSTIC_ONLY")
+        self.assertFalse(result["m03_selected_quality_clean"])
+        self.assertFalse(result["m03_g1_independently_verified"])
+        self.assertFalse(result["m05_order_specific_final_verified"])
+        self.assertFalse(result["execution_allowed"])
+
+    def test_ranked_fallback_rejects_missing_fee_or_pair_rules_before_account(self):
+        row = dict(self.row)
+        row["m07_same_candidate_public_preflight"] = {
+            **row["m07_same_candidate_public_preflight"],
+            "status": "M07_PUBLIC_RULES_OR_FEES_NOT_READY",
+        }
+        result, _, reader = self.run_ranked_only(fallback_row=row)
+        reader.assert_not_called()
+        self.assertEqual(result["status"],
+                         "M07_NO_READY_PUBLIC_PAIR_RULES_OR_FEE_REFERENCE")
+        self.assertEqual(
+            result["m03_candidate_rejection_counts"][
+                "no_valid_source_bound_public_rules_or_fee"], 1)
+
+    def test_ranked_fallback_never_bypasses_cohort_misalignment(self):
+        result, _, reader = self.run_ranked_only(
+            cohort_status="REJECT_CANDLE_OR_SNAPSHOT_MISALIGNMENT")
+        reader.assert_not_called()
+        self.assertEqual(result["status"],
+                         "M07_M03_COHORT_NOT_ALIGNED_NO_PRIVATE_GET")
+
+    def test_ranked_fallback_stale_skips_private_account(self):
+        row = dict(self.row)
+        row["m07_same_candidate_public_preflight"] = {
+            **row["m07_same_candidate_public_preflight"],
+            "observed_epoch": NOW - 100,
+        }
+        result, _, reader = self.run_ranked_only(fallback_row=row)
+        reader.assert_not_called()
+        self.assertEqual(result["status"],
+                         "M07_M03_PUBLIC_ALREADY_STALE_NO_PRIVATE_GET")
 
     def test_original_modules_join_and_cap_not_entire_free_balance(self):
         result, scanner, reader = self.run_case()
@@ -146,7 +223,8 @@ class SourceJoinWithBoundCandidate(unittest.TestCase):
         bulk = CycleResult("once", None, "UNVERIFIED", bulk={
             "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
             "shared_public_scan_context": True,
-            "eligible_cohort": {"eligible_pair_ids": ["btc_idr"]},
+            "eligible_cohort": {"status": "ALIGNED_PUBLIC_UNATTESTED",
+                                "eligible_pair_ids": ["btc_idr"]},
             "provisional_market_evidence": [self.row],
         })
         out = StringIO()
