@@ -144,7 +144,7 @@ class M04BSumopodTests(unittest.TestCase):
             with patch("indodax_ai_bot.orchestrator.DailyPairScanner") as scanner:
                 scanner.return_value.scan.return_value=fake_screen()
                 out=app.run_bulk_deep_cycle("probe",market=FakeBulkMarket())
-        self.assertEqual(out.final_decision.value,"REJECT")
+        self.assertIsNone(out.final_decision)
         self.assertEqual(out.ai_shadow["completed_roles"],[])
         self.assertFalse(out.execution_allowed)
         send.assert_not_called()

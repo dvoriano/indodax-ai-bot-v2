@@ -170,7 +170,7 @@ class M04QPublicGapAwareMinuteTests(unittest.TestCase):
             )
             self.assertFalse(b["g1_verified"])
             self.assertEqual(data["ai_shadow"]["completed_roles"],[])
-            self.assertEqual(data["final_decision"],"REJECT")
+            self.assertIsNone(data["final_decision"])
             self.assertFalse(data["execution_allowed"])
 
 

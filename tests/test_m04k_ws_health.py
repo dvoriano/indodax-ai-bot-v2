@@ -140,7 +140,7 @@ class M04KPublicWSHealthTests(unittest.TestCase):
                     ])
             parsed=json.loads(out.getvalue())
             self.assertEqual(rc,0)
-            self.assertEqual(parsed["final_decision"],"REJECT")
+            self.assertIsNone(parsed["final_decision"])
             self.assertFalse(parsed["execution_allowed"])
             self.assertFalse(parsed["live_trading_authorized"])
             self.assertTrue(parsed["public_ws_health"]["last_batch_recent_and_consistent"])
@@ -164,7 +164,7 @@ class M04KPublicWSHealthTests(unittest.TestCase):
                     ])
             parsed=json.loads(out.getvalue())
             self.assertEqual(rc,3)
-            self.assertEqual(parsed["final_decision"],"REJECT")
+            self.assertIsNone(parsed["final_decision"])
             self.assertEqual(parsed["public_ws_health"]["reason"],
                              "WS_HEALTH_LAST_BATCH_STALE")
 

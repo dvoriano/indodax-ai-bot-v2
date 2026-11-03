@@ -169,7 +169,7 @@ class M03GBulkPublicTests(unittest.TestCase):
                         ])
             printed = json.loads(output.getvalue())
             self.assertEqual(rc, 0)
-            self.assertEqual(printed["final_decision"], "REJECT")
+            self.assertIsNone(printed["final_decision"])
             self.assertFalse(printed["execution_allowed"])
             self.assertFalse(printed["live_trading_authorized"])
             self.assertEqual(printed["bulk_probe_status"], "PUBLIC_BULK_UNATTESTED")

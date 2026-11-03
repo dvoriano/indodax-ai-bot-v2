@@ -196,7 +196,7 @@ class M04LUnitStatusTests(unittest.TestCase):
                     rc=main(["--public-ws-unit-status","--db",str(db)])
             body=json.loads(stdout.getvalue())
             self.assertEqual(rc,0)
-            self.assertEqual(body["final_decision"],"REJECT")
+            self.assertIsNone(body["final_decision"])
             self.assertFalse(body["live_trading_authorized"])
             self.assertFalse(body["execution_allowed"])
             self.assertFalse(db.exists())
@@ -210,7 +210,7 @@ class M04LUnitStatusTests(unittest.TestCase):
             with redirect_stdout(buf):
                 rc=main(["--public-ws-unit-status"])
         self.assertEqual(rc,3)
-        self.assertEqual(json.loads(buf.getvalue())["final_decision"],"REJECT")
+        self.assertIsNone(json.loads(buf.getvalue())["final_decision"])
 
 
 if __name__ == "__main__":

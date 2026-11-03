@@ -77,7 +77,7 @@ class M04RExistingG1WSAdmissionTests(unittest.TestCase):
             self.assertFalse(quality["g1_receipt_issuance_allowed"])
             self.assertFalse(data["public_bulk"]["g1_verified"])
             self.assertEqual(data["ai_shadow"]["completed_roles"], [])
-            self.assertEqual(data["final_decision"], "REJECT")
+            self.assertIsNone(data["final_decision"])
             self.assertFalse(data["execution_allowed"])
 
     def test_missing_ws_file_still_reports_specific_g1_source_rejection(self):
@@ -99,7 +99,7 @@ class M04RExistingG1WSAdmissionTests(unittest.TestCase):
             self.assertEqual(quality["reason"], "NO_VALID_BTC_WS_CLOSED_MINUTE")
             self.assertIsNone(quality["known_unrecoverable_ws_discontinuities"])
             self.assertFalse(missing.exists())
-            self.assertEqual(data["final_decision"], "REJECT")
+            self.assertIsNone(data["final_decision"])
             self.assertEqual(data["ai_shadow"]["completed_roles"], [])
 
 

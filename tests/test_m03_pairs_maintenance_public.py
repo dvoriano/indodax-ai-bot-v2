@@ -129,7 +129,7 @@ class M03PublicPairStatusCompatibilityTests(unittest.TestCase):
         out = ThreeRoleShadow(caller=caller, clock=lambda: 1800000140).run(
             "maintenance-case", bulk,
         )
-        self.assertEqual(out["final_decision"], "REJECT")
+        self.assertIsNone(out["final_decision"])
         self.assertEqual(out["completed_roles"], [])
         caller.assert_not_called()
 

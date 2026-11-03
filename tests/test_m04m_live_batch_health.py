@@ -103,7 +103,7 @@ class M04MActiveNextBatchHealthTests(unittest.TestCase):
                     ])
             report = json.loads(out.getvalue())
             self.assertEqual(code, 0)
-            self.assertEqual(report["final_decision"], "REJECT")
+            self.assertIsNone(report["final_decision"])
             self.assertFalse(report["live_trading_authorized"])
             self.assertFalse(report["execution_allowed"])
             self.assertEqual(

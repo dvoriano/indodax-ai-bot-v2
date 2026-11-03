@@ -238,7 +238,7 @@ class M05TelegramReadonlyPreflightTests(unittest.TestCase):
                 self.assertEqual(rc, code, errors.getvalue())
                 self.assertEqual(calls, ["getMe", "getWebhookInfo"])
                 report = json.loads(output.getvalue())
-                self.assertEqual(report["final_decision"], "REJECT")
+                self.assertIsNone(report["final_decision"])
                 self.assertFalse(report["execution_allowed"])
                 self.assertEqual(
                     report["m05_telegram_readonly_preflight"]["bot_id_pinned_and_matched"],
