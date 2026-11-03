@@ -108,7 +108,8 @@ class M03VolumeFloorTests(unittest.TestCase):
             self.assertFalse(result.execution_allowed)
             self.assertIsNone(result.bulk)
             self.assertIn("BULK_SHORTLIST_BELOW_REQUESTED_LIMIT", result.reason)
-            self.assertEqual(app.journal.count(), 1)
+            self.assertEqual(app.journal.count(), 0)  # No fabricated owner Final
+            self.assertEqual(app.journal.stage_observation_count(), 1)
 
     def test_invalid_floor_and_limit_fail_closed(self):
         scan = DailyPairScanner(boosted_fake().client()).scan()
