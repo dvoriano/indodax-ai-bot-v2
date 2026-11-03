@@ -231,10 +231,16 @@ class OriginalM09FaultChainTests(unittest.TestCase):
             {"draft":draft(price="100.1")},
             {"draft":draft(quantity="1000.03")},
             {"free_idr":D("5000")},
-            {"locked_idr":D("920000")},
+            {"free_idr":D("5000"),"locked_idr":D("920000")},
             {"best_ask_idr":D("130")},
             {"commitments_not_locked_idr":D("900000")},
         )
+        # Indodax free_idr is already exclusive of locked_idr. Never
+        # subtract locked a second time; this remains only hypothetical
+        # sizing and can NEVER authorize a trade.
+        locked_reference=self.review(locked_idr=D("920000"))
+        self.assertTrue(locked_reference["m07_limit_math_reference_passed"])
+        self.assertFalse(locked_reference["execution_allowed"])
         for change in cases:
             with self.subTest(change=change):
                 out=self.review(**change)
