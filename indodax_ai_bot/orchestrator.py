@@ -1015,6 +1015,97 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def run_m09_original_shadow_mainpath_once(self, trace_id: str, *,
+            market: IndodaxPublicMarket | None = None,
+            ws_db_path: str | None = None,
+            deep_limit: int = 20) -> dict:
+        """Original M09-01 M03→G1/M04→M05→M07→M08, always NO ORDER.
+
+        Invokes the SAME public bulk scanner, G1 source quality, M04
+        three-role shadow and optional preexisting M05 advisory source.
+        Original M07 adapter and M08 journal supply downstream hardlocks.
+        Neither a fake Final, fresh private GET nor settled IDR is minted.
+        """
+        self.settings.require_m01_safety()
+        if self._ai_role_caller is not None:
+            raise ValueError("M09_SHADOW_PAID_OR_INJECTED_AI_FORBIDDEN")
+        if type(trace_id) is not str or not trace_id.strip() or len(trace_id) > 64:
+            raise ValueError("M09_ORIGINAL_TRACE_INVALID")
+        if type(deep_limit) is not int or not 20 <= deep_limit <= 40:
+            raise ValueError("M09_SHADOW_BULK_LIMIT_INVALID")
+        cycle = self.run_bulk_deep_cycle(
+            trace_id, market=market, ws_db_path=ws_db_path,
+            min_volume_idr=Decimal("150000000"), deep_limit=deep_limit,
+        )
+        if (cycle.final_decision is not None
+                or cycle.execution_allowed is not False
+                or cycle.stage_disposition !=
+                "ADVISORY_ONLY_NO_OWNER_DECISION"):
+            raise ValueError("M09_ORIGINAL_BULK_AUTHORITY_CONFLICT")
+        source = cycle.bulk if isinstance(cycle.bulk, dict) else None
+        ai = cycle.ai_shadow if isinstance(cycle.ai_shadow, dict) else {}
+        owner = (cycle.owner_advisory
+                 if isinstance(cycle.owner_advisory, dict) else None)
+        adapter = self.inspect_m07_official_order_adapter_once()
+        if (adapter.get("network_allowed") is not False
+                or adapter.get("execution_allowed") is not False):
+            raise ValueError("M09_M07_HARDLOCK_INACTIVE")
+        m07 = self.journal.m07_offline_intent_summary()
+        m08 = self.journal.review_m09_original_m08_position_and_idr_readonly()
+        cohort = source.get("eligible_cohort") if source is not None else None
+        cohort = cohort if isinstance(cohort, dict) else {}
+        g1 = source.get("g1_source_admission") if source is not None else None
+        return {
+            "stage": "M09_ORIGINAL_V2_SHADOW_END_TO_END",
+            "status": "M09_SHADOW_CHAIN_NO_ORDER_NO_OWNER_FINAL",
+            "m03_original_bulk_invoked": True,
+            "m03_scan_reason": cycle.reason,
+            "m03_public_coverage_status": (
+                source.get("coverage_status") if source is not None else None),
+            "m03_cohort_status": cohort.get("status"),
+            "m03_provisional_watchlist_count": (
+                len(cohort.get("provisional_watchlist_preview"))
+                if isinstance(cohort.get("provisional_watchlist_preview"),list)
+                else 0),
+            "m04_original_g1_admission_observed": isinstance(g1,dict),
+            "independent_g1_issuer_verified": False,
+            "g1_source_not_promoted_from_public": True,
+            "m04_original_three_role_shadow_invoked": True,
+            "m04_expected_roles": ["MARKET","RISK","STRATEGY"],
+            "m04_completed_role_count": (
+                len(ai.get("completed_roles"))
+                if isinstance(ai.get("completed_roles"),list) else 0),
+            "m04_three_role_reason": ai.get("reason"),
+            "m04_paid_ai_provider_called": False,
+            "m04_role_veto_cannot_be_bypassed": True,
+            "m05_original_advisory_status": (
+                owner.get("status") if owner is not None
+                else "M05_NO_BOUND_OWNER_ADVISORY"),
+            "m05_order_specific_final_decision": None,
+            "m05_original_telegram_transport_invoked": False,
+            "m07_original_adapter_status": adapter.get("status"),
+            "m07_hardlock_active": True,
+            "m07_unknown_holds": m07["offline_unknown_holds"],
+            "m07_order_intents_created_by_shadow": False,
+            "m08_original_position_source_status": m08["status"],
+            "m08_account_only_buy_receipts_observed":
+                m08["account_only_buy_receipt_count"],
+            "m08_account_only_sell_receipts_observed":
+                m08["account_only_sell_receipt_count"],
+            "m08_position_manager_bot_owned_verified": False,
+            "m08_wallet_settled_idr_verified": False,
+            "m08_realized_net_pnl_wib_verified": False,
+            "paper_pnl_recorded_as_real_idr": False,
+            "verified_spendable_capital_idr": False,
+            "new_buy_order_or_sell_order_created": False,
+            "owner_final_decision": None,
+            "paid_network_allowed": False,
+            "private_account_get_invoked": False,
+            "live_trading_authorized": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def run_m08_post_sell_rediscovery_once(self, *,
             settlement_event_id: str, scan_trace_id: str,
             observed_epoch: int,

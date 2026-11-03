@@ -1436,6 +1436,51 @@ class DecisionJournal:
             "spendable_idr_for_buy_verified": False,
         }
 
+    def review_m09_original_m08_position_and_idr_readonly(self) -> dict:
+        """Original M08 journal posture for M09 PAPER/SHADOW, not a fill.
+
+        View Only BUYs and manually seeded future-event rows NEVER prove
+        bot-created BUY, SELL settlement or realized IDR PnL. This original
+        journal has NO canonical M08-06 event issuer yet; no settlement
+        amount can be promoted into a trade-permission signal.
+        """
+        with self._connect() as con:
+            buy_receipts = con.execute(
+                "SELECT COUNT(*) FROM m07_exchange_readonly_fill_summaries "
+                "WHERE side='BUY'",
+            ).fetchone()[0]
+            sell_receipts = con.execute(
+                "SELECT COUNT(*) FROM m07_exchange_readonly_fill_summaries "
+                "WHERE side='SELL'",
+            ).fetchone()[0]
+            proposed_exits = con.execute(
+                "SELECT COUNT(*) FROM m08_offline_sell_preflight_receipts",
+            ).fetchone()[0]
+            stored_events = con.execute(
+                "SELECT COUNT(*) FROM m08_position_settled_idr_events",
+            ).fetchone()[0]
+            unknown = con.execute(
+                "SELECT COUNT(*) FROM m07_offline_order_intents "
+                "WHERE state='OFFLINE_UNKNOWN_HOLD'",
+            ).fetchone()[0]
+        return {
+            "stage": "M09_ORIGINAL_M08_POSITION_SETTLEMENT_SHADOW",
+            "status": "M08_NO_AUTHENTICATED_BOT_OWNED_SETTLEMENT_ISSUER",
+            "account_only_buy_receipt_count": buy_receipts,
+            "account_only_sell_receipt_count": sell_receipts,
+            "nonexecuting_sell_preflight_count": proposed_exits,
+            "future_event_db_rows_untrusted": stored_events,
+            "m07_offline_unknown_holds": unknown,
+            "bot_owned_position_verified": False,
+            "bot_owned_sell_fill_verified": False,
+            "wallet_settled_idr_verified": False,
+            "realized_net_pnl_wib_verified": False,
+            "paper_is_realized_exchange_proceeds": False,
+            "spendable_idr_authorized": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def m07_offline_intent_summary(self) -> dict:
         """Anonymized original journal status; no account/API/order secrets."""
         with self._connect() as con:

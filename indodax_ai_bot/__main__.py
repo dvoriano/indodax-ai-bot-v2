@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m09-shadow-mainpath-once", action="store_true",
+                       help="One original V2 public scanner→AI advisory→M05/M07/M08 shadow; isolated /tmp journal, no paid AI/trade")
     group.add_argument("--m08-post-sell-rediscovery-offline-once",
                        action="store_true",
                        help="One original M08-07 settled-IDR source gate to same public scanner; isolated /tmp journal only, no BUY")
@@ -212,6 +214,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if args.m09_shadow_mainpath_once:
+            settings.require_m01_safety()
+            if (not Path(args.db).is_absolute()
+                    or not Path(args.db).resolve().is_relative_to(Path("/tmp"))):
+                raise ConfigurationError("M09_SHADOW_TMP_ORIGINAL_JOURNAL_REQUIRED")
         if args.m08_post_sell_rediscovery_offline_once:
             settings.require_m01_safety()
             if (type(args.m08_settled_event_id) is not str
@@ -554,7 +561,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.scheduled_public_scanner_once and args.m05_shadow_db is not None:
             raise ConfigurationError("M05_SCHEDULED_QUEUE_OPTIN_REQUIRED")
         if args.m05_shadow_db is not None and not (
-                args.once or args.bulk_deep_once or args.m05_telegram_poll_once
+                args.once or args.bulk_deep_once or args.m09_shadow_mainpath_once
+                or args.m05_telegram_poll_once
                 or args.m05_telegram_readonly_preflight_once
                 or args.m05_telegram_owner_safe_status_once
                 or (args.scheduled_public_scanner_once
@@ -753,6 +761,19 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m09_shadow_mainpath_once:
+            settings.require_m01_safety()
+            report = app.run_m09_original_shadow_mainpath_once(
+                uuid4().hex, ws_db_path=args.ws_db,
+                deep_limit=args.bulk_deep_limit,
+            )
+            print(json.dumps({
+                "m09_original_shadow":report,
+                "final_decision":None,
+                "execution_allowed":False,
+                "live_trading_authorized":False,
+            },sort_keys=True))
+            return 0
         if args.m08_post_sell_rediscovery_offline_once:
             # No fabricated settlement, private key, stale proposal reuse,
             # previous-pair bias, or BUY. Only future canonical M08-06
