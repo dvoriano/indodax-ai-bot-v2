@@ -110,7 +110,7 @@ class M07OriginalM06M05LastMomentTests(unittest.TestCase):
             self.assertTrue(result["m06_viewonly_account_observed"])
             self.assertFalse(result["m06_general_idr_order_budget_authorized"])
             self.assertFalse(result["m05_order_specific_final_verified"])
-            self.assertIn("M06_FLOKI_PEPE_PROCEEDS_NOT_COMPLETE",
+            self.assertIn("M06_FRESH_SPENDABLE_AND_NEW_SALE_HOLDS_UNVERIFIED",
                           result["missing_requirements"])
             self.assertFalse(result["execution_allowed"])
             self.assertFalse(result["order_sent"])
