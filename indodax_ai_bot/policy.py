@@ -40,6 +40,31 @@ class ScalpingTimeAssessment:
 
 
 @dataclass(frozen=True)
+class ProtectiveExitReference:
+    """M08 protective stop/trailing/time review on ACCOUNT-ONLY BUY evidence.
+
+    These are risk signals, not owner/bot-owned position attestations. An
+    expected protective exit may be at a gross LOSS: unlike BUY proposals,
+    its REVIEW is not blocked by 2% ROI/Rp10,000 minimum entry targets.
+    """
+    trigger: str
+    stop_loss_breached_reference: bool
+    trailing_stop_breached_reference: bool
+    time_stop_review_reference: bool
+    review_urgency: str
+    position_age_seconds_reference: int
+    estimated_gross_unrealized_idr_reference: Decimal
+    estimated_gross_unrealized_roi_percent_reference: Decimal
+    protective_loss_allowed_by_policy: bool = True
+    quote_fresh_unverified: bool = False
+    bot_owned_fill_time_verified: bool = False
+    bot_owned_position_verified: bool = False
+    sell_quantity_authorized: Decimal = Decimal("0")
+    decision_is_realized_pnl: bool = False
+    execution_allowed: bool = False
+
+
+@dataclass(frozen=True)
 class SpecialPoolReview:
     """FLOKI/PEPE mathematical quota, NOT authenticated token ownership."""
     asset: str
@@ -147,6 +172,93 @@ class ScalpingPolicy:
             risk_review_priority=priority,
             review_interval_seconds=60,
             pump_exception_observed=exception,
+        )
+
+    def assess_protective_sell_reference_offline(self, *,
+        account_buy_base_qty: Decimal,
+        account_buy_cost_basis_idr: Decimal,
+        reference_buy_fill_epoch: int,
+        now_epoch: int,
+        observed_mark_price_idr: Decimal,
+        stop_loss_price_idr: Decimal,
+        high_watermark_price_idr: Decimal,
+        trailing_stop_price_idr: Decimal | None,
+        quote_fresh_unverified: bool,
+        pump_continuation_unverified: bool = False,
+        risk_clear_unverified: bool = False,
+    ) -> ProtectiveExitReference:
+        """Original M08 stop-loss/trailing/time-stop policy, NO SELL authority.
+
+        This function receives ONLY account-identified BUY economic reference
+        plus owner/scenario mark, floor and time; it must never trust them as
+        bot-owned fills or independently verified quotes. Stop-loss can
+        recommend review while gross PnL is negative, without demanding
+        BUY's +2% / Rp10k profit floor. A stale quote never triggers a
+        price-based order; age rules are an independent review priority.
+        """
+        values = (
+            account_buy_base_qty, account_buy_cost_basis_idr,
+            observed_mark_price_idr,stop_loss_price_idr,
+            high_watermark_price_idr,
+        )
+        if trailing_stop_price_idr is not None:
+            values += (trailing_stop_price_idr,)
+        if (any(type(v) is not Decimal or not v.is_finite()
+                or v <= 0 or v >= Decimal("1e28") for v in values)
+                or type(reference_buy_fill_epoch) is not int
+                or type(now_epoch) is not int
+                or reference_buy_fill_epoch <= 0
+                or now_epoch < reference_buy_fill_epoch
+                or type(quote_fresh_unverified) is not bool
+                or type(pump_continuation_unverified) is not bool
+                or type(risk_clear_unverified) is not bool
+                or high_watermark_price_idr < observed_mark_price_idr
+                or stop_loss_price_idr > high_watermark_price_idr
+                or (trailing_stop_price_idr is not None
+                    and trailing_stop_price_idr > high_watermark_price_idr)):
+            raise ValueError("M08_PROTECTIVE_REFERENCE_INVALID")
+        age = self.assess_position_holding_time(
+            actual_buy_fill_epoch=reference_buy_fill_epoch,
+            observed_epoch=now_epoch,
+            pump_continuation_confirmed=pump_continuation_unverified,
+            trailing_protection_active=trailing_stop_price_idr is not None,
+            market_source_fresh=quote_fresh_unverified,
+            risk_review_clear=risk_clear_unverified,
+        )
+        price_breached_stop = (
+            observed_mark_price_idr <= stop_loss_price_idr)
+        price_breached_trailing = (
+            trailing_stop_price_idr is not None
+            and observed_mark_price_idr <= trailing_stop_price_idr)
+        time_urgent = age.phase in (
+            "TIME_STOP_PROTECTIVE_REVIEW",
+            "EXTENDED_POSITION_RISK_REVIEW",
+        )
+        # No independent market quote, so a breached stop is a diagnostic,
+        # and never a trusted price-trigger to send a SELL.
+        if not quote_fresh_unverified:
+            trigger = "STALE_QUOTE_PROTECTION_NEEDS_FRESH_SOURCE"
+        elif price_breached_stop:
+            trigger = "STOP_LOSS_REVIEW"
+        elif price_breached_trailing:
+            trigger = "TRAILING_STOP_REVIEW"
+        elif time_urgent:
+            trigger = "TIME_STOP_URGENT_REVIEW"
+        else:
+            trigger = "MONITOR_POSITION_REFERENCE_ONLY"
+        with_decimal = account_buy_base_qty * observed_mark_price_idr
+        gross = with_decimal - account_buy_cost_basis_idr
+        roi = gross * Decimal("100") / account_buy_cost_basis_idr
+        return ProtectiveExitReference(
+            trigger=trigger,
+            stop_loss_breached_reference=price_breached_stop,
+            trailing_stop_breached_reference=bool(price_breached_trailing),
+            time_stop_review_reference=time_urgent,
+            review_urgency=age.risk_review_priority,
+            position_age_seconds_reference=age.elapsed_seconds,
+            estimated_gross_unrealized_idr_reference=gross,
+            estimated_gross_unrealized_roi_percent_reference=roi,
+            quote_fresh_unverified=quote_fresh_unverified,
         )
 
     def review_main_capital(
