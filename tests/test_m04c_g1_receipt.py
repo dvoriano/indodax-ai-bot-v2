@@ -40,7 +40,7 @@ class M04CSourceAttestationTests(unittest.TestCase):
         result = signed_role_run(caller)
         self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(result["completed_roles"], caller.calls)
-        self.assertEqual(result["final_decision"], "REJECT")
+        self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
         self.assertFalse(result["g2_candidate_authorized"])
 
