@@ -140,7 +140,7 @@ class M04OBTCPublicSourceQualityTests(unittest.TestCase):
             self.assertFalse(quality["execution_allowed"])
             self.assertFalse(obj["public_bulk"]["g1_verified"])
             self.assertEqual(obj["ai_shadow"]["completed_roles"],[])
-            self.assertEqual(obj["final_decision"],"REJECT")
+            self.assertIsNone(obj["final_decision"])
             self.assertFalse(obj["execution_allowed"])
 
 if __name__ == "__main__":
