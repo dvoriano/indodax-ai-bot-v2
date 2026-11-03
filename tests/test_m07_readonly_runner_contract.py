@@ -4,6 +4,7 @@ The stubbed CLI captures argv/environment. No public/private HTTP is made.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -92,6 +93,15 @@ class M07ReadOnlyRunnerContract(unittest.TestCase):
         result = self.run_script(branch="feature")
         self.assertEqual(result.returncode, 3)
         self.assertIn("M07_ABORT_SOURCE_NOT_MAIN", result.stderr)
+        self.assertFalse((self.root / "runtime" / "runner-capture.json").exists())
+
+    def test_second_concurrent_viewonly_session_is_refused(self):
+        lock = self.root / "runtime" / ".m07-readonly-once.lock"
+        with lock.open("w") as owner:
+            fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_script()
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("M07_ABORT_CONCURRENT_VIEWONLY_SESSION", result.stderr)
         self.assertFalse((self.root / "runtime" / "runner-capture.json").exists())
 
     def test_missing_ws_rejected_before_creating_private_budget(self):
