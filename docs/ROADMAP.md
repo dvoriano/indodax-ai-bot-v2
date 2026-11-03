@@ -345,6 +345,29 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 - [ ] Bring qualified public market+AI/Telegram into one pinned online mainpath with orders OFF.
 
 ### M11: LIVE risk release
+
+**Matriks M11 per item checklist asli, 3 November 2026:** format wajib identik dengan M06/M07/M09/M10. Kolom ✅ di bawah hanya menandai **komponen prasyarat OFFLINE yang memang sudah diuji dari M04/M06–M10**, bukan kesiapan eksekusi M11. Semua integrasi keputusan rilis LIVE, penerimaan lengkap, dan izin owner M11 tetap ☐.
+
+| Item | Kode scoped | Audit terarah | Terhubung bot V2 asli (offline/readonly) | Source GitHub `main` | Checkout VPS terverifikasi | Penerimaan lengkap |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| M11-01 Issuer G1 independen dan cakupan source/tape lengkap | ✅ | ✅ | ☐ | ✅ | ✅ | ☐ |
+| M11-02 Kepemilikan akun, modal/fee/precision dan coexistence bot | ✅ | ✅ | ☐ | ✅ | ✅ | ☐ |
+| M11-03 BUY→protective SELL→settled IDR, crash/UNKNOWN recovery | ✅ | ✅ | ☐ | ✅ | ✅ | ☐ |
+| M11-04 CI/release, keamanan kredensial, drawdown, loss caps, kill-switch | ✅ | ✅ | ☐ | ✅ | ✅ | ☐ |
+| M11-05 GO LIVE owner terpisah dengan batas modal/order/rugi harian | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+
+**Rekap bukti komponen pendukung (bukan kesiapan M11):** **4/5 kode scoped, 4/5 audit terarah, 0/5 integrasi keputusan rilis LIVE M11, 4/5 source pendukung pada GitHub main, 4/5 checkout VPS komponen offline terdahulu**, tetapi **0/5 penerimaan lengkap**. ✅ dari M04 verifier lokal, M06 View Only dan guard modal, M07 preflight/executor hardlock, M08/M09 posisi/PAPER/recovery, serta M10-04 CI yang sudah diterima. Tidak satu pun menyimpulkan independent upstream G1, order nyata, net settled IDR, semua pemakai satu akun, atau izin LIVE. Bukti pada kolom VPS adalah uji prasyarat sebelumnya, **bukan** uji release M11 dari satu pinned runtime.
+
+**Alasan kolom Penerimaan lengkap masih ☐, satu per item:**
+
+- **M11-01:** receipt/verifier lokal teruji tetapi sumber G1 independen yang dapat mengesahkan trade-tape lengkap, 15m/1h continuity dan asal data **belum** tersedia.
+- **M11-02:** guard M06/M07 offline lulus, tetapi seluruh komitmen IDR, order belum settle, fee executable, kepemilikan lot V2 dan konflik pemakai akun lain **belum** direkonsiliasi untuk LIVE.
+- **M11-03:** PAPER/recovery M07–M09 belum menjadi exchange-confirmed BUY milik bot→protected SELL→wallet IDR settled atau proof recovery order sungguhan.
+- **M11-04:** CI M10-04 dan hardlock default sudah lulus, tetapi audit final release M11 yang menyeluruh tentang least-privilege credentials, drawdown/loss caps, kill-switch dan rollback masih terbuka.
+- **M11-05:** owner belum memberi GO LIVE **terpisah dan eksplisit** dengan modal maksimum, jumlah order maksimum dan batas rugi harian; izin READ ONLY/PAPER/CI tidak menggantikannya.
+
+**Ketentuan berkelanjutan:** setiap pemeriksaan M11 berikutnya memperbarui **baris yang sama** pada matriks ini sesuai bukti SHA dan cakupan OFFLINE/PUBLIC/PRIVATE/LIVE, alasan yang masih ☐, serta checklist asli di bawahnya. Tidak membuat checklist baru, tidak mengulang tes PASS tanpa perubahan relevan, dan tidak mengaktifkan BUY/SELL tanpa GO terpisah.
+
 - [ ] Prove real independently sourced G1 issuer and complete source coverage.
 - [ ] Verify account ownership/spendable, fee/precision/order constraints and bot coexistence safety.
 - [ ] Verify BUY→protective SELL→IDR reconciliation and crash/unknown recovery.
