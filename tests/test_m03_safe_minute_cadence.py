@@ -10,6 +10,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from decimal import Decimal
 from io import StringIO
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -35,6 +36,18 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
             ]
             if args is not None:
                 argv = args + ["--db", str(db)]
+            policy_path = Path(td) / "owner-egress.json"
+            policy_path.write_text(json.dumps({
+                "schema_version": 1,
+                "owner_approved_public_only": True,
+                "all_shared_ip_consumers_accounted": True,
+                "egress_public_ip": "8.8.8.8",  # synthetic fixture only
+                "external_consumer_ids": ["operator-peer"],
+                "external_peak_requests_rolling_60s": 5,
+                "issued_at_epoch": now - 5,
+                "expires_at_epoch": now + 60,
+            }))
+            policy_path.chmod(0o600)
             out, err = StringIO(), StringIO()
             scan = CycleResult("scan", None,
                                "G1_DEEP_ANALYSIS_AND_RISK_NOT_CONNECTED",
@@ -45,8 +58,16 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                 bulk={"coverage_status": "PARTIAL_INVALID_PAIR_EVIDENCE",
                       "g1_verified": False, "execution_allowed": False},
                 ai_shadow={"completed_roles": [], "execution_allowed": False},
+                stage_disposition="ADVISORY_ONLY_NO_OWNER_DECISION",
             )
             with (
+                patch.dict(os.environ, {
+                    "INDODAX_TRADING_ENABLED": "NO",
+                    "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+                    "INDODAX_EXECUTION_MODE": "DRY_RUN",
+                    "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
+                    "INDODAX_M03_EGRESS_ADMISSION_FILE": str(policy_path),
+                }),
                 patch("indodax_ai_bot.__main__.time.time", return_value=now),
                 patch.object(DailyScalpingOrchestrator, "run_scan_cycle",
                              return_value=scan) as light,
@@ -144,7 +165,7 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                         "--db", str(Path(td) / "decisions.db"),
                     ])
             self.assertEqual(rc, 2)
-            self.assertIn("SUMOPOD_SHADOW_REQUIRES_BULK_DEEP_ONCE", err.getvalue())
+            self.assertIn("M03_EGRESS_ADMISSION_REQUIRED", err.getvalue())
             adapter.assert_not_called()
 
     def test_systemd_timer_uses_one_nonoverlapping_two_lane_entry(self):
