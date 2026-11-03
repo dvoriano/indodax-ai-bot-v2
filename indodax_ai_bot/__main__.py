@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m09-paper-offline-once", action="store_true",
+                       help="Original journal PAPER-only BUY/SELL/SUMMARY simulation; no exchange orders or real profit")
     group.add_argument("--m09-recovery-shadow-once", action="store_true",
                        help="Original V2 M09 public shadow and M07/M08 journal recovery review, no post-SELL event claim or trade")
     group.add_argument("--m09-shadow-mainpath-once", action="store_true",
@@ -167,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--m08-settled-event-id", default=None,
                         help="M08-07 event identity in original /tmp DecisionJournal; cannot inject settlement evidence")
+    parser.add_argument("--m09-paper-file", default=None,
+                        help="Absolute /tmp 0600 exact-schema PAPER-only scenario; not exchange fill or settlement")
     parser.add_argument("--m09-recovery-file", default=None,
                         help="Absolute /tmp 0600 JSON with M09 recovery identities only, not settlement facts")
     parser.add_argument("--m08-sell-preflight-file", default=None,
@@ -218,6 +222,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if args.m09_paper_offline_once:
+            settings.require_m01_safety()
+            if (type(args.db) is not str
+                    or not Path(args.db).is_absolute()
+                    or not Path(args.db).resolve().is_relative_to(Path("/tmp"))
+                    or type(args.m09_paper_file) is not str
+                    or not Path(args.m09_paper_file).is_absolute()
+                    or not Path(args.m09_paper_file).resolve().is_relative_to(Path("/tmp"))):
+                raise ConfigurationError("M09_PAPER_ISOLATED_TMP_FILES_REQUIRED")
+        elif args.m09_paper_file is not None:
+            raise ConfigurationError("M09_PAPER_FILE_ONLY_FOR_OFFLINE_SIMULATION")
         if args.m09_recovery_shadow_once:
             settings.require_m01_safety()
             if (type(args.db) is not str
@@ -777,6 +792,75 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m09_paper_offline_once:
+            settings.require_m01_safety()
+            try:
+                raw=_owner_private_file(args.m09_paper_file,max_bytes=4096)
+                action=raw.get("action")
+                fields={
+                    "BUY":{
+                        "paper_id","symbol","buy_qty","buy_price_idr",
+                        "buy_all_in_fee_idr","buy_epoch",
+                    },
+                    "SELL":{
+                        "paper_id","paper_exit_id","sell_qty",
+                        "sell_price_idr","sell_all_in_fee_idr",
+                        "incremental_slippage_idr","sell_epoch",
+                    },
+                    "SUMMARY":{"day_wib"},
+                }
+                if action not in fields or set(raw)!=(fields[action]|{"action"}):
+                    raise ValueError("M09_PAPER_FIXTURE_SCHEMA_INVALID")
+                typed={}
+                money_keys={
+                    "buy_qty","buy_price_idr","buy_all_in_fee_idr",
+                    "sell_qty","sell_price_idr","sell_all_in_fee_idr",
+                    "incremental_slippage_idr",
+                }
+                epoch_keys={"buy_epoch","sell_epoch"}
+                for k in fields[action]:
+                    v=raw[k]
+                    if k in money_keys:
+                        if type(v) is not str or len(v)>45:
+                            raise ValueError("M09_PAPER_DECIMAL_INPUT_INVALID")
+                        typed[k]=Decimal(v)
+                    elif k in epoch_keys:
+                        if type(v) is not int:
+                            raise ValueError("M09_PAPER_EPOCH_INPUT_INVALID")
+                        typed[k]=v
+                    elif k=="day_wib":
+                        if v is not None and type(v) is not str:
+                            raise ValueError("M09_PAPER_DATE_INPUT_INVALID")
+                        typed[k]=v
+                    else:
+                        if type(v) is not str or len(v)>45:
+                            raise ValueError("M09_PAPER_IDENTITY_INPUT_INVALID")
+                        typed[k]=v
+                result=app.run_m09_original_paper_cycle_offline_once(
+                    action=action,details=typed,
+                )
+            except (M06ScopeDenied,OSError,ValueError,TypeError,
+                    ArithmeticError,DecisionConflictError,
+                    sqlite3.Error) as exc:
+                reason=str(exc)
+                if re.fullmatch(r"M09_PAPER_[A-Z0-9_]{1,100}",reason) is None:
+                    reason="M09_PAPER_SOURCE_OR_SIMULATION_UNAVAILABLE"
+                print(json.dumps({
+                    "m09_paper":{
+                        "status":"UNAVAILABLE","reason":reason,
+                        "order_sent":False,"execution_allowed":False,
+                    },
+                    "final_decision":None,"execution_allowed":False,
+                    "live_trading_authorized":False,
+                },sort_keys=True),file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m09_paper":result,
+                "final_decision":None,
+                "execution_allowed":False,
+                "live_trading_authorized":False,
+            },sort_keys=True))
+            return 0
         if args.m09_recovery_shadow_once:
             settings.require_m01_safety()
             try:
