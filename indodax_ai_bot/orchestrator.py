@@ -582,6 +582,75 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def review_m08_holding_time_reference_offline(self, *,
+            account_fingerprint: str, symbol: str, client_order_id: str,
+            observed_epoch: int,
+            pump_continuation_unverified: bool = False,
+            trailing_protection_unverified: bool = False,
+            market_source_fresh_unverified: bool = False,
+            risk_review_clear_unverified: bool = False,
+    ) -> dict:
+        """Original M08-02: earliest scoped myTrades BUY fill -> holding time.
+
+        Caller CANNOT supply a fake fill time. Only matching authenticated
+        account myTrades rows in the original M07 journal supply the start.
+        Not bot-owned until independently attested V2 order execution.
+        The observed clock/flag values are unverified offline arguments.
+        """
+        self.settings.require_m01_safety()
+        source = self.review_m08_buy_position_admission_readonly(
+            account_fingerprint=account_fingerprint, symbol=symbol,
+            client_order_id=client_order_id,
+        )
+        base = {
+            "stage": "M08_ORIGINAL_HOLDING_TIME_SOURCE_OFFLINE",
+            "status": "M08_HOLDING_TIME_BUY_FILL_TIMESTAMP_UNVERIFIED",
+            "buy_source_status": source["status"],
+            "trade_time_source": source["account_buy_fill_timestamp_source"],
+            "holding_time_reference": None,
+            "account_buy_fill_epoch_bot_owned": False,
+            "bot_owned_position_verified": False,
+            "time_exit_order_authorized": False,
+            "sellable_bot_owned_base_qty": "0",
+            "owner_order_final_verified": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+        first = source["account_first_buy_fill_epoch_reference"]
+        last = source["account_last_buy_fill_epoch_reference"]
+        if (source["account_buy_fills_and_fees_reconciled"] is not True
+                or type(first) is not int or type(last) is not int):
+            return base
+        if type(observed_epoch) is not int or observed_epoch < last:
+            raise ValueError("M08_OBSERVATION_PRECEDES_LAST_BUY_FILL")
+        result = ScalpingPolicy().assess_position_holding_time(
+            actual_buy_fill_epoch=first,
+            observed_epoch=observed_epoch,
+            pump_continuation_confirmed=pump_continuation_unverified,
+            trailing_protection_active=trailing_protection_unverified,
+            market_source_fresh=market_source_fresh_unverified,
+            risk_review_clear=risk_review_clear_unverified,
+        )
+        journal_state = self.journal.m07_offline_intent_summary()
+        return {
+            **base,
+            "status": "M08_ACCOUNT_BUY_HOLDING_TIME_REFERENCE_NOT_BOT_OWNED",
+            "account_first_buy_fill_epoch_reference": first,
+            "account_last_buy_fill_epoch_reference": last,
+            "elapsed_seconds_from_first_buy_fill_reference":
+                result.elapsed_seconds,
+            "holding_phase_reference": result.phase,
+            "risk_review_priority_reference": result.risk_review_priority,
+            "next_review_interval_seconds_reference":
+                result.review_interval_seconds,
+            "pump_exception_scenario_only":
+                result.pump_exception_observed,
+            "observation_epoch_external_unverified": True,
+            "market_risk_flags_scenario_only": True,
+            "original_m07_unknown_holds":
+                journal_state["offline_unknown_holds"],
+        }
+
     def review_m08_net_tier_exit_reference_offline(self, *,
             account_fingerprint: str, symbol: str, client_order_id: str,
             sell_base_qty_reference: Decimal,
