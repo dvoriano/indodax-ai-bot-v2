@@ -225,6 +225,41 @@ class DecisionJournal:
                     )
                 )"""
             )
+            # M08-07: an event is NOT issued here. Only a future M08-06
+            # verified bot-owned SELL/fill/fee/wallet reconciler may record
+            # POSITION_SETTLED_IDR in this same journal. M08-07 consumes it
+            # once and only starts the ORIGINAL public scanner, not BUY.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m08_position_settled_idr_events (
+                    event_id TEXT PRIMARY KEY,
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    source_buy_client_order_id TEXT NOT NULL,
+                    sell_client_order_id TEXT NOT NULL UNIQUE,
+                    sell_full_order_id TEXT NOT NULL,
+                    sell_fill_digest TEXT NOT NULL,
+                    bot_owned_execution_digest TEXT NOT NULL,
+                    idr_wallet_settlement_digest TEXT NOT NULL,
+                    net_settled_idr TEXT NOT NULL,
+                    settled_at_ms INTEGER NOT NULL,
+                    source TEXT NOT NULL CHECK(
+                        source='M08_RECONCILED_BOT_OWNED_SELL_IDR'
+                    ),
+                    status TEXT NOT NULL CHECK(status='POSITION_SETTLED_IDR')
+                )"""
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m08_post_sell_discovery_claims (
+                    event_id TEXT PRIMARY KEY,
+                    scan_trace_id TEXT NOT NULL UNIQUE,
+                    claimed_at_epoch INTEGER NOT NULL,
+                    scanner_name TEXT NOT NULL CHECK(
+                        scanner_name='ORIGINAL_M03_BULK_DEEP'
+                    ),
+                    FOREIGN KEY(event_id)
+                      REFERENCES m08_position_settled_idr_events(event_id)
+                )"""
+            )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
             con.execute(
@@ -1223,6 +1258,182 @@ class DecisionJournal:
             "replay": False,"new_order_intent_created": False,
             "new_sell_reservation_created": False,
             "execution_allowed": False,"order_sent": False,
+        }
+
+    def claim_m08_post_sell_rediscovery_once(self, *,
+            event_id: str, scan_trace_id: str, observed_epoch: int) -> dict:
+        """Only claim future M08-06 FINAL verified settlement, once.
+
+        Cannot create POSITION_SETTLED_IDR, invent bot-owned order receipts,
+        credit any IDR, clear UNKNOWN, or create BUY/reservations. An absent
+        independently reconciled event blocks before the scanner is called.
+        A claim is committed BEFORE public scanning to avoid a crash/restart
+        re-dispatch loop; retry needs a NEW genuine settlement event.
+        """
+        if (type(event_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,36}",event_id) is None
+                or type(scan_trace_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,64}",scan_trace_id) is None
+                or event_id == scan_trace_id
+                or type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999):
+            raise DecisionConflictError("M08_POST_SELL_HANDOFF_ID_INVALID")
+        blocked = {
+            "stage": "M08_POST_SELL_REDISCOVERY_ORIGINAL_JOURNAL",
+            "status": "M08_POSITION_SETTLED_IDR_NOT_VERIFIED",
+            "settlement_event_accepted": False,
+            "rediscovery_claimed": False,
+            "fresh_public_scanner_allowed": False,
+            "source_sell_position_bot_owned_verified": False,
+            "wallet_idr_settlement_verified": False,
+            "spendable_idr_for_buy_verified": False,
+            "prior_proposal_or_owner_final_reusable": False,
+            "automatic_rebuy_previous_pair": False,
+            "buy_order_authorized": False,
+            "execution_allowed": False,
+        }
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            previous = con.execute(
+                "SELECT scan_trace_id FROM m08_post_sell_discovery_claims "
+                "WHERE event_id=?", (event_id,),
+            ).fetchone()
+            if previous is not None:
+                return dict(blocked, status="M08_SETTLED_EVENT_ALREADY_CLAIMED")
+            trace_collision = con.execute(
+                "SELECT 1 FROM m08_post_sell_discovery_claims "
+                "WHERE scan_trace_id=? UNION ALL "
+                "SELECT 1 FROM pipeline_stage_observations "
+                "WHERE trace_id=? UNION ALL SELECT 1 FROM decisions "
+                "WHERE trace_id=? LIMIT 1",
+                (scan_trace_id,scan_trace_id,scan_trace_id),
+            ).fetchone()
+            if trace_collision is not None:
+                raise DecisionConflictError("M08_POST_SELL_SCAN_TRACE_REUSE")
+            event = con.execute(
+                "SELECT account_fingerprint,symbol,source_buy_client_order_id,"
+                "sell_client_order_id,sell_full_order_id,sell_fill_digest,"
+                "bot_owned_execution_digest,idr_wallet_settlement_digest,"
+                "net_settled_idr,settled_at_ms,source,status "
+                "FROM m08_position_settled_idr_events WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            if event is None:
+                return blocked
+            acc,symbol,buy_cid,sell_cid,full,digest,bot_digest,wallet_digest,net,ms,source,status = event
+            if (type(acc) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}",acc) is None
+                    or type(symbol) is not str
+                    or re.fullmatch(r"[A-Z0-9]{2,20}IDR",symbol) is None
+                    or symbol[:-3] in ("FLOKI","PEPE","USDT","USDC")
+                    or any(type(v) is not str
+                           or re.fullmatch(r"[0-9a-f]{64}",v) is None
+                           for v in (digest,bot_digest,wallet_digest))
+                    or any(type(v) is not str or not v for v in (
+                        buy_cid,sell_cid,full))
+                    or type(ms) is not int
+                    or not 1_000_000_000_000 <= ms <= observed_epoch*1000
+                    or (observed_epoch*1000-ms) > 60*60*1000
+                    or source != "M08_RECONCILED_BOT_OWNED_SELL_IDR"
+                    or status != "POSITION_SETTLED_IDR"):
+                raise DecisionConflictError("M08_POST_SELL_SETTLEMENT_SOURCE_INVALID")
+            try:
+                proceeds = Decimal(net)
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M08_POST_SELL_SETTLEMENT_AMOUNT_INVALID") from None
+            if (not proceeds.is_finite() or proceeds <= 0
+                    or proceeds >= Decimal("1e28")):
+                raise DecisionConflictError("M08_POST_SELL_SETTLEMENT_AMOUNT_INVALID")
+            # The same exchange ACCOUNT must also have a FILLED BUY
+            # context with reconciled myTrades. This is still NOT proof of
+            # V2 ownership; the missing independent bot-origin attestation
+            # belongs to the future M08-06 settlement event issuer.
+            buy_order = con.execute(
+                "SELECT full_order_id,side,status,executed_qty "
+                "FROM m07_exchange_readonly_orders WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (acc,symbol,buy_cid),
+            ).fetchone()
+            buy_fills = con.execute(
+                "SELECT full_order_id,side,qty_base FROM "
+                "m07_exchange_readonly_fill_summaries WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (acc,symbol,buy_cid),
+            ).fetchone()
+            if (buy_order is None or buy_fills is None
+                    or buy_order[1:3] != ("BUY","FILLED")
+                    or buy_fills[:2] != (buy_order[0],"BUY")):
+                return dict(blocked,status="M08_POST_SELL_BUY_LOT_CONTEXT_MISSING")
+            try:
+                b_qty = Decimal(buy_order[3])
+                b_filled = Decimal(buy_fills[2])
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M08_POST_SELL_BUY_CONTEXT_CORRUPT") from None
+            if (not b_qty.is_finite() or b_qty <= 0 or b_qty != b_filled):
+                raise DecisionConflictError("M08_POST_SELL_BUY_CONTEXT_CORRUPT")
+            # Account View Only SELL and fills are necessary but not
+            # sufficient; the future settlement event must separately
+            # contain bot execution and wallet-delta reconciler digests.
+            order = con.execute(
+                "SELECT full_order_id,side,status,original_qty,executed_qty "
+                "FROM m07_exchange_readonly_orders WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (acc,symbol,sell_cid),
+            ).fetchone()
+            fills = con.execute(
+                "SELECT full_order_id,side,qty_base,net_quote_idr,fill_digest "
+                "FROM m07_exchange_readonly_fill_summaries WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (acc,symbol,sell_cid),
+            ).fetchone()
+            if order is None or fills is None:
+                return dict(blocked,status="M08_SELL_ORDER_OR_FILLS_UNVERIFIED")
+            try:
+                ordered = Decimal(order[3])
+                executed = Decimal(order[4])
+                fill_qty = Decimal(fills[2])
+                fill_net = Decimal(fills[3])
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M08_POST_SELL_FILL_ARITHMETIC_INVALID") from None
+            if (order[:3] != (full,"SELL","FILLED")
+                    or fills[:2] != (full,"SELL")
+                    or fills[4] != digest
+                    or any(not q.is_finite() for q in (
+                        ordered,executed,fill_qty,fill_net))
+                    or not (0 < ordered == executed == fill_qty)
+                    or fill_net != proceeds):
+                raise DecisionConflictError("M08_POST_SELL_FILL_SETTLEMENT_CONFLICT")
+            unresolved = con.execute(
+                "SELECT COUNT(*) FROM m07_offline_order_intents"
+            ).fetchone()[0]
+            active_sells = con.execute(
+                "SELECT COUNT(*) FROM m07_exchange_readonly_orders "
+                "WHERE account_fingerprint=? AND symbol=? AND side='SELL' "
+                "AND status IN ('NEW','PARTIALLY_FILLED')",
+                (acc,symbol),
+            ).fetchone()[0]
+            if unresolved or active_sells:
+                return dict(blocked,status="M08_POST_SELL_UNRESOLVED_ORDER_COMMITMENTS")
+            # M08-06 is not yet an authoritative producer. No event has
+            # been minted by V2 in production. The atomic claim exists
+            # solely as a future handoff once trusted provenance arrives.
+            con.execute(
+                "INSERT INTO m08_post_sell_discovery_claims "
+                "(event_id,scan_trace_id,claimed_at_epoch,scanner_name) "
+                "VALUES (?,?,?,'ORIGINAL_M03_BULK_DEEP')",
+                (event_id,scan_trace_id,observed_epoch),
+            )
+        return {
+            **blocked,
+            "status": "M08_SETTLED_EVENT_CLAIMED_SCANNER_ONLY",
+            "settlement_event_accepted": True,
+            "rediscovery_claimed": True,
+            "fresh_public_scanner_allowed": True,
+            "source_sell_position_bot_owned_verified": True,
+            "wallet_idr_settlement_verified": True,
+            # a settled event alone never validates whole-account funds;
+            # only new source-bound M06/M07 preflight can do that.
+            "spendable_idr_for_buy_verified": False,
         }
 
     def m07_offline_intent_summary(self) -> dict:
