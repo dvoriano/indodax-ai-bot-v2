@@ -291,5 +291,176 @@ class SourceJoinWithBoundCandidate(unittest.TestCase):
         self.assertFalse(result["execution_allowed"])
         self.assertIsNone(result["final_decision"])
 
+
+class OfficialPublicNumericRulesRegression(unittest.TestCase):
+    """An actual /api/pairs response has JSON float numeric pair metadata."""
+
+    def test_original_m03_observation_accepts_finite_public_float_rules(self):
+        from tests.test_m03_public_quote_friction_mainpath import public_observation
+        from indodax_ai_bot.deep_analysis import DeepCandidate
+        from indodax_ai_bot.config import Settings
+        from indodax_ai_bot.journal import DecisionJournal
+        from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
+        with TemporaryDirectory() as folder:
+            bot = DailyScalpingOrchestrator(
+                Settings(), DecisionJournal(Path(folder) / "decimal.db"))
+            # Official docs: price_precision, quantity_increment, minimum
+            # traded quantity may arrive as JSON numeric (Python float).
+            observed = replace(public_observation(), pair_rule_fields={
+                "price_precision": 0.000001,
+                "quantity_increment": 0.1,
+                "trade_min_base_currency": 10000.0,
+                "trade_min_traded_currency": 1.0,
+                "is_market_suspended": 0,
+                "is_maintenance": 0,
+            })
+            with patch.object(bot.journal, "record_and_compare_public_wall",
+                              return_value={"status": "UNATTESTED"}):
+                result = bot._attach_public_wall_experience(
+                    DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None),
+                    observed,
+                )
+            public = result.summary()["m07_same_candidate_public_preflight"]
+            self.assertEqual(
+                public["status"],
+                "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY",
+            )
+            self.assertEqual(public["public_pair_rules_reference"][
+                "price_precision"], "0.000001")
+            self.assertEqual(public["public_pair_rules_reference"][
+                "quantity_increment"], "0.1")
+            self.assertFalse(public["per_account_fee_verified"])
+            self.assertFalse(public["execution_allowed"])
+            self.assertFalse(public["order_sent"])
+
+    def test_float_rules_flow_from_real_m03_callback_to_m06_m07_sizing(self):
+        from tests.test_m03_public_quote_friction_mainpath import public_observation
+        from indodax_ai_bot.deep_analysis import DeepCandidate
+        with TemporaryDirectory() as folder:
+            bot = DailyScalpingOrchestrator(
+                Settings(), DecisionJournal(Path(folder) / "float-join.db"))
+            obs = replace(public_observation(), pair_rule_fields={
+                "price_precision": 0.000001,
+                "quantity_increment": 0.1,
+                "trade_min_base_currency": 10000.0,
+                "trade_min_traded_currency": 1.0,
+                "is_market_suspended": 0,
+                "is_maintenance": 0,
+            })
+            with patch.object(bot.journal, "record_and_compare_public_wall",
+                              return_value={"status": "UNATTESTED"}):
+                row = bot._attach_public_wall_experience(
+                    DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None),
+                    obs,
+                ).summary()
+            bulk = CycleResult("cycle", None, "PUBLIC_UNVERIFIED", bulk={
+                "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
+                "shared_public_scan_context": True,
+                "eligible_cohort": {
+                    "status": "ALIGNED_PUBLIC_UNATTESTED",
+                    "eligible_pair_ids": ["btc_idr"],
+                },
+                "provisional_market_evidence": [row],
+                "g1_verified": False,
+                "execution_allowed": False,
+            })
+            with (patch("indodax_ai_bot.orchestrator.time.time", return_value=NOW),
+                  patch.object(bot, "run_bulk_deep_cycle",
+                               return_value=bulk) as scanner,
+                  patch.object(bot, "inspect_m06_idr_budget_readonly_once",
+                               return_value=account()) as view):
+                result = bot.run_m07_original_source_join_readonly_once(
+                    "float-real-source-cycle",
+                    api_key="view-only-test", secret_key="view-only-test",
+                    funding={
+                        "requested_ticket_ceiling_idr": Decimal("100000"),
+                        "new_floki_sell_rebuy_hold_idr": Decimal("0"),
+                        "new_pepe_sell_rebuy_hold_idr": Decimal("0"),
+                        "commitments_not_locked_idr": Decimal("0"),
+                        "max_spread_bps": Decimal("150"),
+                    },
+                )
+            scanner.assert_called_once()
+            view.assert_called_once()
+            self.assertEqual(result["status"],
+                             "M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER")
+            self.assertEqual(result["m06_authenticated_viewonly_get_count"], 2)
+            self.assertEqual(result["m07_main_sizing"]["main_idr_pool_scenario"],
+                             "920147")
+            self.assertEqual(result["m07_main_sizing"]["status"],
+                             "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY")
+            self.assertFalse(result["execution_allowed"])
+            self.assertFalse(result["order_sent"])
+
+    def test_nonfinite_or_negative_float_rule_rejected(self):
+        from tests.test_m03_public_quote_friction_mainpath import public_observation
+        from indodax_ai_bot.m07_same_candidate_public import (
+            assess_m07_same_candidate_public_boundary,
+        )
+        from indodax_ai_bot.deep_analysis import observe_public_quote_friction
+        base = {
+            "price_precision": 0.000001,
+            "quantity_increment": 0.1,
+            "trade_min_base_currency": 10000.0,
+            "trade_min_traded_currency": 1.0,
+            "is_market_suspended": 0,
+            "is_maintenance": 0,
+        }
+        for value in (float("nan"), float("inf"), float("-inf"), -0.001, 0.0):
+            with self.subTest(value=value):
+                observed = replace(public_observation(), pair_rule_fields={
+                    **base, "price_precision": value,
+                })
+                report = assess_m07_same_candidate_public_boundary(
+                    candidate_pair="btc_idr", observation=observed,
+                    observed_friction=observe_public_quote_friction(observed),
+                )
+                self.assertEqual(report["status"],
+                                 "M07_PUBLIC_NUMERIC_PAIR_RULE_INVALID")
+                self.assertFalse(report["execution_allowed"])
+
+    def test_missing_market_status_never_assumed_active(self):
+        from tests.test_m03_public_quote_friction_mainpath import public_observation
+        from indodax_ai_bot.m07_same_candidate_public import (
+            assess_m07_same_candidate_public_boundary,
+        )
+        from indodax_ai_bot.deep_analysis import observe_public_quote_friction
+        observed = replace(public_observation(), pair_rule_fields={
+            "price_precision": 0.000001,
+            "quantity_increment": 0.1,
+            "trade_min_base_currency": 10000.0,
+            "trade_min_traded_currency": 1.0,
+        })
+        report = assess_m07_same_candidate_public_boundary(
+            candidate_pair="btc_idr", observation=observed,
+            observed_friction=observe_public_quote_friction(observed),
+        )
+        self.assertEqual(report["status"], "M07_PUBLIC_PAIR_RULES_MISSING_OR_EXCLUDED")
+        self.assertFalse(report["public_market_explicitly_active"])
+        self.assertFalse(report["execution_allowed"])
+
+    def test_real_valid_float_but_misaligned_price_step_still_blocks(self):
+        from tests.test_m03_public_quote_friction_mainpath import public_observation
+        from indodax_ai_bot.m07_same_candidate_public import (
+            assess_m07_same_candidate_public_boundary,
+        )
+        from indodax_ai_bot.deep_analysis import observe_public_quote_friction
+        observed = replace(public_observation(), pair_rule_fields={
+            "price_precision": 3.0,
+            "quantity_increment": 0.1,
+            "trade_min_base_currency": 10000.0,
+            "trade_min_traded_currency": 1.0,
+            "is_market_suspended": 0,
+            "is_maintenance": 0,
+        })
+        report = assess_m07_same_candidate_public_boundary(
+            candidate_pair="btc_idr", observation=observed,
+            observed_friction=observe_public_quote_friction(observed),
+        )
+        self.assertFalse(report["public_quote_price_step_match"])
+        self.assertEqual(report["status"], "M07_PUBLIC_RULES_OR_FEES_NOT_READY")
+        self.assertFalse(report["execution_allowed"])
+
+
 if __name__ == "__main__":
     unittest.main()

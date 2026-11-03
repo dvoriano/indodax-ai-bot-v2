@@ -8,10 +8,29 @@ quantity, reads/reuses a historic balance, or grants authority from M05.
 from __future__ import annotations
 
 from decimal import Decimal
+from math import isfinite
 from typing import Any
 
 from .m07_limit_preflight import M07PreflightBlocked, _rule
 from .public_market import PublicObservation
+
+
+
+def _observed_public_rule(value: object, field: str) -> Decimal:
+    """Parse official /api/pairs JSON numerics without changing M07 policy.
+
+    The official API documents floating-point JSON numbers for
+    price_precision, quantity_increment and traded-currency minimum. The
+    general hypothetical-order _rule intentionally rejects Python floats.
+    Here only, convert a finite *already observed* JSON numeric into its
+    decimal text representation, then apply the ORIGINAL strict M07 bounds.
+    This is not a price-grid repair, implicit rounding or executable rule.
+    """
+    if type(value) is float:
+        if not isfinite(value):
+            raise M07PreflightBlocked("M07_PUBLIC_RULE_" + field + "_INVALID")
+        value = str(value)
+    return _rule(value, field)
 
 
 def assess_m07_same_candidate_public_boundary(*,
@@ -79,21 +98,28 @@ def assess_m07_same_candidate_public_boundary(*,
         return values
     values["same_observation_public_rule_batch"] = True
     # The public pair metadata is not a LIVE exchange order acceptance check.
+    # A JSON float from /api/pairs must not be mistaken for missing rules.
+    # Invalid, negative, nonfinite and out-of-bounds numerics remain blocked.
     try:
-        tick = _rule(rules["price_precision"], "PRICE_STEP")
-        increment = _rule(rules["quantity_increment"], "QTY_STEP")
-        minimum_idr = _rule(rules["trade_min_base_currency"], "MIN_IDR")
-        minimum_base = _rule(rules["trade_min_traded_currency"], "MIN_QTY")
-        bid = observation.snapshot.best_bid_idr
-        ask = observation.snapshot.best_ask_idr
-        if (type(bid) is not Decimal or type(ask) is not Decimal
-                or not bid.is_finite() or not ask.is_finite()
-                or bid <= 0 or ask <= bid):
-            raise ValueError("M07_PUBLIC_QUOTE_INVALID")
+        tick = _observed_public_rule(rules["price_precision"], "PRICE_STEP")
+        increment = _observed_public_rule(rules["quantity_increment"], "QTY_STEP")
+        minimum_idr = _observed_public_rule(rules["trade_min_base_currency"], "MIN_IDR")
+        minimum_base = _observed_public_rule(rules["trade_min_traded_currency"], "MIN_QTY")
+    except (ValueError, ArithmeticError):
+        values["status"] = "M07_PUBLIC_NUMERIC_PAIR_RULE_INVALID"
+        return values
+    bid = observation.snapshot.best_bid_idr
+    ask = observation.snapshot.best_ask_idr
+    if (type(bid) is not Decimal or type(ask) is not Decimal
+            or not bid.is_finite() or not ask.is_finite()
+            or bid <= 0 or ask <= bid):
+        values["status"] = "M07_PUBLIC_TICKER_QUOTE_OR_SPREAD_INVALID"
+        return values
+    try:
         steps = bid % tick == 0 and ask % tick == 0
         spread = (ask - bid) / ask * Decimal("10000")
-    except (ValueError, ArithmeticError):
-        values["status"] = "M07_PUBLIC_QUOTE_OR_RULES_INVALID"
+    except ArithmeticError:
+        values["status"] = "M07_PUBLIC_QUOTE_GRID_ARITHMETIC_UNRESOLVED"
         return values
     values["public_quote_price_step_match"] = steps
     values["public_buy_minimum_known"] = minimum_idr > 0 and minimum_base > 0 and increment > 0
