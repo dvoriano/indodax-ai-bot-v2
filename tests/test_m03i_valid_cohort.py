@@ -145,7 +145,7 @@ class M03IValidCohortTests(unittest.TestCase):
         self.assertEqual(code, 0)  # Diagnostic reported, NOT strategy pass.
         self.assertEqual(parsed["bulk_probe_status"], "PUBLIC_BULK_INCOMPLETE_UNATTESTED")
         self.assertEqual(parsed["public_bulk"]["eligible_cohort"]["eligible_pair_count"], 12)
-        self.assertEqual(parsed["final_decision"], "REJECT")
+        self.assertIsNone(parsed["final_decision"])
         self.assertFalse(parsed["execution_allowed"])
         self.assertFalse(parsed["live_trading_authorized"])
 
