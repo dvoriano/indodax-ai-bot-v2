@@ -35,6 +35,24 @@ If the installed checkout does not yet contain this module, do **not** replace/r
 
 **Limits:** `immutable=1` avoids WAL/SHM writes. If a WAL or journal sidecar exists, output is `V2_LOCAL_DB_ACTIVE_JOURNAL_SNAPSHOT_UNRELIABLE` and counts stay null. Even without sidecars, this is only a point-in-time **local reservation** count, not completed network requests nor upstream exchange IP accounting. A missing cap or missing DB never implies zero external demand. Regardless of local values, `m10_05_full_acceptance=false` and `m03_timer_go_authorized=false`. Until independent infrastructure-owned all-consumer egress counters are obtained, **full M10-05 remains ☐**.
 
+## Owner VPS read-only observation (4 November 2026)
+
+Owner performed **detached pinned source** checkout `f590e80d772e269924c4f1b34be5a1a5af1e841a` and ran original `python -B -m indodax_ai_bot.m10_egress_readonly` once under isolated `env -i`, without installing or starting a V2 service. Output marker: `M10_EGRESS_LOCAL_READONLY_COMPLETED`. The sanitized observed fields were:
+
+| Evidence field | Value | Interpretation |
+| --- | --- | --- |
+| `scope` / `db_path_scope` | `V2_LOCAL_SQLITE_ONLY` / `V2_DEFAULT` | Only the default V2 user SQLite file was inspected |
+| `database_present` | `true` | The V2 default quota DB exists |
+| `rolling_60s_v2_reserved_requests` | `0` | There were zero **V2 reservations in that snapshot**; external traffic is unknown |
+| `durable_v2_cap_requests_60s` | `null` | No persisted lower shared cap was observed, not permission to send 168 public GETs |
+| `snapshot_wal_possible` | `false` | No WAL/rollback sidecar observed by this diagnostic |
+| `caller_env_override_declared` | `false` | Isolated diagnostic shell did not declare an override; **live V2 service environment not inspected** |
+| `all_egress_ip_consumers_verified`, `outbound_public_ip_independently_verified`, `external_rolling_60s_peak_verified` | `false`, `false`, `false` | No independently verified full-IP inventory, public egress IP, or peak traffic |
+| `live_v2_clients_same_db_verified` | `false` | Active V2 process/DB-path alignment has not been established |
+| `m03_timer_go_authorized`, `m10_05_full_acceptance` | `false`, `false` | No authorization and no full acceptance |
+
+This closes only the **read-only local observation step**. The already accepted **25/25** source-scoped VPS tests for `bb399fa` and **31/31** for `ee12315` do not need to be rerun. The absence of V2 reservations at one instant or a persisted lower quota cannot prove other peers are silent, all traffic is seen, or a timer may run.
+
 ## NEXT one gate
 
-**Single remaining acceptance dependency for M10-05:** independently obtain infrastructure-level evidence identifying every consumer sharing the egress IP and their actual **rolling-60s REST peak** (not V2 SQLite-only reservations), plus observe that cooperating V2 runtime clients share the same quota file/cap. Treat unknown demand, unknown IP or unknown peer scope as **UNVERIFIED**. Do not inspect or mutate V1/Hermes/other repos, start scanner timer, alter quota DB, enable GO, private GET, paid AI or orders.
+**Single remaining acceptance dependency for M10-05:** independently obtain infrastructure-level evidence identifying every consumer sharing the egress IP and their actual **rolling-60s REST peak** (not V2 SQLite-only reservations), plus observe that cooperating V2 runtime clients share the same quota file/cap. **Owner V2-only default DB inspection is already complete and must not be mistaken for this evidence.** Treat unknown demand, unknown IP or unknown peer scope as **UNVERIFIED**. Do not inspect or mutate V1/Hermes/other repos, start scanner timer, alter quota DB, enable GO, private GET, paid AI or orders.
