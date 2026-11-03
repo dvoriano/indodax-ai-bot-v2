@@ -74,7 +74,6 @@ def assess_m07_owner_main_idr_sizing_offline(*,
     public_epoch = p.get("observed_epoch")
     account_epoch = a.get("account_observed_epoch")
     if (p.get("stage") != "M07_SAME_CANDIDATE_PUBLIC_PREFLIGHT"
-            or p.get("status") != "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
             or p.get("same_candidate_and_closed_minute") is not True
             or p.get("execution_allowed") is not False
             or p.get("order_sent") is not False
@@ -88,6 +87,13 @@ def assess_m07_owner_main_idr_sizing_offline(*,
             or not 0 <= public_epoch - p["closed_1m_epoch"] <= 120
             or not 0 <= now_epoch - public_epoch <= 30):
         return dict(blocked, status="M07_MAIN_SIZING_PUBLIC_SOURCE_STALE_OR_MISMATCH")
+    # Missing /api/pairs active flag, precision, or a public fee table
+    # is a distinct READ-ONLY observation, never order-ready sizing.
+    if p.get("status") != "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY":
+        return dict(
+            blocked, status="M07_MAIN_SIZING_PUBLIC_RULES_OR_FEE_UNREADY",
+            m03_public_boundary_status=p.get("status"),
+        )
     if (a.get("status") != "M06_IDR_BALANCE_OBSERVED_SOURCE_RESERVE_UNVERIFIED"
             or a.get("view_only_permissions_verified") is not True
             or a.get("requests_completed") != 2

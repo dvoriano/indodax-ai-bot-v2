@@ -780,8 +780,10 @@ def main(argv: list[str] | None = None) -> int:
                 "execution_allowed": False,
                 "live_trading_authorized": False,
             }, sort_keys=True))
-            return 0 if report["status"] == (
-                "M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER") else 3
+            # Exit zero means the scoped ORIGINAL View Only read succeeded,
+            # NOT that an order or M07 sizing was permitted. Public fee/rules
+            # can remain UNVERIFIED, with executor still hardlocked.
+            return 0 if report.get("m06_authenticated_viewonly_get_count") == 2 else 3
         if (args.m07_private_order_status_once
                 or args.m07_private_latest_order_once
                 or args.m07_private_14day_order_once

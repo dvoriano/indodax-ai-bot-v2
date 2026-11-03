@@ -280,6 +280,21 @@ class DailyScalpingOrchestrator:
         selected = None
         selected_lane = None
         selected_quality_clean = False
+        selected_public_status = None
+        public_boundary_status_counts = {}
+        # The REAL M03 deep result can have aligned candles without all
+        # optional public order constraints. Count the status by source,
+        # without logging pair/UID or making an extra market request.
+        for row in ranked:
+            if type(row) is not dict or row.get("pair") not in allowed_pairs:
+                continue
+            public = row.get("m07_same_candidate_public_preflight")
+            status = (public.get("status") if type(public) is dict
+                      else "M07_PUBLIC_PREFLIGHT_NOT_AVAILABLE")
+            if type(status) is not str or len(status) > 90:
+                status = "M07_PUBLIC_PREFLIGHT_INVALID_STATUS"
+            public_boundary_status_counts[status] = (
+                public_boundary_status_counts.get(status, 0) + 1)
         rejected = {
             "not_eligible_cohort_member": 0,
             "no_valid_source_bound_public_rules_or_fee": 0,
@@ -317,12 +332,20 @@ class DailyScalpingOrchestrator:
                         rejected["invalid_or_rejected_deep_candidate"] += 1
                         continue
                     public = row.get("m07_same_candidate_public_preflight")
+                    # READ ONLY M06 observation requires an authentic,
+                    # same-batch candidate, NOT market-order tradability.
+                    # Missing public pair flags/fees remain M07 sizing vetoes
+                    # but cannot prevent an authorized 2-GET account read.
                     if (type(public) is not dict
+                            or public.get("stage") !=
+                                "M07_SAME_CANDIDATE_PUBLIC_PREFLIGHT"
                             or public.get("candidate_pair") != pair
                             or public.get("observed_pair") != pair
-                            or public.get("status") !=
-                                "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
+                            or pair[:-4].upper() in
+                                ("FLOKI", "PEPE", "USDT", "USDC")
                             or public.get("same_candidate_and_closed_minute") is not True
+                            or public.get("public_fee_source_only") is not True
+                            or public.get("per_account_fee_verified") is not False
                             or public.get("execution_allowed") is not False
                             or public.get("order_sent") is not False):
                         rejected["no_valid_source_bound_public_rules_or_fee"] += 1
@@ -333,6 +356,7 @@ class DailyScalpingOrchestrator:
                         rejected["stale_public_candidate"] += 1
                         continue
                     selected = public
+                    selected_public_status = public.get("status")
                     selected_lane = lane
                     selected_quality_clean = (
                         lane == "M03_QUALITY_WATCHLIST_REFERENCE_ONLY"
@@ -355,6 +379,11 @@ class DailyScalpingOrchestrator:
             "m03_source_bound_watchlist_rows": len(rows),
             "m03_ranked_diagnostic_rows": len(ranked),
             "m03_candidate_rejection_counts": rejected,
+            "m03_public_boundary_status_counts": public_boundary_status_counts,
+            "m03_selected_public_boundary_status": selected_public_status,
+            "m03_selected_order_reference_ready": (
+                selected_public_status ==
+                "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"),
             "m03_candidate_selection_lane": selected_lane,
             "m03_selected_quality_clean": selected_quality_clean,
             "m03_cautionary_fallback_cannot_authorize_trade": True,
@@ -399,8 +428,17 @@ class DailyScalpingOrchestrator:
         )
         ready_reference = sized.get("status") == (
             "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY")
-        status = ("M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER"
-                  if ready_reference else "M07_REAL_M03_M06_JOIN_BLOCKED")
+        # A View Only source join can be proven even if public fee,
+        # suspension flag, or precision was not supplied. NEVER infer
+        # these missing properties, and never call that a sizing PASS.
+        status = (
+            "M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER"
+            if ready_reference
+            else "M07_REAL_M03_M06_READONLY_JOINED_PUBLIC_RULES_UNVERIFIED"
+            if selected_public_status !=
+                "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
+            else "M07_REAL_M03_M06_JOIN_BLOCKED"
+        )
         self.journal.record_stage_observation(
             trace_id + "_m07", "M07_READONLY_SOURCE_JOIN", status,
         )
