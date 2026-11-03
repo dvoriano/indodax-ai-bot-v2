@@ -217,18 +217,26 @@ class TelegramOwnerPoller:
         if result.get("accepted") is True:
             if choice not in ("PASS", "REJECT") or result.get("final_decision") != choice:
                 raise TelegramTransportError("M05_TELEGRAM_OWNER_DECISION_MISMATCH")
-            # One durable UI-feedback attempt per original card. If the
-            # network later fails, a second button press cannot duplicate
-            # confirmation or change the first owner decision.
-            notice = self._ledger.claim_finished_review_button_notice(
-                user_id=from_user["id"], chat_id=chat["id"],
-                callback_data=data, now_epoch=now_epoch,
-                telegram_message_id=message["message_id"],
-                chat_type="private",
+            # A legacy OFFLINE shadow has no delivery outbox and must
+            # never edit an arbitrary Telegram message. Its consent is
+            # committed once, then only answer the callback. Real owner
+            # advisory cards MUST be SENT and bound to the exact message
+            # before UI cleanup is attempted.
+            delivery = self._ledger.market_advisory_delivery_status(
+                result["proposal_id"]
             )
-            if notice.get("accepted") is not True:
-                raise TelegramTransportError("M05_OWNER_UI_FEEDBACK_CLAIM_FAILED")
-            outcome = "OWNER_CALLBACK_" + choice + "_RECORDED"
+            if delivery is None:
+                outcome = "OWNER_SHADOW_CALLBACK_" + choice + "_RECORDED"
+            else:
+                notice = self._ledger.claim_finished_review_button_notice(
+                    user_id=from_user["id"], chat_id=chat["id"],
+                    callback_data=data, now_epoch=now_epoch,
+                    telegram_message_id=message["message_id"],
+                    chat_type="private",
+                )
+                if notice.get("accepted") is not True:
+                    raise TelegramTransportError("M05_OWNER_UI_FEEDBACK_CLAIM_FAILED")
+                outcome = "OWNER_CALLBACK_" + choice + "_RECORDED"
             reply = "Owner " + choice + " dicatat. Simulasi saja, order OFF."
         else:
             if choice is not None or result.get("final_decision") is not None:
