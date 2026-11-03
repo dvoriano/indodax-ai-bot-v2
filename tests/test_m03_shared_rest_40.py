@@ -143,7 +143,7 @@ class M03SharedRestAndFortyTests(unittest.TestCase):
                     "forty-public-only", market=market,
                     min_volume_idr=Decimal("150000000"), deep_limit=40,
                 )
-            self.assertEqual(result.final_decision.value, "REJECT")
+            self.assertIsNone(result.final_decision)
             self.assertFalse(result.execution_allowed)
             self.assertIsNotNone(result.bulk)
             self.assertEqual(result.bulk["attempted_count"], 40)
