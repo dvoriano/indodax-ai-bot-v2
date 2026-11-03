@@ -1344,6 +1344,33 @@ class DecisionJournal:
             if (not proceeds.is_finite() or proceeds <= 0
                     or proceeds >= Decimal("1e28")):
                 raise DecisionConflictError("M08_POST_SELL_SETTLEMENT_AMOUNT_INVALID")
+            # The same exchange ACCOUNT must also have a FILLED BUY
+            # context with reconciled myTrades. This is still NOT proof of
+            # V2 ownership; the missing independent bot-origin attestation
+            # belongs to the future M08-06 settlement event issuer.
+            buy_order = con.execute(
+                "SELECT full_order_id,side,status,executed_qty "
+                "FROM m07_exchange_readonly_orders WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (acc,symbol,buy_cid),
+            ).fetchone()
+            buy_fills = con.execute(
+                "SELECT full_order_id,side,qty_base FROM "
+                "m07_exchange_readonly_fill_summaries WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (acc,symbol,buy_cid),
+            ).fetchone()
+            if (buy_order is None or buy_fills is None
+                    or buy_order[1:3] != ("BUY","FILLED")
+                    or buy_fills[:2] != (buy_order[0],"BUY")):
+                return dict(blocked,status="M08_POST_SELL_BUY_LOT_CONTEXT_MISSING")
+            try:
+                b_qty = Decimal(buy_order[3])
+                b_filled = Decimal(buy_fills[2])
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M08_POST_SELL_BUY_CONTEXT_CORRUPT") from None
+            if (not b_qty.is_finite() or b_qty <= 0 or b_qty != b_filled):
+                raise DecisionConflictError("M08_POST_SELL_BUY_CONTEXT_CORRUPT")
             # Account View Only SELL and fills are necessary but not
             # sufficient; the future settlement event must separately
             # contain bot execution and wallet-delta reconciler digests.
