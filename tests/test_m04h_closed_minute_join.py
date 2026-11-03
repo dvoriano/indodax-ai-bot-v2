@@ -165,7 +165,7 @@ class M04HClosedMinuteTests(unittest.TestCase):
                 "g1_receipt_issuance_allowed"
             ])
             self.assertEqual(result["ai_shadow"]["completed_roles"], [])
-            self.assertEqual(result["final_decision"], "REJECT")
+            self.assertIsNone(result["final_decision"])
             self.assertFalse(result["execution_allowed"])
             self.assertFalse(result["live_trading_authorized"])
 
@@ -189,7 +189,7 @@ class M04HClosedMinuteTests(unittest.TestCase):
                 "reason"
             ], "PUBLIC_WS_SQLITE_NOT_FOUND")
             self.assertFalse(missing.exists())
-            self.assertEqual(result["final_decision"], "REJECT")
+            self.assertIsNone(result["final_decision"])
 
 
 if __name__ == "__main__":
