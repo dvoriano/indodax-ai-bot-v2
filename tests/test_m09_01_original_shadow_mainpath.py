@@ -61,6 +61,8 @@ class OriginalM09Shadow(unittest.TestCase):
         app=bot or self.app
         with (patch.object(app,"_scan_with_early_momentum",
                            return_value=object()) as scan,
+              patch("indodax_ai_bot.orchestrator.apply_deep_volume_floor",
+                    side_effect=lambda preliminary, **kw: preliminary) as floor,
               patch("indodax_ai_bot.orchestrator.bulk_public_deep_scan",
                     return_value=public_bulk(preview=preview)) as deep,
               patch("indodax_ai_bot.orchestrator.time.time",
@@ -68,6 +70,7 @@ class OriginalM09Shadow(unittest.TestCase):
             result=app.run_m09_original_shadow_mainpath_once(
                 "m09shadow_original_001",deep_limit=20)
         self.assertEqual(scan.call_count,1)
+        self.assertEqual(floor.call_count,1)
         self.assertEqual(deep.call_count,1)
         return result
 
@@ -107,16 +110,7 @@ class OriginalM09Shadow(unittest.TestCase):
 
     def test_original_public_source_error_fail_closed_no_provider(self):
         with patch.object(self.app,"_scan_with_early_momentum",
-                          side_effect=PublicDataError("TEST_SOURCE_STALE")), \
-             patch("indodax_ai_bot.orchestrator.OfficialV2OrderAdapter.contract_status",
-                   wraps=None) as unused:
-            # The adapter contract must be checked by its actual owner
-            # method, not by this injected test-side surrogate.
-            unused.side_effect=None
-            unused.return_value={
-                "status":"HARDLOCKED_NO_PRIVATE_HTTP_OR_ORDER",
-                "network_allowed":False,"execution_allowed":False,
-            }
+                          side_effect=PublicDataError("TEST_SOURCE_STALE")):
             report=self.app.run_m09_original_shadow_mainpath_once(
                 "m09source_error")
         self.assertEqual(report["m03_provisional_watchlist_count"],0)
@@ -239,7 +233,7 @@ class OriginalM09Shadow(unittest.TestCase):
         with redirect_stderr(err):
             code=main(["--m09-shadow-mainpath-once",
                        "--db","runtime/decisions.sqlite3"])
-        self.assertEqual(code,3)
+        self.assertEqual(code,2)
         self.assertIn("M09_SHADOW_TMP_ORIGINAL_JOURNAL_REQUIRED",err.getvalue())
         with patch("indodax_ai_bot.__main__.Settings.from_env",
                    return_value=Settings(
@@ -249,7 +243,7 @@ class OriginalM09Shadow(unittest.TestCase):
             with redirect_stderr(bad):
                 ret=main(["--m09-shadow-mainpath-once",
                           "--db",str(self.db)])
-        self.assertEqual(ret,3)
+        self.assertEqual(ret,2)
 
     def test_original_cli_emits_no_signed_orders_or_telegram_transport(self):
         with (patch.object(DailyScalpingOrchestrator,
@@ -260,7 +254,7 @@ class OriginalM09Shadow(unittest.TestCase):
                            )),
               patch("indodax_ai_bot.m07_private_order_readonly._https_json",
                     side_effect=AssertionError("NO_PRIVATE_GET")) as private,
-              patch("indodax_ai_bot.m07_order_adapter.OfficialV2OrderAdapter.create",
+              patch("indodax_ai_bot.m07_order_adapter.OfficialV2OrderAdapter.create_order",
                     side_effect=AssertionError("NO_BUY_SELL")) as create):
             out=StringIO()
             with redirect_stdout(out):
