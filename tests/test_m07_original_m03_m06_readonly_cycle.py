@@ -132,5 +132,45 @@ class SourceJoinWithBoundCandidate(unittest.TestCase):
                          "709147")
         self.assertFalse(result["execution_allowed"])
 
+    def test_original_cli_calls_one_cycle_mainpath(self):
+        from indodax_ai_bot.__main__ import main
+        from io import StringIO
+        from contextlib import redirect_stdout
+        import json
+        import os
+        f = Path(self.temp.name) / "funding.json"
+        f.write_text(json.dumps({k: str(v) for k, v in self.funding.items()}))
+        os.chmod(f, 0o600)
+        ws = Path(self.temp.name) / "ws.sqlite3"
+        ws.write_bytes(b"test")
+        bulk = CycleResult("once", None, "UNVERIFIED", bulk={
+            "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
+            "shared_public_scan_context": True,
+            "eligible_cohort": {"eligible_pair_ids": ["btc_idr"]},
+            "provisional_market_evidence": [self.row],
+        })
+        out = StringIO()
+        with (patch("indodax_ai_bot.orchestrator.time.time", return_value=NOW),
+              patch("indodax_ai_bot.__main__._existing_v2_credentials",
+                    return_value=f),
+              patch("indodax_ai_bot.__main__.read_view_only_credentials",
+                    return_value=("test", "test")),
+              patch.object(DailyScalpingOrchestrator, "run_bulk_deep_cycle",
+                           return_value=bulk) as scan,
+              patch.object(DailyScalpingOrchestrator,
+                           "inspect_m06_idr_budget_readonly_once",
+                           return_value=account()) as view,
+              redirect_stdout(out)):
+            code = main(["--m07-main-readonly-cycle-once",
+                         "--m07-runtime-funding-file", str(f),
+                         "--ws-db", str(ws),
+                         "--db", str(Path(self.temp.name) / "cli.db")])
+        self.assertEqual(code, 0)
+        scan.assert_called_once()
+        view.assert_called_once()
+        result = json.loads(out.getvalue())
+        self.assertFalse(result["execution_allowed"])
+        self.assertIsNone(result["final_decision"])
+
 if __name__ == "__main__":
     unittest.main()
