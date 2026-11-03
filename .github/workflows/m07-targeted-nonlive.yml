@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "indodax_ai_bot/**"
+      - "scripts/m07_readonly_once.sh"
       - "tests/test_m07_*.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   push:
     branches: [main]
     paths:
       - "indodax_ai_bot/**"
+      - "scripts/m07_readonly_once.sh"
       - "tests/test_m07_*.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   workflow_dispatch:
@@ -30,9 +32,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Verify operator script Bash syntax
+        run: bash -n scripts/m07_readonly_once.sh
       - name: Original M03/M06/M07 source-bound integration + compatibility
         run: |
           python -m unittest -v \
             tests.test_m07_original_m03_m06_readonly_cycle \
+            tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath
