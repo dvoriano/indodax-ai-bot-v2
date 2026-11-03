@@ -16,69 +16,24 @@
 - The short-lived owner-only policy must be current (max 900 seconds), 0600, correctly scoped and separately approved; synthetic `8.8.8.8` from tests is NOT a real public IP. Revalidation is performed before each M03 GET. Expired/invalid/missing policy always denies original scheduled scanner.
 - **Important operational behavior:** once the V2 shared SQLite cap decreases, code from PR#103 cannot automatically increase it, even when an external policy expires. It needs an explicitly reviewed, bounded maintenance/release procedure; do not delete/recreate/modify the quota SQLite by hand. A conservative stuck-low quota is preferable to unapproved request oversubscription.
 
-## Read-only local V2 diagnostic, NOT an external peer audit
+## Original V2 local read-only diagnostic, NOT external peer proof
 
-This block queries the *default V2-owned rate database only*. It does **not** create/modify any database, call HTTP, read V1/Hermes, invoke systemd, or authorize M03 startup. If a non-default V2 quota path was configured, this result is **not** evidence of that path. It deliberately excludes IP addresses, tokens and external peer identities.
+The original V2 diagnostic `indodax_ai_bot.m10_egress_readonly` opens only the default **V2 user** SQLite namespace under `~/.cache/indodax-ai-bot-v2/rest-rate.sqlite3` through an immutable read-only connection. It does not start systemd, create tables, reserve a GET, query an API, inspect other repos, read owner secret policy, or output raw DB paths/IP/token. Execute it from the **source already present in V2**:
 
 ```bash
 (
   set -euo pipefail
   ROOT="$HOME/indodax-ai-bot-v2"
-  "$ROOT/.venv/bin/python" -B - <<'PY'
-import json
-import os
-from pathlib import Path
-import sqlite3
-import stat
-import time
-
-path = Path.home() / ".cache" / "indodax-ai-bot-v2" / "rest-rate.sqlite3"
-result = {
-    "scope": "V2_DEFAULT_LOCAL_SQLITE_ONLY",
-    "external_peers_independently_verified": False,
-    "shared_egress_ip_accounting_verified": False,
-    "m03_timer_go_authorized": False,
-    "quota_file_present": False,
-    "rolling_60s_local_reservations": None,
-    "sticky_cap_per_60s": None,
-}
-try:
-    info = path.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-            or info.st_size > 33554432):
-        result["status"] = "V2_DB_UNTRUSTED"
-    else:
-        result["quota_file_present"] = True
-        # Opening RO does not authorize live requests or modify quota rows.
-        with sqlite3.connect(path.absolute().as_uri() + "?mode=ro&immutable=1",
-                             uri=True, timeout=1.0) as con:
-            con.execute("PRAGMA query_only=ON")
-            present = {row[0] for row in con.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()}
-            if "rest_get_reservations" in present:
-                row = con.execute(
-                    "SELECT COUNT(*) FROM rest_get_reservations "
-                    "WHERE requested_at > ?", (time.time() - 60.0,),
-                ).fetchone()
-                result["rolling_60s_local_reservations"] = row[0]
-            if "rest_shared_egress_cap" in present:
-                row = con.execute(
-                    "SELECT max_local_requests_60s FROM rest_shared_egress_cap "
-                    "WHERE id=1"
-                ).fetchone()
-                result["sticky_cap_per_60s"] = row[0] if row else None
-            result["status"] = "V2_LOCAL_ONLY_EXTERNAL_UNKNOWN"
-except FileNotFoundError:
-    result["status"] = "V2_DB_ABSENT_UNVERIFIED"
-except (OSError, sqlite3.Error, ValueError):
-    result["status"] = "V2_DB_READONLY_UNAVAILABLE"
-print(json.dumps(result, sort_keys=True))
-PY
+  cd "$ROOT"
+  "$ROOT/.venv/bin/python" -B -m indodax_ai_bot.m10_egress_readonly
 )
 ```
 
-**How to read:** A populated `rolling_60s_local_reservations` only shows requests **reserved in that V2 SQLite**, not upstream receipt or full egress/IP-wide usage. Another V2 process using a different DB is not counted. `sticky_cap_per_60s` being unset does not mean external demand is zero. If any evidence is unknown, M10-05 full acceptance remains `[ ]`.
+If the installed checkout does not yet contain this module, do **not** replace/restart the active runtime. Test with the pinned exact GitHub source from a temporary detached worktree and keep `HOME` unchanged for the read-only DB lookup. Never paste a credential or private policy into chat. A later guide will contain the exact merged SHA once tested.
+
+**Safe output fields:** `database_present`, `rolling_60s_v2_reserved_requests`, `durable_v2_cap_requests_60s`, `caller_env_override_declared`, `snapshot_wal_possible`, a fixed `status` and four explicit proof booleans set to **false**. `caller_env_override_declared` reflects only the diagnostic shell environment, not a systemd process's environment. No active consumer is inventoried or proven to use the same DB.
+
+**Limits:** `immutable=1` avoids WAL/SHM writes. If a WAL or journal sidecar exists, output is `V2_LOCAL_DB_ACTIVE_JOURNAL_SNAPSHOT_UNRELIABLE` and counts stay null. Even without sidecars, this is only a point-in-time **local reservation** count, not completed network requests nor upstream exchange IP accounting. A missing cap or missing DB never implies zero external demand. Regardless of local values, `m10_05_full_acceptance=false` and `m03_timer_go_authorized=false`. Until independent infrastructure-owned all-consumer egress counters are obtained, **full M10-05 remains ☐**.
 
 ## NEXT one gate
 
