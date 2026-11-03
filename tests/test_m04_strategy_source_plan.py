@@ -152,14 +152,15 @@ class M04StrategySourceBoundPlanTests(unittest.TestCase):
         self.assertIsNone(plan["estimated_net_profit_idr"])
         self.assertEqual(report["role_results"][-1]["effective_action"], "WAIT")
 
-    def test_risk_veto_stops_strategy_even_when_scenario_looks_profitable(self):
+    def test_risk_veto_preserved_after_strategy_advisory_even_if_profitable(self):
         bulk, verifier = signed_quote()
         def veto(role, inp, raw):
             if role == "RISK":
                 raw["decision"] = "NO_TRADE"
         report, calls = model_run(bulk, verifier, veto)
-        self.assertEqual(calls, ["MARKET", "RISK"])
+        self.assertEqual(calls, ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "RISK_VETO_NO_TRADE")
+        self.assertEqual(report["role_results"][-1]["effective_action"], "WAIT")
         self.assertFalse(report["execution_allowed"])
 
     def test_other_pair_scenario_cannot_supply_this_candidate_price(self):
