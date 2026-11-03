@@ -233,6 +233,129 @@ class DailyScalpingOrchestrator:
             max_spread_bps=max_spread_bps, now_epoch=now_epoch,
         )
 
+
+    def run_m07_original_source_join_readonly_once(
+            self, trace_id: str, *, api_key: str, secret_key: str,
+            funding: dict, local_ownership_db: str | None = None,
+            market: IndodaxPublicMarket | None = None,
+            ws_db_path: str | None = None,
+            min_volume_idr: Decimal = Decimal("150000000"),
+            deep_limit: int = 20) -> dict:
+        """One ORIGINAL M03 bulk -> fresh M06 View Only -> M07 sizing.
+
+        The M03 public scanner and M06 signed account reader are called here,
+        not replayed from owner JSON. Funding inputs cover ONLY the owner's
+        ticket cap and explicitly known NEW special sale holds / commitments.
+        No AI provider, Telegram decision, order transport, or LIVE permission.
+        """
+        self.settings.require_m01_safety()
+        required = {
+            "requested_ticket_ceiling_idr",
+            "new_floki_sell_rebuy_hold_idr",
+            "new_pepe_sell_rebuy_hold_idr",
+            "commitments_not_locked_idr",
+            "max_spread_bps",
+        }
+        if type(funding) is not dict or set(funding) != required:
+            raise ValueError("M07_RUNTIME_FUNDING_SCHEMA_INVALID")
+        if type(trace_id) is not str or not trace_id:
+            raise ValueError("M07_RUNTIME_TRACE_INVALID")
+        cycle = self.run_bulk_deep_cycle(
+            trace_id, market=market, ws_db_path=ws_db_path,
+            min_volume_idr=min_volume_idr, deep_limit=deep_limit,
+        )
+        bulk = cycle.bulk if type(cycle.bulk) is dict else {}
+        cohort = bulk.get("eligible_cohort")
+        cohort = cohort if type(cohort) is dict else {}
+        allowed_pairs = cohort.get("eligible_pair_ids")
+        allowed_pairs = allowed_pairs if type(allowed_pairs) is list else []
+        rows = bulk.get("provisional_market_evidence")
+        rows = rows if type(rows) is list else []
+        selected = None
+        # The ORIGINAL deep scanner assembled these source-bound rows during
+        # this call. Never choose a rejected pair or load yesterday's fixture.
+        if (bulk.get("mode") == "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY"
+                and bulk.get("shared_public_scan_context") is True):
+            for row in rows:
+                if type(row) is not dict or row.get("pair") not in allowed_pairs:
+                    continue
+                public = row.get("m07_same_candidate_public_preflight")
+                if (row.get("eligible_for_same_window_comparison") is True
+                        and row.get("trade_authorized") is False
+                        and type(public) is dict
+                        and public.get("candidate_pair") == row["pair"]
+                        and public.get("observed_pair") == row["pair"]
+                        and public.get("status") ==
+                            "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"):
+                    selected = public
+                    break
+        base = {
+            "stage": "M07_ORIGINAL_LIVE_SOURCE_JOIN_READONLY",
+            "status": "M07_NO_ELIGIBLE_M03_SAME_CYCLE_CANDIDATE",
+            "trace_id": trace_id,
+            "m03_bulk_coverage_status": bulk.get("coverage_status"),
+            "m03_eligible_cohort_status": cohort.get("status"),
+            "m03_g1_independently_verified": False,
+            "m04_risk_three_role_executable_verified": False,
+            "m05_order_specific_final_verified": False,
+            "account_all_in_fee_verified": False,
+            "m07_atomic_intent_exchange_reconciled": False,
+            "m06_authenticated_viewonly_get_count": 0,
+            "m07_main_sizing": None,
+            "candidate_pair": None,
+            "order_sent": False,
+            "execution_allowed": False,
+            "live_trading_authorized": False,
+        }
+        if selected is None:
+            self.journal.record_stage_observation(
+                trace_id + "_m07", "M07_READONLY_SOURCE_JOIN",
+                base["status"],
+            )
+            return base
+        # Avoid an authenticated query after a public observation is already
+        # unfit for the original M07 30-second freshness contract.
+        public_epoch = selected.get("observed_epoch")
+        now = int(time.time())
+        if (type(public_epoch) is not int
+                or not 0 <= now - public_epoch <= 30):
+            status = "M07_M03_PUBLIC_ALREADY_STALE_NO_PRIVATE_GET"
+            self.journal.record_stage_observation(
+                trace_id + "_m07", "M07_READONLY_SOURCE_JOIN", status,
+            )
+            return dict(base, status=status,
+                        candidate_pair=selected["candidate_pair"])
+        # EXACT original M06 two signed View Only GETs, no duplicate HTTP
+        # path and no custom credential source. External/unknown commitments
+        # cannot be silently inferred as zero by the reader.
+        account = self.inspect_m06_idr_budget_readonly_once(
+            api_key=api_key, secret_key=secret_key,
+            local_ownership_db=local_ownership_db,
+        )
+        sized = self.review_m07_owner_main_idr_sizing_offline(
+            public_candidate=selected, account_snapshot=account,
+            owner_main_source_classified=True,
+            now_epoch=int(time.time()), **funding,
+        )
+        ready_reference = sized.get("status") == (
+            "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY")
+        status = ("M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER"
+                  if ready_reference else "M07_REAL_M03_M06_JOIN_BLOCKED")
+        self.journal.record_stage_observation(
+            trace_id + "_m07", "M07_READONLY_SOURCE_JOIN", status,
+        )
+        return dict(
+            base, status=status,
+            candidate_pair=selected["candidate_pair"],
+            m06_authenticated_viewonly_get_count=account.get(
+                "requests_completed", 0),
+            m06_account_observed_epoch=account.get("account_observed_epoch"),
+            m06_open_orders_observed=account.get("all_pair_open_orders_observed"),
+            m06_idr_free_observed=account.get("exchange_idr_free_observed"),
+            m06_idr_locked_observed=account.get("exchange_idr_locked_observed"),
+            m07_main_sizing=sized,
+        )
+
     def review_m07_last_moment_gate_offline(
             self, *, limit_preview: M07LimitBuyPreflightPreview,
             public_candidate: dict | None = None,

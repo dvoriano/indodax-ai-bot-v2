@@ -86,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Explicit TAPI V2 View Only account + order GET, no trade/cancel/auto retry")
     group.add_argument("--m07-main-sizing-offline-once", action="store_true",
                        help="Original M03/M06/M07 source-shaped 0600 local preview only; no private GET or order")
+    group.add_argument("--m07-main-readonly-cycle-once", action="store_true",
+                       help="One real M03 bulk scan + original two signed M06 View Only GET + hardlocked M07 sizing; no order")
     group.add_argument("--m07-limit-preflight-offline-once", action="store_true",
                        help="Original V2 LIMIT BUY pair/min-step/fee/general IDR scenario preflight, 0600 JSON fixture, no API/trade")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
@@ -158,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
     parser.add_argument("--m07-main-sizing-file", default=None,
                         help="Absolute owner-only 0600 JSON observations/inputs, untrusted OFFLINE sizing; no credentials")
+    parser.add_argument("--m07-runtime-funding-file", default=None,
+                        help="0600 JSON of explicit MAIN order budget assumptions; no market/account snapshots or keys")
     parser.add_argument("--m07-limit-preflight-file", default=None,
                         help="Absolute 0600 JSON of hypothetical rules, quote and IDR buckets, never exchange-verified or order authorization")
     parser.add_argument("--m07-private-symbol", default=None)
@@ -202,6 +206,9 @@ def main(argv: list[str] | None = None) -> int:
         if (args.m07_main_sizing_file is not None
                 and not args.m07_main_sizing_offline_once):
             raise ConfigurationError("M07_MAIN_SIZING_FILE_ONLY_FOR_OFFLINE_REVIEW")
+        if (args.m07_runtime_funding_file is not None
+                and not args.m07_main_readonly_cycle_once):
+            raise ConfigurationError("M07_RUNTIME_FUNDING_ONLY_FOR_REAL_READONLY_CYCLE")
         if (args.m07_limit_preflight_file is not None
                 and not args.m07_limit_preflight_offline_once):
             raise ConfigurationError("M07_PREFLIGHT_FILE_ONLY_FOR_OFFLINE_REVIEW")
@@ -537,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
         if not bulk_min_volume_idr.is_finite() or bulk_min_volume_idr < 0:
             raise ConfigurationError("INVALID_BULK_MIN_VOLUME_IDR")
         if bulk_min_volume_idr != 0 and not (args.bulk_deep_once or args.scheduled_public_scanner_once or
+                                                args.m07_main_readonly_cycle_once or
                                                 (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_VOLUME_FLOOR_REQUIRES_BULK_DEEP_ONCE")
         if (type(args.bulk_deep_limit) is not int or not 20 <= args.bulk_deep_limit <= 40):
@@ -547,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.scheduled_public_scanner_once and args.bulk_deep_limit != 20:
             raise ConfigurationError("M03_SCHEDULED_BULK_LIMIT_MUST_BE_20")
         if args.bulk_deep_limit != 20 and not (args.bulk_deep_once or
+                                                  args.m07_main_readonly_cycle_once or
                                                   (args.once and args.public_scanner_mainpath)):
             raise ConfigurationError("BULK_DEEP_LIMIT_REQUIRES_BULK_DEEP_ONCE")
         if args.public_scanner_mainpath:
@@ -705,6 +714,74 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m07_main_readonly_cycle_once:
+            # Unlike offline sizing fixtures, this path runs the ORIGINAL
+            # M03 scanner once, then EXACT two M06 signed View Only GETs.
+            # Only operator-entered future liabilities / ticket cap may be
+            # supplied; no public market or wallet data can be injected.
+            settings.require_m01_safety()
+            try:
+                if (type(args.ws_db) is not str
+                        or not Path(args.ws_db).is_absolute()
+                        or not Path(args.ws_db).is_file()
+                        or Path(args.ws_db).resolve() == Path(args.db).resolve()):
+                    raise M07PreflightBlocked("M07_RUNTIME_BTC_WS_DB_REQUIRED")
+                if (type(args.m07_runtime_funding_file) is not str
+                        or not Path(args.m07_runtime_funding_file).is_absolute()):
+                    raise M07PreflightBlocked("M07_RUNTIME_FUNDING_FILE_REQUIRED")
+                raw = _owner_private_file(args.m07_runtime_funding_file)
+                keys = {
+                    "requested_ticket_ceiling_idr",
+                    "new_floki_sell_rebuy_hold_idr",
+                    "new_pepe_sell_rebuy_hold_idr",
+                    "commitments_not_locked_idr",
+                    "max_spread_bps",
+                }
+                if type(raw) is not dict or set(raw) != keys:
+                    raise M07PreflightBlocked("M07_RUNTIME_FUNDING_SCHEMA_INVALID")
+                if any(type(raw[k]) is not str or len(raw[k]) > 40
+                       or not raw[k].isascii() for k in keys):
+                    raise M07PreflightBlocked("M07_RUNTIME_FUNDING_AMOUNT_INVALID")
+                funding = {k: Decimal(raw[k]) for k in keys}
+                if (any(not v.is_finite() or v < 0 for v in funding.values())
+                        or funding["requested_ticket_ceiling_idr"] <= 0
+                        or funding["max_spread_bps"] > 500):
+                    raise M07PreflightBlocked("M07_RUNTIME_FUNDING_AMOUNT_INVALID")
+                credentials_path = _existing_v2_credentials()
+                if credentials_path is None:
+                    raise M07PreflightBlocked("M07_RUNTIME_VIEWONLY_CREDENTIALS_NOT_FOUND")
+                api_key, secret_key = read_view_only_credentials(
+                    str(credentials_path),
+                )
+                report = app.run_m07_original_source_join_readonly_once(
+                    uuid4().hex, api_key=api_key, secret_key=secret_key,
+                    funding=funding, local_ownership_db=args.m06_ownership_db,
+                    ws_db_path=args.ws_db,
+                    min_volume_idr=max(bulk_min_volume_idr,
+                                       Decimal("150000000")),
+                    deep_limit=args.bulk_deep_limit,
+                )
+            except (M07PreflightBlocked, M06ScopeDenied, ValueError,
+                    OSError, ArithmeticError, TypeError, KeyError) as exc:
+                reason = str(exc)
+                if not re.fullmatch(r"M07_RUNTIME_[A-Z0-9_]{1,90}", reason):
+                    reason = "M07_RUNTIME_SOURCE_OR_ACCOUNT_UNRESOLVED"
+                print(json.dumps({
+                    "stage": "M07_ORIGINAL_LIVE_SOURCE_JOIN_READONLY",
+                    "status": reason,
+                    "final_decision": None,
+                    "execution_allowed": False,
+                    "order_sent": False,
+                }, sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m07_original_live_source_join": report,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0 if report["status"] == (
+                "M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER") else 3
         if (args.m07_private_order_status_once
                 or args.m07_private_latest_order_once
                 or args.m07_private_14day_order_once
