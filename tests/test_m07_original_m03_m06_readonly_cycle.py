@@ -111,5 +111,26 @@ class SourceJoinWithBoundCandidate(unittest.TestCase):
                 self.assertEqual(result["status"], "M07_REAL_M03_M06_JOIN_BLOCKED")
                 self.assertFalse(result["execution_allowed"])
 
+    def test_no_cross_pair_and_no_false_trade_authority(self):
+        for mutation in ({"pair": "eth_idr"},
+                         {"trade_authorized": True},
+                         {"eligible_for_same_window_comparison": False}):
+            with self.subTest(mutation=mutation):
+                result, _, reader = self.run_case(rows=[{**self.row, **mutation}])
+                reader.assert_not_called()
+                self.assertEqual(result["status"],
+                                 "M07_NO_ELIGIBLE_M03_SAME_CYCLE_CANDIDATE")
+
+    def test_new_special_proceeds_hold_only_when_explicit(self):
+        self.funding.update(
+            new_floki_sell_rebuy_hold_idr=Decimal("200000"),
+            new_pepe_sell_rebuy_hold_idr=Decimal("10000"),
+            commitments_not_locked_idr=Decimal("1000"),
+        )
+        result, _, _ = self.run_case()
+        self.assertEqual(result["m07_main_sizing"]["main_idr_pool_scenario"],
+                         "709147")
+        self.assertFalse(result["execution_allowed"])
+
 if __name__ == "__main__":
     unittest.main()
