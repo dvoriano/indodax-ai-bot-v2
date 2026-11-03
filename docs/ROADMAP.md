@@ -227,6 +227,29 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 - [ ] Check cross-bot account balance/position ownership before LIVE coexistence. *Deteksi konflik lokal PASS; penggunaan akun dari luar SQLite V2 belum dapat dibuktikan lengkap.*
 
 ### M07: Preflight & execution
+
+**Matriks status M07, 3 November 2026:** sama prinsip dengan tabel M06. **Tanda ✅ pada kode/audit/jalur bot berarti bukti implementasi dan tes terarah yang dibatasi non-live sudah ada**, bukan BUY/SELL sah. Kolom source `main` dipisahkan dari **checkout VPS yang benar-benar dibuktikan** supaya perubahan PR#78/79 yang belum ditarik ke VPS tidak salah dicentang. Lima checklist asli di bawah adalah satu-satunya syarat `Selesai` penuh.
+
+| Item | Kode scoped | Audit terarah | Terhubung bot V2 asli (offline/readonly) | Source GitHub `main` | Checkout VPS terverifikasi | Penerimaan lengkap |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| M07-01 Official signed order/status/cancel adapter, hardlock | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M07-02 Tradability, precision, minimum, fee, spread/slippage referensi | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M07-03 Fresh source, Risk/owner, spendable dan atomic preflight fail-closed | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M07-04 UNKNOWN, partial/cancel/fill, retry/duplicate/recovery | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+| M07-05 SELL tidak melebihi bot-owned quantity | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+
+**Rekap bukti (cakupan terbatas):** **15/15** kode/audit/jalur original V2 teruji, **5/5** source sudah di GitHub `main`, **3/5** baseline/preview sesuai cakupan pernah diperlihatkan di VPS pada commit `a0a89a1`. **M07-04/05 tambahan PR#78/#79 baru terbukti di GitHub dan tes terarah; bukan checkout VPS terbaru. 0/5 penerimaan penuh M07.** Ketiga baris VPS ✅ hanya berarti source dan jalur non-live telah teramati, **bukan** order execution, Risk Final, signed submit/cancel, atau bukti akun/fee yang lengkap. Source M07-01–03 telah ada pada SHA VPS tersebut, sedangkan cabang `main` kini memuat M07-04/#78, M07-05/#79 dan M08/#80 yang lebih baru. Tidak perlu menjalankan ulang 2 GET M06/M03 yang sudah PASS untuk memutakhirkan klaim ini.
+
+**Alasan tombol Selesai masih ☐, berurutan agar finishing terarah:**
+
+- **M07-01:** kontrak official signed adapter/create/status/cancel dan hardlock sudah diuji; belum ada submit/cancel LIVE yang diotorisasi maupun bukti complete order lifecycle, dan M11 LIVE GO belum diberikan.
+- **M07-02:** aturan pair, precision/minimum, spread dan sizing referensi dari VPS sudah terbukti; fee masih PRO publik bukan fee khusus akun, serta executable depth/slippage aktual dan preflight tepat-waktu belum terverifikasi.
+- **M07-03:** M03→M06 View Only→M07 dan intent atomik **offline** sudah tersambung; G1 independen, Risk nyata, owner M05 order-specific Final, spendable/commitments terkini dan intent exchange terverifikasi masih terbuka.
+- **M07-04:** recovery shadow asli PR#78 **49/49 tes pada source saat itu PASS**; matching status/fill View Only dengan intent sintetik tidak membuktikan order dikirim bot, tidak melepaskan `UNKNOWN`, tidak menghasilkan retry, recovery/fills/settlement LIVE yang sah. Kode terbaru belum terbukti checkout VPS.
+- **M07-05:** guard original PR#79 **60/60 tes terarah pada source saat itu PASS**; M06 local receipts tidak mengesahkan lot V2. Belum ada bot-origin BUY fills, atomic SELL reservation untuk quantity milik bot, atau bukti siklus order asli. Executable SELL ceiling tetap **0**; kode terbaru belum terbukti checkout VPS.
+
+**Finishing M07 hanya setelah seluruh evidence provenance/izin nyata tersedia.** Jangan mengubah baris `[ ]` jadi `[x]` karena hasil mock/paper atau saldo akun. Tetap `NO/NO/DRY_RUN`, jangan audit ulang riwayat FLOKI/PEPE yang sudah diputuskan owner.
+
 - [ ] Official signed order/status/cancel adapter with hardlocked safe mode until LIVE GO.
 - [ ] Validate pair tradability, precision, min notional, Indodax all-in fees, spread/slippage.
 - [ ] Fresh source/Risk/owner/verified spendable IDR and idempotent order intent preflight.
