@@ -21,6 +21,10 @@ ExecStart=/usr/bin/flock -n %t/indodax-v2-m03-mainpath.lock %h/indodax-ai-bot-v2
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN
+# Secure owner 0600 policy must exist and stay fresh; still STAGED DISABLED.
+# Never claim this declares or measures every external shared-IP consumer.
+Environment=INDODAX_M03_REQUIRE_EGRESS_ADMISSION=YES
+Environment=INDODAX_M03_EGRESS_ADMISSION_FILE=%h/.config/indodax-ai-bot-v2/m03-egress-admission.json
 Environment=PYTHONDONTWRITEBYTECODE=1
 UMask=0077
 NoNewPrivileges=true
