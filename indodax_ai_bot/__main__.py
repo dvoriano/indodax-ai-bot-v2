@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal, DecisionConflictError
+from .m03_egress_admission import M03SharedEgressAdmission, M03EgressAdmissionError
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import M07PreflightBlocked
 from .m06_scoped_https import _owner_private_file
@@ -38,6 +39,39 @@ from .telegram_dedicated_inbound import (
 from .public_ws_health import public_ws_health
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
+
+
+def _m03_compact_from_original(outcome) -> dict:
+    """Only the original no-owner-Final DEEP20 outcome can be summarized."""
+    if (outcome.final_decision is not None
+            or outcome.stage_disposition != "ADVISORY_ONLY_NO_OWNER_DECISION"
+            or outcome.execution_allowed is not False):
+        raise ConfigurationError("M03_COMPACT_REQUIRES_PRE_FINAL_OBSERVATION")
+    raw = outcome.bulk if isinstance(outcome.bulk, dict) else {}
+    if (raw.get("g1_verified") is True
+            or raw.get("execution_allowed") is True
+            or raw.get("trade_authorized") is True):
+        raise ConfigurationError("M03_COMPACT_SOURCE_UNSAFE")
+    coverage = raw.get("coverage_status", "NO_BULK_EVIDENCE")
+    if (type(coverage) is not str or not 1 <= len(coverage) <= 64
+            or not all(c.isascii() and (c.isupper() or c.isdigit()
+                                        or c == "_") for c in coverage)):
+        coverage = "UNVERIFIED_COVERAGE"
+    counts = {}
+    for key in ("attempted_count", "analyzed_count"):
+        val = raw.get(key)
+        counts[key] = val if type(val) is int and 0 <= val <= 40 else None
+    return {
+        "schema_version": 1,
+        "lane": "DEEP20_EVERY_FIVE_MINUTES",
+        "coverage_status": coverage,
+        **counts,
+        "final_decision": None,
+        "stage_disposition": "ADVISORY_ONLY_NO_OWNER_DECISION",
+        "execution_allowed": False,
+        "g1_verified": False,
+        "paid_network_allowed": False,
+    }
 
 
 def _m06_fixed_budget_db() -> str:
@@ -211,6 +245,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.scheduled_public_scanner_once:
+            # Owner's user-systemd opt-in must be explicit and current.
+            # Block before creating any decision or owner ledger, and BEFORE
+            # scanner construction, public HTTP and paid adapters.
+            settings.require_m01_safety()
+            if environ.get("INDODAX_M03_REQUIRE_EGRESS_ADMISSION") != "YES":
+                raise ConfigurationError("M03_EGRESS_ADMISSION_REQUIRED")
+            try:
+                M03SharedEgressAdmission().allowed_local_limit()
+            except M03EgressAdmissionError as exc:
+                raise ConfigurationError(str(exc)) from None
         if (args.m07_offline_intent_once or args.m07_offline_unknown_once
                 or args.m07_offline_status_once):
             settings.require_m01_safety()
@@ -1470,6 +1515,15 @@ def main(argv: list[str] | None = None) -> int:
                 result["live_trading_authorized"] = False
             if args.scheduled_public_scanner_once:
                 result["scheduled_m03_lane"] = schedule_lane
+                if schedule_lane == "DEEP20_EVERY_FIVE_MINUTES":
+                    # One compact record in the EXISTING V2 journal.
+                    # Observations are not owner Final decisions, and the
+                    # summary cannot authorize either G1 or an order.
+                    compact = _m03_compact_from_original(outcome)
+                    app.journal.record_m03_compact_tick(
+                        outcome.trace_id, compact,
+                    )
+                    result["m03_compact_tick"] = compact
                 result["public_scanner"] = outcome.screening
                 result["public_bulk"] = outcome.bulk
                 result["ai_shadow"] = outcome.ai_shadow
