@@ -582,6 +582,80 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def review_m08_net_tier_exit_reference_offline(self, *,
+            account_fingerprint: str, symbol: str, client_order_id: str,
+            sell_base_qty_reference: Decimal,
+            expected_sell_gross_idr_reference: Decimal,
+            estimated_sell_all_in_fee_idr_reference: Decimal,
+            incremental_execution_slippage_idr_reference: Decimal,
+    ) -> dict:
+        """Original M08-01 T1/T2/T3 policy joined to real account BUY receipt.
+
+        Uses source-bound BUY cost incl actual tax/fees in the SAME original
+        M07 journal, not a 24h candle or owner-submitted BUY cost fixture.
+        SELL price, SELL fee and slippage are *unverified* explicit inputs.
+        Local synthetic M07 client ID and account fills are NOT proof of V2
+        ownership; report can never reserve/sell any base or create a lot.
+        """
+        self.settings.require_m01_safety()
+        source = self.review_m08_buy_position_admission_readonly(
+            account_fingerprint=account_fingerprint, symbol=symbol,
+            client_order_id=client_order_id,
+        )
+        if source["account_buy_fills_and_fees_reconciled"] is not True:
+            return {
+                "stage": "M08_ORIGINAL_NET_TIER_EXIT_OFFLINE",
+                "status": "M08_NET_TIER_BUY_COST_SOURCE_UNAVAILABLE",
+                "buy_source_status": source["status"],
+                "net_exit_reference": None,
+                "bot_owned_position_verified": False,
+                "sellable_bot_owned_base_qty": "0",
+                "order_sent": False,
+                "execution_allowed": False,
+            }
+        outcome = ScalpingPolicy().assess_position_exit_targets(
+            filled_buy_quantity=Decimal(
+                source["account_buy_qty_reference"]),
+            filled_buy_notional_idr=Decimal(
+                source["account_buy_gross_idr_reference"]),
+            allocated_buy_fees_idr=Decimal(
+                source["account_buy_fees_including_tax_idr_reference"]),
+            quantity_to_sell=sell_base_qty_reference,
+            expected_sell_notional_idr=expected_sell_gross_idr_reference,
+            estimated_sell_fees_idr=estimated_sell_all_in_fee_idr_reference,
+            incremental_slippage_idr=incremental_execution_slippage_idr_reference,
+        )
+        unresolved = self.journal.m07_offline_intent_summary()
+        return {
+            "stage": "M08_ORIGINAL_NET_TIER_EXIT_OFFLINE",
+            "status": "M08_ACCOUNT_COST_BASIS_TIER_MATH_REFERENCE_ONLY",
+            "buy_source_status": source["status"],
+            "sell_base_qty_reference": format(sell_base_qty_reference, "f"),
+            "allocated_buy_cost_including_tax_idr_reference": format(
+                outcome.allocated_cost_basis_idr,"f"),
+            "expected_sell_net_proceeds_idr_reference": format(
+                outcome.expected_net_proceeds_idr,"f"),
+            "expected_sell_net_profit_idr_reference": format(
+                outcome.expected_net_profit_idr,"f"),
+            "expected_sell_net_roi_percent_reference": format(
+                outcome.expected_net_roi_percent,"f"),
+            "reached_net_tiers_reference": list(outcome.reached_tiers),
+            "highest_reached_net_tier_reference": outcome.highest_reached_tier,
+            "buy_cost_basis_from_account_mytrades": True,
+            "sell_fee_and_slippage_exchange_verified": False,
+            "position_change_24h_used": False,
+            "original_m07_unknown_holds": unresolved["offline_unknown_holds"],
+            "original_m07_unresolved_simulated_intents":
+                unresolved["unresolved_simulated_intents"],
+            "bot_owned_position_verified": False,
+            "sellable_bot_owned_base_qty": "0",
+            "tier_order_or_qty_reserved": False,
+            "owner_m05_order_final_verified": False,
+            "realized_pnl_recorded": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def review_m08_protective_exit_reference_offline(self, *,
             account_fingerprint: str, symbol: str, client_order_id: str,
             reference_buy_fill_epoch: int, observed_epoch: int,
