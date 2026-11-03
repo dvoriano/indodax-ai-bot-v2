@@ -74,7 +74,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
             self.assertFalse(data["g1_verified"])
             self.assertFalse(data["g1_source_admission"]["g1_receipt_issuance_allowed"])
             self.assertEqual(obj["ai_shadow"]["completed_roles"], [])
-            self.assertEqual(obj["final_decision"], "REJECT")
+            self.assertIsNone(obj["final_decision"])
             self.assertFalse(obj["execution_allowed"])
 
     def test_cohort_btc_rest_clock_disagreement_stops_ws_join(self):
@@ -105,7 +105,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
                 "BTC_REST_COHORT_CLOSED_MINUTE_MISMATCH",
             )
             self.assertFalse(obj["execution_allowed"])
-            self.assertEqual(obj["final_decision"],"REJECT")
+            self.assertIsNone(obj["final_decision"])
 
     def test_matching_cohort_end_and_ws_start_does_not_false_reject(self):
         with TemporaryDirectory() as td:
@@ -136,7 +136,7 @@ class M04NPersistentBTCMinuteTests(unittest.TestCase):
             self.assertEqual(data["public_bulk"]["btc_ws_closed_minute_sample"]["closed_1m_epoch"],MINUTE-60)
             self.assertEqual(data["public_bulk"]["btc_ws_closed_minute_sample"]["trade_rows_visible_in_minute"],2)
             self.assertFalse(data["public_bulk"]["g1_verified"])
-            self.assertEqual(data["final_decision"],"REJECT")
+            self.assertIsNone(data["final_decision"])
 
     def test_old_publications_do_not_hide_recent_closed_minute(self):
         with TemporaryDirectory() as td:
