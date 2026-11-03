@@ -295,6 +295,23 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 - [ ] Post-SELL fresh rediscovery using same scanner, not automatic repurchase of previous coin.
 
 ### M09: Real-module shadow/PAPER end-to-end
+
+**Matriks M09, 3 Nov 2026:** standar wajib owner M00–M12. Centang M09-01 hanya untuk *scoped shadow mainpath* tanpa keputusan Final, order atau IDR nyata. Empat checklist utama tetap open sampai acceptance lengkap.
+
+| Item | Kode scoped | Audit terarah | Terhubung bot V2 asli (offline/readonly) | Source GitHub `main` | Checkout VPS terverifikasi | Penerimaan lengkap |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| M09-01 Original CLI M03→G1/M04→M05 advisory→M07 hardlock→M08 journal | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+| M09-02 Risk veto, stale source, MANUAL/AUTO, balance/precision/rate faults | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| M09-03 Partial/UNKNOWN/restart/duplicate dan post-SELL rediscovery full chain | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| M09-04 PAPER PnL terpisah dari exchange-confirmed settled IDR | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+
+**Rekap M09:** 1/4 kode scoped, 1/4 audit terarah, 1/4 original V2 shadow caller, 1/4 source GitHub `main`, **0/4 VPS**, **0/4 penerimaan penuh**. PR#90 original CLI source exact SHA `ecbec5b20435730cbb165118e7d07f21753a762e`, [Actions 41614588807](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/41614588807) **148/148 targeted PASS** (12 tes M09 baru). Original scanner/M04 provider and M05 local advisory tested with only public/HTTPS boundary mocked; no paid AI, private GET or trade. Source baru M09 belum diverifikasi di checkout VPS.
+
+**Alasan tombol Selesai belum boleh dicentang:**
+- **M09-01:** Original scanner/G1/M04 shadow/M05 advisory/M07 hardlock/M08 journal sudah tersambung; **belum** signed G1, tiga respons AI nyata, proposal Final owner order-specific, verified spendable M07 preflight, BUY→SELL→settled IDR, atau VPS checkout. M05 advisory bukan Final.
+- **M09-02:** Perlu satu fault-chain mainpath untuk Risk veto, stale G1, callback MANUAL/AUTO replay, balance/fee/precision/rate tanpa bypass. Tes modul lama belum membuktikan satu rantai end-to-end.
+- **M09-03:** Partial/UNKNOWN/restart/duplicate serta rediscovery telah diuji terarah pada M07/M08, tetapi belum dikaitkan dengan full original M09 settlement pipeline. UNKNOWN tidak boleh dilepas dari mock.
+- **M09-04:** Hasil M09-01 menolak PAPER sebagai IDR real, namun belum ada lifecycle PAPER virtual lengkap dengan ledger PnL terpisah dan rekonsiliasi. Nilai IDR yang benar-benar settled dari V2 belum ada.
 - [ ] End-to-end real code modules: scanner→G1→three AI→Final→preflight→executor hardlock→SELL/IDR.
 - [ ] Cover Risk veto, stale source, MANUAL/AUTO replay, quote/balance/precision and rate faults.
 - [ ] Reconcile partial/unknown/restart, duplicate prevention and post-SELL re-discovery.
