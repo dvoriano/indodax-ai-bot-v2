@@ -5,6 +5,8 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import time
+import hashlib
+import json
 import sqlite3
 import os
 import stat
@@ -802,6 +804,215 @@ class DailyScalpingOrchestrator:
             "risk_executable_verified": False,
             "realized_pnl_recorded": False,
             "order_sent": False,"execution_allowed": False,
+        }
+
+    def review_m08_sell_preflight_offline_once(self, *,
+            sell_draft: M07OrderDraft,
+            source_buy_client_order_id: str,
+            account_fingerprint: str,
+            account_uid: int,
+            local_m06_ledger_db: str,
+            observed_epoch: int,
+            expected_sell_notional_idr: Decimal,
+            estimated_sell_fees_idr: Decimal,
+            incremental_slippage_idr: Decimal,
+            observed_mark_price_idr: Decimal,
+            stop_loss_price_idr: Decimal,
+            high_watermark_price_idr: Decimal,
+            trailing_stop_price_idr: Decimal | None,
+            quote_fresh_unverified: bool,
+            pump_continuation_unverified: bool = False,
+            risk_review_clear_unverified: bool = False,
+    ) -> dict:
+        """M08-05 one ORIGINAL V2 source→tier/protective→SELL guard chain.
+
+        The supplied SELL draft is a REVIEW identity only, not an exchange
+        order intent. No bot-owned BUY exists yet, so no SELL can execute.
+        An atomic durable review in the SAME journal prevents conflicting
+        replay/reuse of this client ID, including across restart. An
+        exchange order/state change between read and write aborts the review.
+        """
+        self.settings.require_m01_safety()
+        if (type(sell_draft) is not M07OrderDraft
+                or sell_draft.side != "SELL"
+                or sell_draft.order_type != "LIMIT"
+                or sell_draft.quantity is None
+                or type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999
+                or any(type(flag) is not bool for flag in (
+                    quote_fresh_unverified,pump_continuation_unverified,
+                    risk_review_clear_unverified))):
+            raise ValueError("M08_SELL_PREFLIGHT_REVIEW_INPUT_INVALID")
+        # Official adapter format validation, but NEVER prepare/dispatch an
+        # order. Signed create/status/cancel remain hardlocked globally.
+        params = sell_draft.parameters()
+        quantity = sell_draft.quantity
+        state = self.journal.review_m08_sell_account_liabilities_offline(
+            account_fingerprint=account_fingerprint,
+            symbol=sell_draft.symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+            sell_client_order_id=sell_draft.client_order_id,
+        )
+        owned = self.review_m07_sell_quantity_ownership_offline(
+            local_m06_ledger_db=local_m06_ledger_db,
+            account_uid=account_uid, draft=sell_draft,
+        )
+        buy = self.review_m08_buy_position_admission_readonly(
+            account_fingerprint=account_fingerprint,
+            symbol=sell_draft.symbol,
+            client_order_id=source_buy_client_order_id,
+        )
+        tier = self.review_m08_net_tier_exit_reference_offline(
+            account_fingerprint=account_fingerprint,
+            symbol=sell_draft.symbol,
+            client_order_id=source_buy_client_order_id,
+            sell_base_qty_reference=quantity,
+            expected_sell_gross_idr_reference=expected_sell_notional_idr,
+            estimated_sell_all_in_fee_idr_reference=estimated_sell_fees_idr,
+            incremental_execution_slippage_idr_reference=incremental_slippage_idr,
+        )
+        holding = self.review_m08_holding_time_reference_offline(
+            account_fingerprint=account_fingerprint,
+            symbol=sell_draft.symbol,
+            client_order_id=source_buy_client_order_id,
+            observed_epoch=observed_epoch,
+            pump_continuation_unverified=pump_continuation_unverified,
+            trailing_protection_unverified=trailing_stop_price_idr is not None,
+            market_source_fresh_unverified=quote_fresh_unverified,
+            risk_review_clear_unverified=risk_review_clear_unverified,
+        )
+        protective = None
+        if holding["status"] == (
+                "M08_ACCOUNT_BUY_HOLDING_TIME_REFERENCE_NOT_BOT_OWNED"):
+            # CRITICAL: use genuine matched myTrades first BUY fill time,
+            # NEVER a user-provided fake position start.
+            protective = self.review_m08_protective_exit_reference_offline(
+                account_fingerprint=account_fingerprint,
+                symbol=sell_draft.symbol,
+                client_order_id=source_buy_client_order_id,
+                reference_buy_fill_epoch=holding[
+                    "account_first_buy_fill_epoch_reference"],
+                observed_epoch=observed_epoch,
+                observed_mark_price_idr=observed_mark_price_idr,
+                stop_loss_price_idr=stop_loss_price_idr,
+                high_watermark_price_idr=high_watermark_price_idr,
+                trailing_stop_price_idr=trailing_stop_price_idr,
+                quote_fresh_unverified=quote_fresh_unverified,
+                pump_continuation_unverified=pump_continuation_unverified,
+                risk_clear_unverified=risk_review_clear_unverified,
+            )
+        trigger = (protective["protective_trigger_reference"]
+                   if protective is not None else None)
+        if trigger == "STALE_QUOTE_PROTECTION_NEEDS_FRESH_SOURCE":
+            exit_hint = "RECHECK_STALE_REFERENCE_NO_ORDER"
+        elif trigger in ("STOP_LOSS_REVIEW","TRAILING_STOP_REVIEW",
+                         "TIME_STOP_URGENT_REVIEW"):
+            exit_hint = "PROTECTIVE_RISK_REVIEW_ONLY"
+        elif tier.get("highest_reached_net_tier_reference") is not None:
+            exit_hint = "NET_TIER_REVIEW_ONLY"
+        else:
+            exit_hint = "MONITOR_OR_UNVERIFIED_ONLY"
+        if state["global_m07_unknown_holds"]:
+            reason = "M08_SELL_PREFLIGHT_UNKNOWN_HOLD_BLOCKED"
+        elif state["sell_client_id_collision"]:
+            reason = "M08_SELL_PREFLIGHT_CLIENT_ID_COLLISION"
+        elif state["account_seen_open_sell_count"]:
+            reason = "M08_SELL_PREFLIGHT_PARTIAL_OR_PENDING_SELL"
+        elif buy["account_buy_fills_and_fees_reconciled"] is not True:
+            reason = "M08_SELL_PREFLIGHT_BUY_SOURCE_UNVERIFIED"
+        elif holding["holding_time_reference"] is None and (
+                "elapsed_seconds_from_first_buy_fill_reference"
+                not in holding):
+            reason = "M08_SELL_PREFLIGHT_BUY_TIME_UNVERIFIED"
+        else:
+            reason = "M08_SELL_PREFLIGHT_BOT_OWNED_LOT_UNVERIFIED"
+        scenario = {
+            "uid": account_uid, "source_buy_client_order_id":
+                source_buy_client_order_id,
+            "local_m06_ledger_db": local_m06_ledger_db,
+            "observed_epoch": observed_epoch,
+            "expected_sell_notional_idr": format(
+                expected_sell_notional_idr,"f"),
+            "estimated_sell_fees_idr": format(estimated_sell_fees_idr,"f"),
+            "incremental_slippage_idr": format(incremental_slippage_idr,"f"),
+            "observed_mark_price_idr": format(observed_mark_price_idr,"f"),
+            "stop_loss_price_idr": format(stop_loss_price_idr,"f"),
+            "high_watermark_price_idr": format(
+                high_watermark_price_idr,"f"),
+            "trailing_stop_price_idr": (
+                format(trailing_stop_price_idr,"f")
+                if trailing_stop_price_idr is not None else None),
+            "quote_fresh_unverified": quote_fresh_unverified,
+            "pump_continuation_unverified": pump_continuation_unverified,
+            "risk_review_clear_unverified": risk_review_clear_unverified,
+            "liability_status": state["status"],
+            "local_quantity_status": owned["status"],
+            "local_net_qty_unverified": owned["local_net_qty_unverified"],
+            "local_pending_sell_intents": owned["local_pending_sell_intents"],
+            "buy_source_status": buy["status"],
+            "tier_reference_status": tier["status"],
+            "reached_tier": tier.get("highest_reached_net_tier_reference"),
+            "protective_trigger": trigger,
+            "holding_status": holding["status"],
+            "exit_hint": exit_hint,"reason": reason,
+        }
+        draft_digest = hashlib.sha256(json.dumps(
+            params,separators=(",",":"),ensure_ascii=True
+        ).encode("ascii")).hexdigest()
+        scenario_digest = hashlib.sha256(json.dumps(
+            scenario,sort_keys=True,separators=(",",":"),ensure_ascii=True
+        ).encode("ascii")).hexdigest()
+        receipt = self.journal.record_m08_sell_preflight_denied_once(
+            account_fingerprint=account_fingerprint,
+            symbol=sell_draft.symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+            sell_client_order_id=sell_draft.client_order_id,
+            draft_digest=draft_digest,scenario_digest=scenario_digest,
+            exchange_state_digest=state["snapshot_digest"],
+            observed_epoch=observed_epoch,
+        )
+        return {
+            "stage": "M08_ORIGINAL_SELL_PREFLIGHT_OFFLINE",
+            "status": reason,
+            "exit_hint_reference": exit_hint,
+            "tier_reference_status": tier["status"],
+            "highest_net_tier_reference":
+                tier.get("highest_reached_net_tier_reference"),
+            "protective_trigger_reference": trigger,
+            "holding_time_source_status": holding["status"],
+            "owned_qty_guard_status": owned["status"],
+            "locally_observed_buy_minus_sell_base_reference":
+                owned["local_net_qty_unverified"],
+            "local_pending_sell_intents": owned["local_pending_sell_intents"],
+            "exchange_sell_viewonly_status": state["status"],
+            "exchange_partial_sell_count_reference":
+                state["account_seen_partial_sell_count"],
+            "exchange_cancelled_sell_count_reference":
+                state["account_seen_cancelled_sell_count"],
+            "exchange_filled_sell_count_reference":
+                state["account_seen_filled_sell_count"],
+            "exchange_pending_sell_base_reference":
+                state["account_seen_pending_sell_qty_reference"],
+            "exchange_status_coverage_complete": False,
+            "original_m07_unknown_holds": state["global_m07_unknown_holds"],
+            "preflight_review_replay": receipt["replay"],
+            "preflight_only_not_order_intent": True,
+            "first_buy_fill_time_from_account_trades_not_bot": (
+                holding["status"] ==
+                "M08_ACCOUNT_BUY_HOLDING_TIME_REFERENCE_NOT_BOT_OWNED"),
+            "bot_owned_buy_fill_verified": False,
+            "verified_bot_owned_base_qty": "0",
+            "maximum_executable_sell_base_qty": "0",
+            "owner_order_specific_final_verified": False,
+            "risk_executable_verified": False,
+            "account_free_asset_verified": False,
+            "sell_reservation_created": False,
+            "unknown_order_released": False,
+            "cancelled_order_qty_recredited": False,
+            "retry_allowed": False,
+            "realized_pnl_recorded": False,
+            "order_sent": False,
+            "execution_allowed": False,
         }
 
     def review_m06_account(self, *, observation: AccountObservation | None = None,

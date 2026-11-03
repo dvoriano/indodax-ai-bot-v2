@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m08-sell-preflight-offline-once", action="store_true",
+                       help="Original M08-05 tier+protective+ownership SELL REVIEW in isolated /tmp V2 SQLite only; no network, orders, ownership or LIVE")
     group.add_argument("--m07-offline-intent-once", action="store_true",
                        help="EXPLICIT synthetic-only BUY reservation in original M07 journal; NO network, real position, or trade")
     group.add_argument("--m07-offline-unknown-once", action="store_true",
@@ -156,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Opt-in PUBLIC 20..40-pair deep limit; default 20. Never trades")
     parser.add_argument("--bulk-min-volume-idr", default="0",
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
+    parser.add_argument("--m08-sell-preflight-file", default=None,
+                        help="Absolute 0600 JSON scenario in /tmp for original M08 offline non-executing SELL review only")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
     parser.add_argument("--m07-main-sizing-file", default=None,
@@ -203,6 +207,22 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if args.m08_sell_preflight_offline_once:
+            settings.require_m01_safety()
+            if (type(args.m08_sell_preflight_file) is not str
+                    or not Path(args.m08_sell_preflight_file).is_absolute()
+                    or not Path(args.m08_sell_preflight_file).resolve().is_relative_to(Path("/tmp"))
+                    or type(args.db) is not str
+                    or not Path(args.db).is_absolute()
+                    or not Path(args.db).resolve().is_relative_to(Path("/tmp"))
+                    or not Path(args.db).is_file()
+                    or type(args.m06_ownership_db) is not str
+                    or not Path(args.m06_ownership_db).is_absolute()
+                    or not Path(args.m06_ownership_db).resolve().is_relative_to(Path("/tmp"))
+                    or not Path(args.m06_ownership_db).is_file()):
+                raise ConfigurationError("M08_SELL_OFFLINE_ISOLATED_INPUT_REQUIRED")
+        elif args.m08_sell_preflight_file is not None:
+            raise ConfigurationError("M08_SELL_PREFLIGHT_FILE_ONLY_FOR_OFFLINE_REVIEW")
         if (args.m07_main_sizing_file is not None
                 and not args.m07_main_sizing_offline_once):
             raise ConfigurationError("M07_MAIN_SIZING_FILE_ONLY_FOR_OFFLINE_REVIEW")
@@ -714,6 +734,109 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m08_sell_preflight_offline_once:
+            # Original production CLI → ONE DailyScalpingOrchestrator →
+            # original M07/M08 journal and M06 ownership guard. Fixture
+            # isolated to /tmp, no credentials or network/API operations.
+            settings.require_m01_safety()
+            try:
+                fixture_path=Path(args.m08_sell_preflight_file)
+                if fixture_path.stat().st_size > 4096:
+                    raise ValueError("M08_SELL_PREFLIGHT_FIXTURE_TOO_LARGE")
+                raw=_owner_private_file(args.m08_sell_preflight_file)
+                exact={
+                    "account_fingerprint","account_uid",
+                    "source_buy_client_order_id","sell",
+                    "observed_epoch","expected_sell_notional_idr",
+                    "estimated_sell_fees_idr","incremental_slippage_idr",
+                    "observed_mark_price_idr","stop_loss_price_idr",
+                    "high_watermark_price_idr","trailing_stop_price_idr",
+                    "quote_fresh_unverified","pump_continuation_unverified",
+                    "risk_review_clear_unverified",
+                }
+                if type(raw) is not dict or set(raw) != exact:
+                    raise ValueError("M08_SELL_PREFLIGHT_FIXTURE_SCHEMA_INVALID")
+                sell=raw["sell"]
+                if (type(sell) is not dict
+                        or set(sell) != {"symbol","client_order_id",
+                                         "price","quantity"}
+                        or any(type(sell[k]) is not str for k in sell)
+                        or type(raw["account_uid"]) is not int
+                        or type(raw["observed_epoch"]) is not int
+                        or type(raw["account_fingerprint"]) is not str
+                        or type(raw["source_buy_client_order_id"]) is not str
+                        or any(type(raw[k]) is not bool for k in (
+                            "quote_fresh_unverified",
+                            "pump_continuation_unverified",
+                            "risk_review_clear_unverified"))):
+                    raise ValueError("M08_SELL_PREFLIGHT_FIXTURE_SCHEMA_INVALID")
+                amounts={}
+                for k in ("expected_sell_notional_idr",
+                          "estimated_sell_fees_idr","incremental_slippage_idr",
+                          "observed_mark_price_idr","stop_loss_price_idr",
+                          "high_watermark_price_idr"):
+                    if type(raw[k]) is not str or len(raw[k]) > 40:
+                        raise ValueError("M08_SELL_PREFLIGHT_AMOUNT_INVALID")
+                    amounts[k]=Decimal(raw[k])
+                trail=raw["trailing_stop_price_idr"]
+                if trail is not None and (type(trail) is not str
+                                          or len(trail) > 40):
+                    raise ValueError("M08_SELL_PREFLIGHT_AMOUNT_INVALID")
+                draft=M07OrderDraft(
+                    symbol=sell["symbol"],side="SELL",order_type="LIMIT",
+                    client_order_id=sell["client_order_id"],
+                    price=Decimal(sell["price"]),
+                    quantity=Decimal(sell["quantity"]),
+                )
+                report=app.review_m08_sell_preflight_offline_once(
+                    sell_draft=draft,
+                    source_buy_client_order_id=raw["source_buy_client_order_id"],
+                    account_fingerprint=raw["account_fingerprint"],
+                    account_uid=raw["account_uid"],
+                    local_m06_ledger_db=args.m06_ownership_db,
+                    observed_epoch=raw["observed_epoch"],
+                    expected_sell_notional_idr=amounts[
+                        "expected_sell_notional_idr"],
+                    estimated_sell_fees_idr=amounts[
+                        "estimated_sell_fees_idr"],
+                    incremental_slippage_idr=amounts[
+                        "incremental_slippage_idr"],
+                    observed_mark_price_idr=amounts[
+                        "observed_mark_price_idr"],
+                    stop_loss_price_idr=amounts[
+                        "stop_loss_price_idr"],
+                    high_watermark_price_idr=amounts[
+                        "high_watermark_price_idr"],
+                    trailing_stop_price_idr=(
+                        Decimal(trail) if trail is not None else None),
+                    quote_fresh_unverified=raw["quote_fresh_unverified"],
+                    pump_continuation_unverified=raw[
+                        "pump_continuation_unverified"],
+                    risk_review_clear_unverified=raw[
+                        "risk_review_clear_unverified"],
+                )
+            except (OSError,ValueError,TypeError,KeyError,ArithmeticError,
+                    InvalidOperation,DecisionConflictError,M06ScopeDenied,
+                    sqlite3.Error) as exc:
+                reason=str(exc)
+                if re.fullmatch(r"M08_[A-Z0-9_]{1,100}", reason) is None:
+                    reason="M08_SELL_PREFLIGHT_OFFLINE_UNAVAILABLE"
+                print(json.dumps({
+                    "m08_sell_preflight_offline":{
+                        "status":"UNRESOLVED","reason":reason,
+                        "order_sent":False,"execution_allowed":False,
+                    },
+                    "final_decision":None,
+                    "execution_allowed":False,
+                    "live_trading_authorized":False,
+                },sort_keys=True),file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m08_sell_preflight_offline":report,
+                "final_decision":None,"execution_allowed":False,
+                "live_trading_authorized":False,
+            },sort_keys=True))
+            return 0
         if args.m07_main_readonly_cycle_once:
             # Unlike offline sizing fixtures, this path runs the ORIGINAL
             # M03 scanner once, then EXACT two M06 signed View Only GETs.
