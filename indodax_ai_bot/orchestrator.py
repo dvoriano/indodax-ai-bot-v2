@@ -1015,6 +1015,71 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def run_m08_post_sell_rediscovery_once(self, *,
+            settlement_event_id: str, scan_trace_id: str,
+            observed_epoch: int,
+            market: IndodaxPublicMarket | None = None,
+            deep_limit: int = 20) -> dict:
+        """M08-07 one-time settlement handoff to SAME M03 public scanner.
+
+        SOURCE CONTRACT: M08-06 (not implemented/authorized yet) must
+        first emit a genuine reconciled bot-owned POSITION_SETTLED_IDR
+        in THIS DecisionJournal. Account-only fills or hypothetical
+        local PnL cannot create it. Scanning uses NEW trace/candles,
+        NO priority/exclusion for previous symbol, NEVER a previous
+        order/owner Final or an automatic BUY. Atomic claim is consumed
+        before scanning so replay, timeout and restart cannot churn.
+        """
+        self.settings.require_m01_safety()
+        if type(deep_limit) is not int or not 20 <= deep_limit <= 40:
+            raise ValueError("M08_POST_SELL_SCAN_DEEP_LIMIT_INVALID")
+        claim = self.journal.claim_m08_post_sell_rediscovery_once(
+            event_id=settlement_event_id, scan_trace_id=scan_trace_id,
+            observed_epoch=observed_epoch,
+        )
+        if not claim["rediscovery_claimed"]:
+            return {
+                "stage": "M08_ORIGINAL_POST_SELL_REDISCOVERY",
+                "status": claim["status"],
+                "settled_event_claimed": False,
+                "original_bulk_scanner_invoked": False,
+                "previous_pair_preferred_or_blacklisted": False,
+                "new_buy_proposal_created": False,
+                "prior_owner_final_reused": False,
+                "new_idr_spendable_confirmed": False,
+                "new_buy_order_or_reservation_sent": False,
+                "order_sent": False,
+                "execution_allowed": False,
+            }
+        # This is precisely the original scanner used by --bulk-deep-once.
+        # No token from the previous sale is passed, filtered, or preferred.
+        # Market and BTC evidence must be newly fetched by the same source
+        # and G1/M04/Risk/Final gates remain unverified.
+        outcome = self.run_bulk_deep_cycle(
+            scan_trace_id, market=market,
+            min_volume_idr=Decimal("150000000"),
+            deep_limit=deep_limit,
+        )
+        return {
+            "stage": "M08_ORIGINAL_POST_SELL_REDISCOVERY",
+            "status": "M08_SETTLED_EVENT_CONSUMED_ORIGINAL_SCANNER_OBSERVED",
+            "settled_event_claimed": True,
+            "original_bulk_scanner_invoked": True,
+            "scanner_trace_id": scan_trace_id,
+            "scanner_reason": outcome.reason,
+            "scanner_stage_disposition": outcome.stage_disposition,
+            "scanner_execution_allowed": outcome.execution_allowed,
+            "previous_pair_preferred_or_blacklisted": False,
+            "same_pair_reentry_requires_fresh_proposal": True,
+            "new_buy_proposal_created": False,
+            "prior_owner_final_reused": False,
+            "new_idr_spendable_confirmed": False,
+            "new_buy_order_or_reservation_sent": False,
+            "source_claim_does_not_authorize_trade": True,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def review_m06_account(self, *, observation: AccountObservation | None = None,
                            now_epoch: int) -> M06AccountDecision:
         """One original orchestrator, local offline account diagnostic only."""
