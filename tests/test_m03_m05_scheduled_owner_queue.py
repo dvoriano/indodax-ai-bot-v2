@@ -29,6 +29,18 @@ class M03ScheduledOwnerQueueTests(unittest.TestCase):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.dir = Path(temp.name)
+        self.egress = self.dir / "owner-egress.json"
+        self.egress.write_text(json.dumps({
+            "schema_version": 1,
+            "owner_approved_public_only": True,
+            "all_shared_ip_consumers_accounted": True,
+            "egress_public_ip": "8.8.8.8",  # synthetic, not VPS
+            "external_consumer_ids": ["operator-peer"],
+            "external_peak_requests_rolling_60s": 5,
+            "issued_at_epoch": NOW - 5,
+            "expires_at_epoch": NOW + 60,
+        }))
+        self.egress.chmod(0o600)
         self.ws = self.dir / "existing-ws.sqlite3"
         self.ws.write_bytes(b"NO_LIVE_WS_NEEDED_BY_SYNTHETIC_TEST")
         self.owner = self.dir / "original-owner.sqlite3"
@@ -57,6 +69,8 @@ class M03ScheduledOwnerQueueTests(unittest.TestCase):
                 "INDODAX_TRADING_ENABLED": "NO",
                 "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
                 "INDODAX_EXECUTION_MODE": "DRY_RUN",
+                "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
+                "INDODAX_M03_EGRESS_ADMISSION_FILE": str(self.egress),
             })
             if go:
                 os.environ["M05_MARKET_ADVISORY_QUEUE_GO"] = "YES"

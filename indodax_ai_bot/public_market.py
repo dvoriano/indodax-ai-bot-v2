@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 import json
+import os
 import re
 from time import time
 from typing import Any, Callable
@@ -16,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from .contracts import MarketSnapshot, SourceReceipt
 from .public_rest_budget import SharedPublicRestBudget, SharedRestBudgetError
+from .m03_egress_admission import M03SharedEgressAdmission, M03EgressAdmissionError
 
 
 class PublicDataError(ValueError):
@@ -157,6 +159,12 @@ class IndodaxPublicMarket:
         # Explicit synthetic fetch skips it unless a test injects a guard.
         self._rest_budget = (rest_budget if rest_budget is not None else
                              SharedPublicRestBudget() if fetch is None else None)
+        # Opt-in only for original M03 scheduled caller. Missing policy or
+        # unknown peer demand blocks BEFORE every real HTTP attempt.
+        mode = os.environ.get("INDODAX_M03_REQUIRE_EGRESS_ADMISSION", "NO")
+        if mode not in ("NO", "YES"):
+            raise PublicDataError("M03_EGRESS_ADMISSION_MODE_INVALID")
+        self._m03_admission = M03SharedEgressAdmission() if mode == "YES" else None
         # Per-client diagnostic only: counts attempted PUBLIC GETs in this
         # instance. No global IP accounting; no authorization impact.
         self.public_get_attempt_count = 0
@@ -179,11 +187,20 @@ class IndodaxPublicMarket:
 
     def _get(self, path: str) -> Any:
         self.public_get_attempt_count += 1
+        try:
+            allowed = (self._m03_admission.allowed_local_limit()
+                       if self._m03_admission is not None else None)
+        except M03EgressAdmissionError as exc:
+            raise PublicDataError(str(exc)) from None
         if self._rest_budget is not None:
             try:
-                self._rest_budget.reserve()
+                self._rest_budget.reserve(limit_override=allowed)
             except SharedRestBudgetError as exc:
                 raise PublicDataError(str(exc)) from None
+        elif allowed is not None:
+            # Admitted M03 never skips the original atomic quota, even
+            # when given an injected alternate transport.
+            raise PublicDataError("M03_EGRESS_LOCAL_BUDGET_REQUIRED")
         try:
             return self._fetch(path)
         except PublicDataError:

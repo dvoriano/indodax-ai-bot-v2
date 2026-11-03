@@ -53,6 +53,19 @@ class DecisionJournal:
                     reason TEXT NOT NULL
                 )"""
             )
+            # M10-05: bounded original M03 DEEP20 pre-final observation.
+            # No owner Final, quote, position, private/account data or order.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m03_compact_tick (
+                    trace_id TEXT PRIMARY KEY,
+                    lane TEXT NOT NULL
+                        CHECK(lane='DEEP20_EVERY_FIVE_MINUTES'),
+                    summary_json TEXT NOT NULL,
+                    stage_disposition TEXT NOT NULL
+                        CHECK(stage_disposition='ADVISORY_ONLY_NO_OWNER_DECISION'),
+                    execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
+                )"""
+            )
             con.execute(
                 """CREATE TABLE IF NOT EXISTS deep_scan_cursor (
                     lane TEXT PRIMARY KEY,
@@ -1865,6 +1878,78 @@ class DecisionJournal:
             ).fetchone()
             if row != (stage, reason):
                 raise DecisionConflictError("conflicting stage observation replay")
+
+
+    def record_m03_compact_tick(self, trace_id: str,
+                                summary: dict) -> None:
+        """Durable bounded DEEP20 fact only; never invent an owner Final.
+
+        Replay is idempotent only for identical source-derived summaries.
+        A conflicting record or trace with an existing Final fails closed.
+        """
+        fields = {
+            "schema_version", "lane", "coverage_status",
+            "attempted_count", "analyzed_count",
+            "final_decision", "stage_disposition",
+            "execution_allowed", "g1_verified", "paid_network_allowed",
+        }
+        if (type(trace_id) is not str or not 1 <= len(trace_id) <= 128
+                or type(summary) is not dict or set(summary) != fields
+                or type(summary["schema_version"]) is not int
+                or summary["schema_version"] != 1
+                or summary["lane"] != "DEEP20_EVERY_FIVE_MINUTES"
+                or summary["final_decision"] is not None
+                or summary["stage_disposition"] !=
+                    "ADVISORY_ONLY_NO_OWNER_DECISION"
+                or summary["execution_allowed"] is not False
+                or summary["g1_verified"] is not False
+                or summary["paid_network_allowed"] is not False):
+            raise ValueError("M03_COMPACT_PRE_FINAL_ONLY")
+        coverage = summary["coverage_status"]
+        if (type(coverage) is not str or not 1 <= len(coverage) <= 64
+                or not all(c.isascii() and
+                    (c.isupper() or c.isdigit() or c == "_")
+                    for c in coverage)):
+            raise ValueError("M03_COMPACT_COVERAGE_INVALID")
+        for key in ("attempted_count", "analyzed_count"):
+            value = summary[key]
+            if value is not None and (type(value) is not int
+                                      or not 0 <= value <= 40):
+                raise ValueError("M03_COMPACT_COUNT_INVALID")
+        if (type(summary["attempted_count"]) is int
+                and type(summary["analyzed_count"]) is int
+                and summary["analyzed_count"] > summary["attempted_count"]):
+            raise ValueError("M03_COMPACT_COUNT_INVALID")
+        payload = json.dumps(
+            summary, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+        if len(payload.encode("utf-8")) > 1024:
+            raise ValueError("M03_COMPACT_TOO_LARGE")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute(
+                "SELECT 1 FROM decisions WHERE trace_id=?", (trace_id,)
+            ).fetchone() is not None:
+                raise DecisionConflictError("M03_COMPACT_OWNER_FINAL_EXISTS")
+            con.execute(
+                "INSERT OR IGNORE INTO m03_compact_tick "
+                "(trace_id,lane,summary_json,stage_disposition,execution_allowed) "
+                "VALUES (?,?,?,?,0)",
+                (trace_id, summary["lane"], payload,
+                 summary["stage_disposition"]),
+            )
+            row = con.execute(
+                "SELECT summary_json FROM m03_compact_tick WHERE trace_id=?",
+                (trace_id,),
+            ).fetchone()
+            if row != (payload,):
+                raise DecisionConflictError("M03_COMPACT_CONFLICTING_REPLAY")
+
+    def m03_compact_count(self) -> int:
+        with self._connect() as con:
+            return int(con.execute(
+                "SELECT COUNT(*) FROM m03_compact_tick"
+            ).fetchone()[0])
 
     def stage_observation_count(self) -> int:
         with self._connect() as con:
