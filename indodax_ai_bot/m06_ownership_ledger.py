@@ -605,6 +605,133 @@ class M06OwnershipLedger:
             missing_local_buy_receipts=missing_buy,
         )
 
+    @classmethod
+    def inspect_m07_sell_quantity_readonly(cls, *,
+            db_path: str, account_uid: int, symbol: str,
+            requested_base: Decimal) -> dict:
+        """Source-limited SELL quantity gate using EXISTING M06 receipts.
+
+        An M06 local intent + fill is NOT an exchange-attested bot-owned lot.
+        The diagnostic computes an upper bound on *locally observed* quantity,
+        but the actual verified bot-owned SELL allowance stays ZERO until an
+        independently attested origination/BUY-fills/position lifecycle
+        exists. Neither a manual wallet balance nor a caller-provided bool
+        can enlarge this allowance.
+
+        SQLite opens in mode=ro, so inspecting an ownership boundary never
+        creates or edits an intent, receipt, or SELL order reservation.
+        """
+        scope = cls.account_scope_from_exchange_uid(account_uid)
+        account_hash = cls._identity(scope)
+        if (type(db_path) is not str or not db_path
+                or type(symbol) is not str or not symbol.endswith("_idr")
+                or not 5 <= len(symbol) <= 30 or symbol.lower() != symbol
+                or not symbol[:-4].isalnum()
+                or symbol[:-4].upper() in ("FLOKI", "PEPE", "USDT", "USDC")
+                or type(requested_base) is not Decimal
+                or not requested_base.is_finite()
+                or requested_base <= 0
+                or requested_base.adjusted() > 20
+                or requested_base.adjusted() < -18):
+            raise OwnershipConflict("M07_SELL_REVIEW_INPUT_INVALID")
+        p = Path(db_path).resolve(strict=False)
+        if not p.is_file():
+            raise OwnershipConflict("M07_SELL_OWNERSHIP_LEDGER_UNAVAILABLE")
+        try:
+            with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True,
+                                         timeout=5)) as db:
+                # Reuse existing ORIGINAL M06 local receipt ledger. Match
+                # BOTH immutable intent and local fill records to reject a
+                # forged/foreign trade row, not merely a symbol match.
+                bad = db.execute(
+                    "SELECT 1 FROM m06_local_fill_receipts AS r "
+                    "WHERE r.account_hash=? AND r.symbol=? AND NOT EXISTS ("
+                    "SELECT 1 FROM m06_observed_fills AS f "
+                    "JOIN m06_intents AS i ON i.order_id=r.order_id "
+                    "WHERE f.trade_id=r.trade_id "
+                    "AND f.order_id=r.order_id AND f.symbol=r.symbol "
+                    "AND i.account_hash=r.account_hash "
+                    "AND i.symbol=r.symbol AND i.side=r.side "
+                    "AND i.client_id=r.client_id) LIMIT 1",
+                    (account_hash,symbol),
+                ).fetchone()
+                if bad is not None:
+                    raise OwnershipConflict("M07_SELL_LOCAL_RECEIPT_CONFLICT")
+                rows = db.execute(
+                    "SELECT r.side,f.qty FROM m06_local_fill_receipts AS r "
+                    "JOIN m06_observed_fills AS f "
+                    "ON f.trade_id=r.trade_id AND f.order_id=r.order_id "
+                    "AND f.symbol=r.symbol "
+                    "JOIN m06_intents AS i ON i.order_id=r.order_id "
+                    "AND i.account_hash=r.account_hash "
+                    "AND i.symbol=r.symbol AND i.side=r.side "
+                    "AND i.client_id=r.client_id "
+                    "WHERE r.account_hash=? AND r.symbol=?",
+                    (account_hash,symbol),
+                ).fetchall()
+                # A local pending SELL may belong to another process or be
+                # incomplete. It is a liability and never evidence to sell
+                # the same local quantity twice.
+                outstanding_local_sell_intents = db.execute(
+                    "SELECT COUNT(*) FROM m06_intents "
+                    "WHERE account_hash=? AND symbol=? AND side='SELL'",
+                    (account_hash,symbol),
+                ).fetchone()[0]
+        except OwnershipConflict:
+            raise
+        except (sqlite3.Error, OSError, ValueError, ArithmeticError):
+            raise OwnershipConflict("M07_SELL_OWNERSHIP_LEDGER_UNAVAILABLE") from None
+        buy = Decimal("0")
+        sold = Decimal("0")
+        for side, raw in rows:
+            try:
+                qty = _amount(Decimal(raw))
+            except (ValueError, ArithmeticError, TypeError):
+                raise OwnershipConflict("M07_SELL_LOCAL_QTY_CORRUPT") from None
+            if qty <= 0 or side not in ("BUY", "SELL"):
+                raise OwnershipConflict("M07_SELL_LOCAL_RECEIPT_CONFLICT")
+            if side == "BUY":
+                buy += qty
+            else:
+                sold += qty
+        if sold > buy:
+            raise OwnershipConflict("M07_SELL_LOCAL_OVERDRAWN_RECEIPTS")
+        local_net = buy - sold
+        within_local = (
+            requested_base <= local_net
+            and outstanding_local_sell_intents == 0
+        )
+        return {
+            "stage": "M07_ORIGINAL_M06_SELL_OWNERSHIP_READONLY_GUARD",
+            "status": (
+                "M07_SELL_LOCAL_QUANTITY_EXCEEDED_OR_COMMITTED"
+                if not within_local else
+                "M07_SELL_QUANTITY_MATH_ONLY_BOT_OWNERSHIP_UNATTESTED"
+            ),
+            "symbol": symbol.upper().replace("_", ""),
+            "requested_base_qty": format(requested_base,"f"),
+            "local_buy_fill_receipt_count": sum(
+                1 for side, _ in rows if side == "BUY"),
+            "local_sell_fill_receipt_count": sum(
+                1 for side, _ in rows if side == "SELL"),
+            "local_buy_qty_unverified": format(buy,"f"),
+            "local_sell_qty_unverified": format(sold,"f"),
+            "local_net_qty_unverified": format(local_net,"f"),
+            "local_pending_sell_intents": outstanding_local_sell_intents,
+            "requested_within_local_math_only": within_local,
+            "exchange_bot_owned_buy_fills_verified": False,
+            "independent_bot_order_submission_proven": False,
+            "account_asset_spendable_verified": False,
+            "exchange_pending_sell_commitments_complete": False,
+            "bot_owned_verified_base_qty": "0",
+            "maximum_executable_sell_base_qty": "0",
+            "oversell_or_double_sell_executable": False,
+            "sell_reservation_created": False,
+            "owner_final_or_risk_can_bypass": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def record_local_intent(self, *, account_key: str, order_id: str,
                             client_id: str, symbol: str, side: str) -> None:
         account=self._identity(account_key)
