@@ -60,8 +60,12 @@ def review_m07_last_moment_sources_offline(*,
         and m.get("local_special_ledger_uid_bound") is True
         and m.get("local_rebuy_receipts_linked") is True
     )
+    # Owner 3 Nov: MAIN source classification does NOT require reconstructing
+    # a nonexistent V2 FLOKI/PEPE sale or a year-old history. This remains a
+    # non-authoritative diagnostic: future real special-token SELL proceeds,
+    # live commitments, account freshness and executable M05/RISK remain gates.
     real_spendable = (
-        account_observed and special_excluded
+        account_observed
         and m.get("all_peer_liabilities_verified") is True
         and m.get("spendable_idr_verified") is True
         and m.get("source_authenticated") is True
@@ -90,10 +94,11 @@ def review_m07_last_moment_sources_offline(*,
         missing.append("M07_LIMIT_ORDER_RULES_NOT_MET")
     if not account_observed:
         missing.append("M06_EXCHANGE_ACCOUNT_NOT_JOINED")
-    if not special_excluded:
-        missing.append("M06_FLOKI_PEPE_PROCEEDS_NOT_COMPLETE")
+    # Do not force an historical FLOKI/PEPE audit as a veto to accepting
+    # the owner's MAIN funding classification. Runtime liabilities, including
+    # any NEW special SELL proceeds, still require current reconciliation.
     if not real_spendable:
-        missing.append("M06_SPENDABLE_IDR_NOT_AUTHENTICATED")
+        missing.append("M06_FRESH_SPENDABLE_AND_NEW_SALE_HOLDS_UNVERIFIED")
     if not advisory_pass:
         missing.append("M05_SAME_SOURCE_OWNER_REVIEW_NOT_PASS")
     if journal_blocked:
