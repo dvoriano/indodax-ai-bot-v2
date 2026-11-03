@@ -6,6 +6,9 @@ No source attestation, order submission, trade or service is created.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
+from io import StringIO
+import json
 from decimal import Decimal as D
 from hashlib import sha256
 from pathlib import Path
@@ -243,6 +246,58 @@ class M08OriginalPositionAdmission(unittest.TestCase):
         self.assertFalse(m08["position_manager_admission"])
         self.assertFalse(report["bot_ownership_verified"])
         self.assertFalse(report["execution_allowed"])
+
+
+    def test_original_cli_caller_exposes_m08_no_position_after_actual_source_shape(self):
+        from indodax_ai_bot.__main__ import main
+        history={"data":[{
+            "symbol":"xrpidr","clientOrderId":CID,
+            "submitTime":CREATED_MS,"finishTime":CREATED_MS+120000,
+        }]}
+        exchange_order={
+            "symbol":SYMBOL,"clientOrderId":CID,
+            "orderId":7788,"fullOrderId":"ORDER_7788",
+            "side":"BUY","type":"LIMIT","status":"FILLED",
+            "origQty":"4","executedQty":"4","time":CREATED_MS,
+        }
+        trades={"data":[{
+            "symbol":"xrpidr","clientOrderId":CID,
+            "orderId":"ORDER_7788","isBuyer":True,"isMaker":False,
+            "tradeId":"123456789","time":CREATED_MS+1000,
+            "qty":"4","quoteQty":"100000","commission":"200",
+            "price":"25000","commissionAsset":"idr",
+        }]}
+        out=StringIO()
+        with (patch("indodax_ai_bot.__main__._existing_v2_credentials",
+                    return_value=Path("/tmp/test-view-only.json")),
+              patch("indodax_ai_bot.__main__.read_view_only_credentials",
+                    return_value=("VIEW_ONLY_KEY_TEST",
+                                  "DUMMY_SIGNING_SECRET_TEST")),
+              patch("indodax_ai_bot.m07_private_order_readonly.time.time",
+                    return_value=NOW),
+              patch("indodax_ai_bot.m07_private_order_readonly._verify_view_only_uid",
+                    return_value=777),
+              patch("indodax_ai_bot.m07_private_order_readonly._https_json",
+                    side_effect=[history,{"data":[]},exchange_order,trades]
+                    ) as http,
+              redirect_stdout(out)):
+            status=main([
+                "--m07-private-fill-fees-once",
+                "--m07-private-symbol",SYMBOL,
+                "--db",str(self.db),
+            ])
+        self.assertEqual(status,0)
+        self.assertEqual(http.call_count,4)
+        payload=json.loads(out.getvalue())
+        self.assertFalse(payload["execution_allowed"])
+        self.assertFalse(payload["live_trading_authorized"])
+        source=payload["m07_private_readonly_order"]["m08_buy_position_source"]
+        self.assertEqual(source["status"],
+                         "M08_ACCOUNT_BUY_COST_BASIS_ONLY_NOT_BOT_OWNED")
+        self.assertEqual(source["account_buy_cost_basis_idr_reference"],
+                         "100200")
+        self.assertEqual(source["sellable_bot_owned_base_qty"],"0")
+        self.assertFalse(source["position_manager_admission"])
 
 
 if __name__=="__main__":
