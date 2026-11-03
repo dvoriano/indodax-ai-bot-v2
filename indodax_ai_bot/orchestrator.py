@@ -555,6 +555,33 @@ class DailyScalpingOrchestrator:
     def inspect_m07_offline_intent_guard_once(self) -> dict:
         return self.journal.m07_offline_intent_summary()
 
+    def review_m08_buy_position_admission_readonly(self, *,
+            account_fingerprint: str, symbol: str,
+            client_order_id: str) -> dict:
+        """Original V2 position admission from existing M07 View Only ledger.
+
+        Genuine account fills can establish a quoted cost-basis observation,
+        never that this bot executed the BUY. M07's network hardlock has
+        not produced a bot-authored submit receipt, so the sellable lot is
+        ALWAYS empty. This call performs zero network requests.
+        """
+        self.settings.require_m01_safety()
+        evidence = self.journal.review_m08_account_buy_position_admission_readonly(
+            account_fingerprint=account_fingerprint,
+            symbol=symbol,client_order_id=client_order_id,
+        )
+        intent = self.journal.m07_offline_intent_summary()
+        return {
+            **evidence,
+            "original_m07_unknown_holds": intent["offline_unknown_holds"],
+            "original_m07_unresolved_simulated_intents":
+                intent["unresolved_simulated_intents"],
+            "owned_position_manager_registered": False,
+            "position_exit_decision": "BLOCKED_NO_BOT_OWNED_LOT",
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
     def review_m06_account(self, *, observation: AccountObservation | None = None,
                            now_epoch: int) -> M06AccountDecision:
         """One original orchestrator, local offline account diagnostic only."""

@@ -780,6 +780,117 @@ class DecisionJournal:
             )
         return {"replay":False,"execution_allowed":False}
 
+    def review_m08_account_buy_position_admission_readonly(
+        self, *, account_fingerprint: str, symbol: str,
+        client_order_id: str,
+    ) -> dict:
+        """Original journal M08 BUY-source boundary, never a bot-owned lot.
+
+        The *account* exchange order + complete myTrades fee summary form
+        evidence for a potential cost-basis reference. A matching synthetic
+        OFFLINE M07 intent is NOT proof this V2 bot submitted that order.
+        Therefore this cannot mint inventory, an M08 owned position, a SELL
+        reservation, a target order, or available token quantity.
+        """
+        if (type(account_fingerprint) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", account_fingerprint) is None
+                or type(symbol) is not str
+                or re.fullmatch(r"[A-Z0-9]{2,20}IDR",symbol) is None
+                or type(client_order_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,36}",client_order_id) is None):
+            raise DecisionConflictError("M08_POSITION_REVIEW_SCOPE_INVALID")
+        base = {
+            "stage": "M08_ORIGINAL_BUY_FILL_POSITION_ADMISSION_READONLY",
+            "status": "M08_EXCHANGE_BUY_NOT_OBSERVED",
+            "exchange_account_buy_observed": False,
+            "account_buy_fills_and_fees_reconciled": False,
+            "account_buy_qty_reference": None,
+            "account_buy_gross_idr_reference": None,
+            "account_buy_fees_including_tax_idr_reference": None,
+            "account_buy_cost_basis_idr_reference": None,
+            "local_synthetic_intent_correlation_only": False,
+            "independent_bot_order_submit_attested": False,
+            "bot_owned_buy_fill_proven": False,
+            "verified_bot_owned_lots": 0,
+            "verified_bot_owned_base_qty": "0",
+            "sellable_bot_owned_base_qty": "0",
+            "position_manager_admission": False,
+            "m08_sell_target_authorized": False,
+            "m08_time_exit_authorized": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+        with self._connect() as con:
+            order = con.execute(
+                "SELECT full_order_id,side,status,executed_qty,provenance "
+                "FROM m07_exchange_readonly_orders WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (account_fingerprint,symbol,client_order_id),
+            ).fetchone()
+            if order is None:
+                return base
+            if order[4] != "INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER":
+                raise DecisionConflictError("M08_POSITION_ORDER_SOURCE_INVALID")
+            if order[1] != "BUY":
+                return dict(base,status="M08_EXCHANGE_ORDER_NOT_BUY")
+            base["exchange_account_buy_observed"] = True
+            if order[2] != "FILLED":
+                return dict(base,status="M08_BUY_FILL_INCOMPLETE_OR_UNSETTLED")
+            fill = con.execute(
+                "SELECT full_order_id,side,qty_base,gross_quote_idr,"
+                "commission_including_tax_idr,net_quote_idr,fill_count,"
+                "fill_digest,provenance "
+                "FROM m07_exchange_readonly_fill_summaries WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (account_fingerprint,symbol,client_order_id),
+            ).fetchone()
+            if fill is None:
+                return dict(base,status="M08_BUY_FILL_FEE_RECEIPTS_MISSING")
+            if (fill[0] != order[0] or fill[1] != "BUY"
+                    or fill[8] != "INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"
+                    or type(fill[6]) is not int or not 1 <= fill[6] < 1000
+                    or type(fill[7]) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}",fill[7]) is None):
+                raise DecisionConflictError("M08_BUY_FILL_RECEIPT_IDENTITY_CONFLICT")
+            try:
+                qty,gross,fees,cost = (
+                    Decimal(fill[i]) for i in range(2,6))
+                executed = Decimal(order[3])
+            except (ValueError,ArithmeticError,TypeError):
+                raise DecisionConflictError("M08_BUY_COST_SOURCE_CORRUPT") from None
+            if (any(not v.is_finite() or v >= Decimal("1e28")
+                    for v in (qty,gross,fees,cost,executed))
+                    or qty <= 0 or gross <= 0 or fees < 0
+                    or fees > gross or qty != executed
+                    or cost != gross + fees):
+                raise DecisionConflictError("M08_BUY_COST_OR_QUANTITY_CONFLICT")
+            shadow = con.execute(
+                "SELECT r.account_fingerprint,r.symbol,"
+                "r.client_order_id,r.full_order_id,r.executed_qty,"
+                "r.order_status "
+                "FROM m07_readonly_intent_recovery_shadow AS r "
+                "JOIN m07_offline_order_intents AS i ON "
+                "i.intent_id=r.intent_id "
+                "WHERE i.client_order_id=?",
+                (client_order_id,),
+            ).fetchone()
+            if shadow is not None:
+                if (shadow[:4] != (account_fingerprint,symbol,
+                                   client_order_id,order[0])
+                        or Decimal(shadow[4]) != qty
+                        or shadow[5] != "FILLED"):
+                    raise DecisionConflictError("M08_LOCAL_SHADOW_SOURCE_CONFLICT")
+            return {
+                **base,
+                "status": "M08_ACCOUNT_BUY_COST_BASIS_ONLY_NOT_BOT_OWNED",
+                "account_buy_fills_and_fees_reconciled": True,
+                "account_buy_qty_reference": format(qty,"f"),
+                "account_buy_gross_idr_reference": format(gross,"f"),
+                "account_buy_fees_including_tax_idr_reference": format(fees,"f"),
+                "account_buy_cost_basis_idr_reference": format(cost,"f"),
+                "local_synthetic_intent_correlation_only": shadow is not None,
+            }
+
     def m07_offline_intent_summary(self) -> dict:
         """Anonymized original journal status; no account/API/order secrets."""
         with self._connect() as con:
