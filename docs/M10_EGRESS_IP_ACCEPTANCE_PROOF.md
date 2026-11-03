@@ -50,7 +50,7 @@ try:
     else:
         result["quota_file_present"] = True
         # Opening RO does not authorize live requests or modify quota rows.
-        with sqlite3.connect(path.absolute().as_uri() + "?mode=ro",
+        with sqlite3.connect(path.absolute().as_uri() + "?mode=ro&immutable=1",
                              uri=True, timeout=1.0) as con:
             con.execute("PRAGMA query_only=ON")
             present = {row[0] for row in con.execute(
