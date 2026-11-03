@@ -121,19 +121,60 @@ class SourceJoinWithBoundCandidate(unittest.TestCase):
         self.assertFalse(result["m05_order_specific_final_verified"])
         self.assertFalse(result["execution_allowed"])
 
-    def test_ranked_fallback_rejects_missing_fee_or_pair_rules_before_account(self):
+    def test_ranked_fallback_unready_public_rules_still_reads_m06_viewonly(self):
         row = dict(self.row)
         row["m07_same_candidate_public_preflight"] = {
             **row["m07_same_candidate_public_preflight"],
             "status": "M07_PUBLIC_RULES_OR_FEES_NOT_READY",
         }
         result, _, reader = self.run_ranked_only(fallback_row=row)
-        reader.assert_not_called()
+        reader.assert_called_once()
         self.assertEqual(result["status"],
-                         "M07_NO_READY_PUBLIC_PAIR_RULES_OR_FEE_REFERENCE")
-        self.assertEqual(
-            result["m03_candidate_rejection_counts"][
-                "no_valid_source_bound_public_rules_or_fee"], 1)
+            "M07_REAL_M03_M06_READONLY_JOINED_PUBLIC_RULES_UNVERIFIED")
+        self.assertEqual(result["m06_authenticated_viewonly_get_count"], 2)
+        self.assertEqual(result["m03_public_boundary_status_counts"],
+                         {"M07_PUBLIC_RULES_OR_FEES_NOT_READY": 1})
+        self.assertFalse(result["m03_selected_order_reference_ready"])
+        self.assertEqual(result["m07_main_sizing"]["status"],
+                         "M07_MAIN_SIZING_PUBLIC_RULES_OR_FEE_UNREADY")
+        self.assertIsNone(result["m07_main_sizing"]["sized_qty_base_reference"])
+        self.assertFalse(result["execution_allowed"])
+
+
+    def test_real_missing_public_pair_flags_does_not_block_viewonly_read(self):
+        # The official /api/pairs example does not always supply optional
+        # suspension/maintenance fields. M07 may inspect account safely,
+        # but MUST NOT invent ACTIVE or a BUY order for such a pair.
+        from tests.test_m03_public_quote_friction_mainpath import public_observation
+        from indodax_ai_bot.deep_analysis import DeepCandidate
+        obs = replace(
+            public_observation(bids=()),
+            pair_rule_fields={key: val for key, val in RULES.items()
+                              if key not in ("is_market_suspended", "is_maintenance")},
+        )
+        with patch.object(self.bot.journal, "record_and_compare_public_wall",
+                          return_value={"status": "UNATTESTED"}):
+            row = self.bot._attach_public_wall_experience(
+                DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None), obs).summary()
+        public = row["m07_same_candidate_public_preflight"]
+        self.assertTrue(public["same_candidate_and_closed_minute"])
+        self.assertEqual(public["status"], "M07_PUBLIC_PAIR_RULES_MISSING_OR_EXCLUDED")
+        result, _, reader = self.run_ranked_only(fallback_row=row)
+        reader.assert_called_once()
+        self.assertEqual(result["m06_authenticated_viewonly_get_count"], 2)
+        self.assertEqual(result["m07_main_sizing"]["status"],
+                         "M07_MAIN_SIZING_PUBLIC_RULES_OR_FEE_UNREADY")
+        self.assertFalse(result["execution_allowed"])
+
+    def test_bad_same_source_identity_still_denies_private_get(self):
+        row = dict(self.row)
+        row["m07_same_candidate_public_preflight"] = {
+            **row["m07_same_candidate_public_preflight"],
+            "same_candidate_and_closed_minute": False,
+        }
+        result, _, reader = self.run_ranked_only(fallback_row=row)
+        reader.assert_not_called()
+        self.assertEqual(result["status"], "M07_NO_READY_PUBLIC_PAIR_RULES_OR_FEE_REFERENCE")
 
     def test_ranked_fallback_never_bypasses_cohort_misalignment(self):
         result, _, reader = self.run_ranked_only(
