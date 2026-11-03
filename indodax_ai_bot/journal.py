@@ -7,6 +7,8 @@ import json
 import re
 from decimal import Decimal
 from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from contextlib import contextmanager
 from typing import Iterator
 from pathlib import Path
@@ -259,6 +261,43 @@ class DecisionJournal:
                     FOREIGN KEY(event_id)
                       REFERENCES m08_position_settled_idr_events(event_id)
                 )"""
+            )
+            # M09-04: PAPER trades are a distinct, visibly SIMULATED
+            # namespace in THIS original journal. No exchange order UID,
+            # clientOrderId, wallet/account fingerprint, owner Final, or
+            # POSITION_SETTLED_IDR can be recorded through these tables.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m09_paper_simulated_buys (
+                    paper_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    buy_qty TEXT NOT NULL,
+                    buy_price_idr TEXT NOT NULL,
+                    buy_all_in_fee_idr TEXT NOT NULL,
+                    buy_epoch INTEGER NOT NULL,
+                    source TEXT NOT NULL CHECK(
+                        source='M09_PAPER_SCENARIO_ONLY'
+                    )
+                )"""
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m09_paper_simulated_sells (
+                    paper_exit_id TEXT PRIMARY KEY,
+                    paper_id TEXT NOT NULL,
+                    sell_qty TEXT NOT NULL,
+                    sell_price_idr TEXT NOT NULL,
+                    sell_all_in_fee_idr TEXT NOT NULL,
+                    incremental_slippage_idr TEXT NOT NULL,
+                    paper_net_pnl_idr TEXT NOT NULL,
+                    sell_epoch INTEGER NOT NULL,
+                    source TEXT NOT NULL CHECK(
+                        source='M09_PAPER_SCENARIO_ONLY'
+                    ),
+                    FOREIGN KEY(paper_id) REFERENCES m09_paper_simulated_buys(paper_id)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS m09_paper_sell_parent "
+                "ON m09_paper_simulated_sells(paper_id,sell_epoch)"
             )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
@@ -1479,6 +1518,275 @@ class DecisionJournal:
             "spendable_idr_authorized": False,
             "order_sent": False,
             "execution_allowed": False,
+        }
+
+    @staticmethod
+    def _m09_paper_id(value: str, prefix: str) -> str:
+        """Dedicated paper ID namespace, never an Indodax clientOrderId."""
+        if (type(value) is not str
+                or re.fullmatch(prefix+r"[A-Za-z0-9_-]{1,30}",value)
+                is None):
+            raise DecisionConflictError("M09_PAPER_IDENTITY_INVALID")
+        return value
+
+    @staticmethod
+    def _m09_paper_decimal(value: Decimal, *, positive: bool) -> Decimal:
+        if (type(value) is not Decimal or not value.is_finite()
+                or value >= Decimal("1e25")
+                or (value <= 0 if positive else value < 0)):
+            raise DecisionConflictError("M09_PAPER_AMOUNT_INVALID")
+        return value
+
+    @staticmethod
+    def _m09_paper_epoch(value: int) -> int:
+        if type(value) is not int or not 1500000000 <= value <= 4000000000:
+            raise DecisionConflictError("M09_PAPER_EPOCH_INVALID")
+        return value
+
+    @staticmethod
+    def _m09_paper_source_only() -> dict:
+        return {
+            "source": "M09_PAPER_SCENARIO_ONLY",
+            "paper_trade_uses_simulated_prices_fees": True,
+            "paper_trade_does_not_consume_exchange_balance": True,
+            "paper_is_exchange_confirmed_fill": False,
+            "paper_is_bot_owned_real_lot": False,
+            "real_exchange_wallet_idr_delta": None,
+            "real_exchange_realized_pnl_idr": None,
+            "owner_order_final_verified": False,
+            "authenticated_exchange_settlement_verified": False,
+            "spendable_idr_authorized": False,
+            "m08_position_settled_idr_created": False,
+            "live_trading_authorized": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
+    def record_m09_paper_buy_offline(self, *, paper_id: str,
+            symbol: str, buy_qty: Decimal, buy_price_idr: Decimal,
+            buy_all_in_fee_idr: Decimal, buy_epoch: int) -> dict:
+        """Simulate an IDR BUY, NEVER create exchange order/bot-owned lot."""
+        self._m09_paper_id(paper_id,"paper_")
+        if (type(symbol) is not str
+                or re.fullmatch(r"[A-Z0-9]{2,20}IDR",symbol) is None
+                or symbol[:-3] in ("FLOKI","PEPE","USDT","USDC")):
+            raise DecisionConflictError("M09_PAPER_SYMBOL_SCOPE_INVALID")
+        qty = self._m09_paper_decimal(buy_qty,positive=True)
+        price = self._m09_paper_decimal(buy_price_idr,positive=True)
+        fee = self._m09_paper_decimal(buy_all_in_fee_idr,positive=False)
+        epoch = self._m09_paper_epoch(buy_epoch)
+        cost = qty*price+fee
+        if not cost.is_finite() or not 0 < cost < Decimal("1e25"):
+            raise DecisionConflictError("M09_PAPER_BUY_COST_INVALID")
+        row=(paper_id,symbol,format(qty,"f"),format(price,"f"),
+             format(fee,"f"),epoch,"M09_PAPER_SCENARIO_ONLY")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            stored=con.execute(
+                "SELECT paper_id,symbol,buy_qty,buy_price_idr,"
+                "buy_all_in_fee_idr,buy_epoch,source "
+                "FROM m09_paper_simulated_buys WHERE paper_id=?",
+                (paper_id,),
+            ).fetchone()
+            if stored is not None:
+                if stored != row:
+                    raise DecisionConflictError("M09_PAPER_BUY_REPLAY_CONFLICT")
+                replay=True
+            else:
+                con.execute(
+                    "INSERT INTO m09_paper_simulated_buys "
+                    "(paper_id,symbol,buy_qty,buy_price_idr,"
+                    "buy_all_in_fee_idr,buy_epoch,source)"
+                    "VALUES (?,?,?,?,?,?,?)",row,
+                )
+                replay=False
+        return {
+            **self._m09_paper_source_only(),
+            "status":"M09_SIMULATED_BUY_REPLAY" if replay
+                     else "M09_SIMULATED_BUY_OPEN",
+            "paper_id":paper_id,"paper_symbol":symbol,
+            "paper_buy_cost_idr":format(cost,"f"),
+            "paper_buy_qty":format(qty,"f"),
+            "replay":replay,
+        }
+
+    def record_m09_paper_sell_offline(self, *, paper_id: str,
+            paper_exit_id: str, sell_qty: Decimal,
+            sell_price_idr: Decimal, sell_all_in_fee_idr: Decimal,
+            incremental_slippage_idr: Decimal, sell_epoch: int) -> dict:
+        """Simulate partial/final SELL with allocated BUY cost, PAPER ONLY.
+
+        Explicit sell fee and incremental slippage are deducted just once.
+        Atomic per-exit receipt prevents oversell and duplicate after
+        restart, without touching real M07/M08 exchange/owned inventory.
+        """
+        self._m09_paper_id(paper_id,"paper_")
+        self._m09_paper_id(paper_exit_id,"pexit_")
+        qty=self._m09_paper_decimal(sell_qty,positive=True)
+        price=self._m09_paper_decimal(sell_price_idr,positive=True)
+        fee=self._m09_paper_decimal(sell_all_in_fee_idr,positive=False)
+        slip=self._m09_paper_decimal(
+            incremental_slippage_idr,positive=False)
+        epoch=self._m09_paper_epoch(sell_epoch)
+        gross=qty*price
+        if (not gross.is_finite() or not 0 < gross < Decimal("1e25")
+                or fee+slip > gross):
+            raise DecisionConflictError("M09_PAPER_SELL_NET_INVALID")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            parent=con.execute(
+                "SELECT symbol,buy_qty,buy_price_idr,buy_all_in_fee_idr,"
+                "buy_epoch,source FROM m09_paper_simulated_buys "
+                "WHERE paper_id=?", (paper_id,),
+            ).fetchone()
+            if parent is None:
+                raise DecisionConflictError("M09_PAPER_BUY_RECEIPT_MISSING")
+            if parent[5]!="M09_PAPER_SCENARIO_ONLY" or epoch<parent[4]:
+                raise DecisionConflictError("M09_PAPER_BUY_SOURCE_OR_TIME_INVALID")
+            try:
+                buy_qty=Decimal(parent[1])
+                buy_price=Decimal(parent[2])
+                buy_fee=Decimal(parent[3])
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M09_PAPER_BUY_RECEIPT_CORRUPT") from None
+            if (not all(x.is_finite() for x in (buy_qty,buy_price,buy_fee))
+                    or buy_qty<=0 or buy_price<=0 or buy_fee<0):
+                raise DecisionConflictError("M09_PAPER_BUY_RECEIPT_CORRUPT")
+            buy_cost=buy_qty*buy_price+buy_fee
+            allocated_cost=buy_cost*qty/buy_qty
+            projected_pnl=(gross-fee-slip)-allocated_cost
+            if not projected_pnl.is_finite():
+                raise DecisionConflictError("M09_PAPER_SELL_NET_INVALID")
+            incoming=(paper_exit_id,paper_id,format(qty,"f"),
+                      format(price,"f"),format(fee,"f"),
+                      format(slip,"f"),format(projected_pnl,"f"),
+                      epoch,"M09_PAPER_SCENARIO_ONLY")
+            previous=con.execute(
+                "SELECT paper_exit_id,paper_id,sell_qty,sell_price_idr,"
+                "sell_all_in_fee_idr,incremental_slippage_idr,"
+                "paper_net_pnl_idr,sell_epoch,source "
+                "FROM m09_paper_simulated_sells WHERE paper_exit_id=?",
+                (paper_exit_id,),
+            ).fetchone()
+            if previous is not None:
+                if previous!=incoming:
+                    raise DecisionConflictError("M09_PAPER_SELL_REPLAY_CONFLICT")
+                replay=True
+            else:
+                history=con.execute(
+                    "SELECT sell_qty,sell_epoch FROM "
+                    "m09_paper_simulated_sells WHERE paper_id=?",
+                    (paper_id,),
+                ).fetchall()
+                try:
+                    done=sum((Decimal(r[0]) for r in history),Decimal(0))
+                except (TypeError,ValueError,ArithmeticError):
+                    raise DecisionConflictError("M09_PAPER_SELL_HISTORY_CORRUPT") from None
+                if (not done.is_finite() or done<0 or done+qty>buy_qty
+                        or any(type(r[1]) is not int or r[1]>epoch
+                               for r in history)):
+                    raise DecisionConflictError("M09_PAPER_OVERSELL_OR_TIME_CONFLICT")
+                con.execute(
+                    "INSERT INTO m09_paper_simulated_sells "
+                    "(paper_exit_id,paper_id,sell_qty,sell_price_idr,"
+                    "sell_all_in_fee_idr,incremental_slippage_idr,"
+                    "paper_net_pnl_idr,sell_epoch,source) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",incoming,
+                )
+                replay=False
+            total=con.execute(
+                "SELECT sell_qty,paper_net_pnl_idr FROM "
+                "m09_paper_simulated_sells WHERE paper_id=?",
+                (paper_id,),
+            ).fetchall()
+            cumulative_qty=sum((Decimal(t[0]) for t in total),Decimal(0))
+            cumulative_pnl=sum((Decimal(t[1]) for t in total),Decimal(0))
+        if cumulative_qty>buy_qty:
+            raise DecisionConflictError("M09_PAPER_OVERSELL_OR_TIME_CONFLICT")
+        return {
+            **self._m09_paper_source_only(),
+            "status":"M09_PAPER_CLOSED" if cumulative_qty==buy_qty
+                     else "M09_PAPER_PARTIAL",
+            "paper_id":paper_id,"paper_exit_id":paper_exit_id,
+            "paper_exit_net_pnl_idr":format(projected_pnl,"f"),
+            "paper_position_total_net_pnl_idr":
+                format(cumulative_pnl,"f"),
+            "paper_remaining_qty":format(buy_qty-cumulative_qty,"f"),
+            "replay":replay,
+        }
+
+    def review_m09_paper_pnl_offline(self, *,
+            day_wib: str | None = None) -> dict:
+        """Virtual PAPER realized-at-simulated-SELL only, WIB day boundary.
+
+        Never references the exchange IDR balance or real settlement
+        events. Day grouping is based on simulated SELL time in WIB.
+        """
+        if day_wib is not None:
+            if (type(day_wib) is not str
+                    or re.fullmatch(r"\d{4}-\d{2}-\d{2}",day_wib)
+                    is None):
+                raise DecisionConflictError("M09_PAPER_WIB_DATE_INVALID")
+            try:
+                if datetime.strptime(day_wib,"%Y-%m-%d").strftime(
+                        "%Y-%m-%d")!=day_wib:
+                    raise ValueError("bad date")
+            except ValueError:
+                raise DecisionConflictError("M09_PAPER_WIB_DATE_INVALID") from None
+        wib=ZoneInfo("Asia/Jakarta")
+        with self._connect() as con:
+            buys=con.execute(
+                "SELECT paper_id,buy_qty,source "
+                "FROM m09_paper_simulated_buys",
+            ).fetchall()
+            sells=con.execute(
+                "SELECT paper_id,sell_qty,paper_net_pnl_idr,"
+                "sell_epoch,source FROM m09_paper_simulated_sells",
+            ).fetchall()
+        all_qty={}
+        for pid,raw_qty,source in buys:
+            if source!="M09_PAPER_SCENARIO_ONLY":
+                raise DecisionConflictError("M09_PAPER_RECEIPT_CORRUPT")
+            try:
+                qty=Decimal(raw_qty)
+            except (TypeError,ValueError,ArithmeticError):
+                raise DecisionConflictError("M09_PAPER_RECEIPT_CORRUPT") from None
+            if not qty.is_finite() or qty<=0:
+                raise DecisionConflictError("M09_PAPER_RECEIPT_CORRUPT")
+            all_qty[pid]=qty
+        totals={pid:Decimal(0) for pid in all_qty}
+        relevant=[]
+        for pid,qty_raw,pnl_raw,epoch,source in sells:
+            if source!="M09_PAPER_SCENARIO_ONLY" or pid not in totals:
+                raise DecisionConflictError("M09_PAPER_RECEIPT_CORRUPT")
+            try:
+                qty=Decimal(qty_raw)
+                pnl=Decimal(pnl_raw)
+                day=datetime.fromtimestamp(epoch,wib).strftime("%Y-%m-%d")
+            except (TypeError,ValueError,ArithmeticError,OverflowError):
+                raise DecisionConflictError("M09_PAPER_RECEIPT_CORRUPT") from None
+            if (not qty.is_finite() or not pnl.is_finite() or qty<=0):
+                raise DecisionConflictError("M09_PAPER_RECEIPT_CORRUPT")
+            totals[pid]+=qty
+            if day_wib is None or day==day_wib:
+                relevant.append(pnl)
+        if any(totals[pid]>all_qty[pid] for pid in totals):
+            raise DecisionConflictError("M09_PAPER_RECEIPT_OVERSELL_CORRUPT")
+        net=sum(relevant,Decimal(0))
+        return {
+            **self._m09_paper_source_only(),
+            "stage":"M09_VIRTUAL_PAPER_PNL_SEPARATE",
+            "status":"M09_PAPER_ONLY_NOT_EXCHANGE_REALIZED",
+            "day_wib_filter":day_wib,
+            "paper_buy_count":len(buys),
+            "paper_exit_count":len(relevant),
+            "paper_open_or_partial_positions":sum(
+                qty<all_qty[pid] for pid,qty in totals.items()),
+            "paper_fully_closed_positions":sum(
+                qty==all_qty[pid] for pid,qty in totals.items()),
+            "paper_positive_exit_count":sum(x>0 for x in relevant),
+            "paper_negative_exit_count":sum(x<0 for x in relevant),
+            "paper_net_pnl_idr_reference":format(net,"f"),
         }
 
     def m07_offline_intent_summary(self) -> dict:
