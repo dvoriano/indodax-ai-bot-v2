@@ -140,12 +140,13 @@ class M04MarketGroundedEvidenceTests(unittest.TestCase):
                              {"status": "UNAVAILABLE", "source_ref": None,
                               "value": None})
 
-    def test_risk_no_trade_veto_still_prevents_strategy(self):
+    def test_risk_no_trade_veto_keeps_strategy_advisory_and_blocks_order(self):
         caller = RoleCaller(risk="NO_TRADE")
         report = signed_role_run(caller)
-        self.assertEqual(caller.calls, ["MARKET", "RISK"])
-        self.assertEqual(report["completed_roles"], ["MARKET", "RISK"])
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
+        self.assertEqual(report["completed_roles"], ["MARKET", "RISK", "STRATEGY"])
         self.assertEqual(report["reason"], "RISK_VETO_NO_TRADE")
+        self.assertEqual(report["role_results"][-1]["effective_action"], "WAIT")
         self.assertFalse(report["execution_allowed"])
 
     def test_public_unsigned_source_does_not_even_call_market(self):
