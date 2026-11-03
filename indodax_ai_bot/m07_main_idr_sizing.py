@@ -76,6 +76,10 @@ def assess_m07_owner_main_idr_sizing_offline(*,
     if (p.get("stage") != "M07_SAME_CANDIDATE_PUBLIC_PREFLIGHT"
             or p.get("status") != "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
             or p.get("same_candidate_and_closed_minute") is not True
+            or p.get("execution_allowed") is not False
+            or p.get("order_sent") is not False
+            or p.get("public_fee_source_only") is not True
+            or p.get("per_account_fee_verified") is not False
             or p.get("observed_pair") != pair
             or type(pair) is not str or not pair.endswith("_idr")
             or pair[:-4].upper() in ("PEPE", "FLOKI", "USDT", "USDC")
@@ -88,6 +92,7 @@ def assess_m07_owner_main_idr_sizing_offline(*,
             or a.get("view_only_permissions_verified") is not True
             or a.get("requests_completed") != 2
             or a.get("execution_allowed") is not False
+            or a.get("order_sent") is not False
             or type(account_epoch) is not int
             or not 0 <= now_epoch - account_epoch <= 30
             or type(a.get("all_pair_open_orders_observed")) is not int
