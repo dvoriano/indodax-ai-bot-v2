@@ -233,6 +233,13 @@ def _read_and_record_order(*, journal, symbol: str,
         "executed_base_qty_observed": str(order.executed_qty),
         "observation_replayed": result["replay"],
         "recorded_in_original_journal": True,
+        # The same original journal now compares authenticated account order
+        # status with immutable OFFLINE-only intent facts, atomically. Never
+        # claim an actual exchange submit, ownership, or a released hold.
+        "local_intent_recovery_reference_status": result.get(
+            "recovery_reference_status", "M07_RECOVERY_NOT_LINKED"),
+        "local_intent_recovery_not_bot_ownership": True,
+        "local_intent_retry_allowed": False,
         "discovered_from_recent_history": history_discovered,
         "history_window_full_account_verified": False,
         "exchange_account_response_authenticated": True,
