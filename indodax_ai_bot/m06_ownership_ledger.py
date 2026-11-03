@@ -91,6 +91,49 @@ class M06ReceiptWindowReview:
         return "<M06ReceiptWindowReview REDACTED>"
 
 
+
+@dataclass(frozen=True, repr=False)
+class M06ScopedSpecialReceiptJoin:
+    """Bounded input vs existing local M06 receipts; not exchange settlement."""
+    symbol: str
+    checked_fills: int
+    matched_local_manual_sell_receipts: int
+    matched_local_rebuy_buy_receipts: int
+    missing_local_sell_receipts: int
+    missing_local_buy_receipts: int
+    full_history_verified: bool = False
+    source_authentication_verified: bool = False
+    exchange_settlement_verified: bool = False
+    source_funds_spendable_verified: bool = False
+    rebuy_hold_release_allowed: bool = False
+    execution_allowed: bool = False
+
+    def __repr__(self):
+        return "<M06ScopedSpecialReceiptJoin REDACTED; OFFLINE ONLY>"
+
+    def safe_summary(self) -> dict:
+        return {
+            "stage": "M06_SCOPED_RECEIPT_JOIN_OFFLINE",
+            "symbol": self.symbol,
+            "checked_fills": self.checked_fills,
+            "matched_local_manual_sell_receipts":
+                self.matched_local_manual_sell_receipts,
+            "matched_local_rebuy_buy_receipts":
+                self.matched_local_rebuy_buy_receipts,
+            "missing_local_sell_receipts":
+                self.missing_local_sell_receipts,
+            "missing_local_buy_receipts":
+                self.missing_local_buy_receipts,
+            "full_history_verified": False,
+            "source_authentication_verified": False,
+            "exchange_settlement_verified": False,
+            "source_funds_spendable_verified": False,
+            "rebuy_hold_release_allowed": False,
+            "execution_allowed": False,
+            "order_sent": False,
+        }
+
+
 class M06OwnershipLedger:
     """Persist deterministic local intents, reject foreign/replayed fill identities.
 
@@ -415,6 +458,151 @@ class M06OwnershipLedger:
         return M06ReceiptWindowReview(
             checked_fills=len(fills), matched_local_receipts=found,
             unlinked_fills=len(fills) - found,
+        )
+
+    @classmethod
+    def review_scoped_special_receipts_readonly_offline(
+            cls, *, db_path: str, account_uid: int, symbol: str,
+            orders: tuple[OrderRecord, ...],
+            fills: tuple[FillRecord, ...],
+    ) -> M06ScopedSpecialReceiptJoin:
+        """Match ALREADY parsed scoped fills to same UID local immutable rows.
+
+        Does not fetch an exchange endpoint, persist any rows, grant owner
+        authority or infer absence of earlier/later FLOKI/PEPE trades.
+        A mismatch in a PRESENT receipt is a hard error, never "missing".
+        """
+        if (type(symbol) is not str or symbol not in ("flokiidr", "pepeidr")
+                or type(orders) is not tuple or type(fills) is not tuple
+                or len(orders) >= 1000 or len(fills) >= 1000):
+            raise OwnershipConflict("M06_SCOPED_JOIN_INPUT_INVALID")
+        account_hash = cls._identity(cls.account_scope_from_exchange_uid(account_uid))
+        # Existing audited RO inspector checks UID bound, ownership and 0600
+        # file/0700 directory without migrating or creating SQLite.
+        cls.inspect_existing_account_readonly(
+            db_path=db_path, account_uid=account_uid,
+        )
+        order_by_id = {}
+        for order in orders:
+            if (type(order) is not OrderRecord or order.symbol != symbol
+                    or order.side not in ("SELL", "BUY")
+                    or order.bot_owned_verified is not False
+                    or type(order.client_order_id) is not str
+                    or not order.client_order_id
+                    or order.order_id in order_by_id):
+                raise OwnershipConflict("M06_SCOPED_JOIN_ORDER_INVALID")
+            order_by_id[order.order_id] = order
+        prepared = []
+        ids = set()
+        for fill in fills:
+            if (type(fill) is not FillRecord or fill.symbol != symbol
+                    or fill.bot_owned_verified is not False
+                    or fill.trade_id in ids):
+                raise OwnershipConflict("M06_SCOPED_JOIN_FILL_INVALID")
+            ids.add(fill.trade_id)
+            order=order_by_id.get(fill.order_id)
+            if (order is None or fill.client_order_id != order.client_order_id
+                    or fill.is_buyer is None
+                    or fill.is_buyer != (order.side == "BUY")):
+                raise OwnershipConflict("M06_SCOPED_JOIN_FILL_UNLINKED")
+            try:
+                _amount(fill.quantity)
+                _amount(fill.price)
+                _amount(fill.commission)
+                if fill.quantity <= 0 or fill.price <= 0:
+                    raise ValueError("M06_SCOPED_JOIN_FILL_NONPOSITIVE")
+                if fill.quote_quantity is not None:
+                    _amount(fill.quote_quantity)
+                if fill.commission_asset is not None and (
+                        type(fill.commission_asset) is not str
+                        or fill.commission_asset.lower() not in (
+                            "idr", "floki", "pepe")):
+                    raise ValueError("M06_SCOPED_JOIN_FEE_CURRENCY")
+                if fill.commission_asset is None and fill.commission != 0:
+                    raise ValueError("M06_SCOPED_JOIN_FEE_UNKNOWN")
+                amount = _amount(fill.quantity * fill.price)
+                if fill.quote_quantity is not None:
+                    amount = max(amount, fill.quote_quantity)
+                if order.side == "BUY" and (
+                        type(fill.commission_asset) is str
+                        and fill.commission_asset.lower() == "idr"):
+                    amount = _amount(amount + fill.commission)
+                if amount <= 0:
+                    raise ValueError("M06_SCOPED_JOIN_AMOUNT_INVALID")
+            except (ValueError, TypeError, ArithmeticError):
+                raise OwnershipConflict("M06_SCOPED_JOIN_ECONOMICS_INVALID") from None
+            asset = symbol[:-3].upper()
+            evidence = [
+                account_hash, asset, order.order_id, order.client_order_id,
+                fill.trade_id, fill.order_id, fill.client_order_id,
+                fill.symbol, str(fill.quantity), str(fill.price),
+                str(fill.quote_quantity) if fill.quote_quantity is not None else None,
+                str(fill.commission), fill.commission_asset, fill.is_buyer,
+            ]
+            digest=hashlib.sha256(json.dumps(
+                evidence,separators=(",",":"),ensure_ascii=True,
+            ).encode("ascii")).hexdigest()
+            prepared.append((fill.trade_id,order.side,asset,
+                             order.order_id,str(amount),digest))
+        matched_sell=matched_buy=missing_sell=missing_buy=0
+        try:
+            p=Path(os.path.abspath(db_path))
+            with closing(sqlite3.connect(p.as_uri() + "?mode=ro",
+                                         uri=True,timeout=2)) as db:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                names = {
+                    row[0] for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                for trade_id,side,asset,oid,amount,digest in prepared:
+                    table = ("m06_scoped_external_sell_receipts"
+                             if side=="SELL"
+                             else "m06_scoped_rebuy_buy_observations")
+                    other = ("m06_scoped_rebuy_buy_observations"
+                             if side=="SELL"
+                             else "m06_scoped_external_sell_receipts")
+                    if other in names and db.execute(
+                        "SELECT 1 FROM "+other+" WHERE trade_id=?",
+                        (trade_id,),
+                    ).fetchone() is not None:
+                        raise OwnershipConflict("M06_SCOPED_JOIN_CROSS_SIDE_COLLISION")
+                    if table not in names:
+                        if side=="SELL":
+                            missing_sell+=1
+                        else:
+                            missing_buy+=1
+                        continue
+                    column=("gross_idr" if side=="SELL"
+                            else "observed_outflow_idr")
+                    row=db.execute(
+                        "SELECT account_hash,asset,order_id,"+column+
+                        ",receipt_sha256 FROM "+table+" WHERE trade_id=?",
+                        (trade_id,),
+                    ).fetchone()
+                    if row is None:
+                        if side=="SELL":
+                            missing_sell+=1
+                        else:
+                            missing_buy+=1
+                        continue
+                    if row != (account_hash,asset,oid,amount,digest):
+                        raise OwnershipConflict("M06_SCOPED_JOIN_LOCAL_RECEIPT_CONFLICT")
+                    if side=="SELL":
+                        matched_sell+=1
+                    else:
+                        matched_buy+=1
+        except OwnershipConflict:
+            raise
+        except (sqlite3.Error,OSError,ValueError,ArithmeticError):
+            raise OwnershipConflict("M06_SCOPED_JOIN_LEDGER_UNAVAILABLE") from None
+        return M06ScopedSpecialReceiptJoin(
+            symbol=symbol, checked_fills=len(prepared),
+            matched_local_manual_sell_receipts=matched_sell,
+            matched_local_rebuy_buy_receipts=matched_buy,
+            missing_local_sell_receipts=missing_sell,
+            missing_local_buy_receipts=missing_buy,
         )
 
     def record_local_intent(self, *, account_key: str, order_id: str,

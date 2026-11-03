@@ -548,6 +548,21 @@ class DailyScalpingOrchestrator:
             "order_sent":False,
         }
 
+    def review_m06_special_source_receipts_offline(
+            self, *, db_path: str, account_uid: int,
+            symbol: str, orders: tuple, fills: tuple) -> dict:
+        """Original orchestrator -> existing M06 RO UID-scoped ledger.
+
+        This accepts bounded parsed test/source records only; caller cannot
+        attest that origin, history, settlement or money is spendable.
+        No private GET, ledger write, or real order.
+        """
+        self.settings.require_m01_safety()
+        return M06OwnershipLedger.review_scoped_special_receipts_readonly_offline(
+            db_path=db_path, account_uid=account_uid,
+            symbol=symbol,orders=orders,fills=fills,
+        ).safe_summary()
+
     def inspect_m06_idr_budget_readonly_once(
             self, *, api_key: str, secret_key: str,
             local_ownership_db: str | None = None) -> dict:
