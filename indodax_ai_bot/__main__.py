@@ -70,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m08-post-sell-rediscovery-offline-once",
+                       action="store_true",
+                       help="One original M08-07 settled-IDR source gate to same public scanner; isolated /tmp journal only, no BUY")
     group.add_argument("--m08-sell-preflight-offline-once", action="store_true",
                        help="Original M08-05 tier+protective+ownership SELL REVIEW in isolated /tmp V2 SQLite only; no network, orders, ownership or LIVE")
     group.add_argument("--m07-offline-intent-once", action="store_true",
@@ -158,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Opt-in PUBLIC 20..40-pair deep limit; default 20. Never trades")
     parser.add_argument("--bulk-min-volume-idr", default="0",
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
+    parser.add_argument("--m08-settled-event-id", default=None,
+                        help="M08-07 event identity in original /tmp DecisionJournal; cannot inject settlement evidence")
     parser.add_argument("--m08-sell-preflight-file", default=None,
                         help="Absolute 0600 JSON scenario in /tmp for original M08 offline non-executing SELL review only")
     parser.add_argument("--m07-intent-id", default=None,
@@ -207,6 +212,20 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if args.m08_post_sell_rediscovery_offline_once:
+            settings.require_m01_safety()
+            if (type(args.m08_settled_event_id) is not str
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                        args.m08_settled_event_id)
+                    or type(args.db) is not str
+                    or not Path(args.db).is_absolute()
+                    or not Path(args.db).resolve().is_relative_to(Path("/tmp"))
+                    or not Path(args.db).is_file()):
+                raise ConfigurationError(
+                    "M08_POST_SELL_ORIGINAL_TMP_EVENT_REQUIRED")
+        elif args.m08_settled_event_id is not None:
+            raise ConfigurationError(
+                "M08_SETTLEMENT_EVENT_ID_ONLY_FOR_OFFLINE_HANDOFF")
         if args.m08_sell_preflight_offline_once:
             settings.require_m01_safety()
             if (type(args.m08_sell_preflight_file) is not str
@@ -734,6 +753,40 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m08_post_sell_rediscovery_offline_once:
+            # No fabricated settlement, private key, stale proposal reuse,
+            # previous-pair bias, or BUY. Only future canonical M08-06
+            # event may claim and invoke original PUBLIC scanner once.
+            settings.require_m01_safety()
+            try:
+                result = app.run_m08_post_sell_rediscovery_once(
+                    settlement_event_id=args.m08_settled_event_id,
+                    scan_trace_id=uuid4().hex,
+                    observed_epoch=int(time.time()),
+                    deep_limit=20,
+                )
+            except (ValueError,DecisionConflictError,PublicDataError,
+                    sqlite3.Error) as exc:
+                reason=str(exc)
+                if re.fullmatch(r"M08_[A-Z0-9_]{1,100}",reason) is None:
+                    reason="M08_POST_SELL_HANDOFF_UNAVAILABLE"
+                print(json.dumps({
+                    "m08_post_sell_rediscovery":{
+                        "status":reason,
+                        "settled_event_claimed":False,
+                        "original_bulk_scanner_invoked":False,
+                        "execution_allowed":False,
+                    },
+                    "final_decision":None,"execution_allowed":False,
+                    "live_trading_authorized":False,
+                },sort_keys=True),file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m08_post_sell_rediscovery":result,
+                "final_decision":None,"execution_allowed":False,
+                "live_trading_authorized":False,
+            },sort_keys=True))
+            return 0
         if args.m08_sell_preflight_offline_once:
             # Original production CLI → ONE DailyScalpingOrchestrator →
             # original M07/M08 journal and M06 ownership guard. Fixture
