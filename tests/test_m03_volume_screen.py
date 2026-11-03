@@ -104,7 +104,7 @@ class M03VolumeFloorTests(unittest.TestCase):
                     "volume-insufficient", market=fake.client(),
                     min_volume_idr=Decimal("150000000"),
                 )
-            self.assertEqual(result.final_decision.value, "REJECT")
+            self.assertIsNone(result.final_decision)
             self.assertFalse(result.execution_allowed)
             self.assertIsNone(result.bulk)
             self.assertIn("BULK_SHORTLIST_BELOW_REQUESTED_LIMIT", result.reason)
