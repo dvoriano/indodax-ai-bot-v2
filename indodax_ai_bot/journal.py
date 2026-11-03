@@ -151,6 +151,27 @@ class DecisionJournal:
                     PRIMARY KEY(account_fingerprint,symbol,client_order_id)
                 )"""
             )
+            # M08-02: the SAME original journal, account-only myTrades
+            # partial-fill timestamps, bound to the immutable fill digest.
+            # No synthetic/later observation may create bot-owned inventory.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m08_account_buy_trade_times (
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    full_order_id TEXT NOT NULL,
+                    fill_digest TEXT NOT NULL,
+                    first_trade_ms INTEGER NOT NULL,
+                    last_trade_ms INTEGER NOT NULL,
+                    provenance TEXT NOT NULL CHECK(
+                        provenance='INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY'
+                    ),
+                    PRIMARY KEY(account_fingerprint,symbol,client_order_id),
+                    FOREIGN KEY(account_fingerprint,symbol,client_order_id)
+                      REFERENCES m07_exchange_readonly_fill_summaries(
+                        account_fingerprint,symbol,client_order_id)
+                )"""
+            )
             # M07-04: immutable OFFLINE draft facts for new synthetic intents.
             # Older intents have no row and MUST remain unlinked/UNKNOWN.
             # Never infer ownership from an arbitrary matching client ID.
@@ -741,7 +762,7 @@ class DecisionJournal:
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             known = con.execute(
-                "SELECT full_order_id,side,status,executed_qty FROM "
+                "SELECT full_order_id,side,status,executed_qty,created_ms FROM "
                 "m07_exchange_readonly_orders WHERE "
                 "account_fingerprint=? AND symbol=? AND client_order_id=?",
                 (account_fingerprint,fills.account_symbol,fills.client_order_id),
@@ -768,6 +789,11 @@ class DecisionJournal:
                     Decimal(old[i]) != Decimal(current[i]) for i in range(2,6)
                 ):
                     raise DecisionConflictError("M07_READONLY_FILLS_REPLAY_CONFLICT")
+                self._m08_record_account_trade_time_in_txn(
+                    con, account_fingerprint=account_fingerprint,
+                    fills=fills, created_ms=known[4],
+                    observed_ms=observed_ms,
+                )
                 return {"replay":True,"execution_allowed":False}
             con.execute(
                 "INSERT INTO m07_exchange_readonly_fill_summaries "
@@ -778,7 +804,53 @@ class DecisionJournal:
                 (account_fingerprint,fills.account_symbol,fills.client_order_id,
                  *current,observed_ms,"INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"),
             )
+            self._m08_record_account_trade_time_in_txn(
+                con, account_fingerprint=account_fingerprint,
+                fills=fills, created_ms=known[4],
+                observed_ms=observed_ms,
+            )
         return {"replay":False,"execution_allowed":False}
+
+    @staticmethod
+    def _m08_record_account_trade_time_in_txn(
+            con: sqlite3.Connection, *, account_fingerprint: str,
+            fills: M07VerifiedReadOnlyFills, created_ms: int,
+            observed_ms: int) -> None:
+        """Bind first/last TRADE times to the same original journal receipt.
+
+        Legacy account-only summaries without source timestamps remain
+        UNKNOWN. This atomic shadow cannot attest V2 bot order ownership.
+        """
+        first, last = fills.first_trade_ms, fills.last_trade_ms
+        if first is None and last is None:
+            return
+        if (type(first) is not int or type(last) is not int
+                or type(created_ms) is not int
+                or not 1_000_000_000_000 <= created_ms <= first <= last
+                or last > observed_ms
+                or last - first > 7 * 86400 * 1000):
+            raise DecisionConflictError("M08_ACCOUNT_FILL_TIME_SOURCE_CONFLICT")
+        row = (
+            account_fingerprint, fills.account_symbol, fills.client_order_id,
+            fills.full_order_id, fills.sha256, first, last,
+            "INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY",
+        )
+        old = con.execute(
+            "SELECT full_order_id,fill_digest,first_trade_ms,last_trade_ms,"
+            "provenance FROM m08_account_buy_trade_times WHERE "
+            "account_fingerprint=? AND symbol=? AND client_order_id=?",
+            (account_fingerprint,fills.account_symbol,fills.client_order_id),
+        ).fetchone()
+        if old is not None:
+            if old != row[3:]:
+                raise DecisionConflictError("M08_ACCOUNT_FILL_TIME_REPLAY_CONFLICT")
+        else:
+            con.execute(
+                "INSERT INTO m08_account_buy_trade_times "
+                "(account_fingerprint,symbol,client_order_id,full_order_id,"
+                "fill_digest,first_trade_ms,last_trade_ms,provenance) "
+                "VALUES (?,?,?,?,?,?,?,?)", row,
+            )
 
     def review_m08_account_buy_position_admission_readonly(
         self, *, account_fingerprint: str, symbol: str,
@@ -808,6 +880,9 @@ class DecisionJournal:
             "account_buy_gross_idr_reference": None,
             "account_buy_fees_including_tax_idr_reference": None,
             "account_buy_cost_basis_idr_reference": None,
+            "account_first_buy_fill_epoch_reference": None,
+            "account_last_buy_fill_epoch_reference": None,
+            "account_buy_fill_timestamp_source": "UNAVAILABLE",
             "local_synthetic_intent_correlation_only": False,
             "independent_bot_order_submit_attested": False,
             "bot_owned_buy_fill_proven": False,
@@ -822,7 +897,8 @@ class DecisionJournal:
         }
         with self._connect() as con:
             order = con.execute(
-                "SELECT full_order_id,side,status,executed_qty,provenance "
+                "SELECT full_order_id,side,status,executed_qty,provenance,"
+                "created_ms "
                 "FROM m07_exchange_readonly_orders WHERE "
                 "account_fingerprint=? AND symbol=? AND client_order_id=?",
                 (account_fingerprint,symbol,client_order_id),
@@ -839,7 +915,7 @@ class DecisionJournal:
             fill = con.execute(
                 "SELECT full_order_id,side,qty_base,gross_quote_idr,"
                 "commission_including_tax_idr,net_quote_idr,fill_count,"
-                "fill_digest,provenance "
+                "fill_digest,provenance,verified_at_ms "
                 "FROM m07_exchange_readonly_fill_summaries WHERE "
                 "account_fingerprint=? AND symbol=? AND client_order_id=?",
                 (account_fingerprint,symbol,client_order_id),
@@ -864,6 +940,28 @@ class DecisionJournal:
                     or fees > gross or qty != executed
                     or cost != gross + fees):
                 raise DecisionConflictError("M08_BUY_COST_OR_QUANTITY_CONFLICT")
+            # Only trade timestamps validated against the exact original
+            # filled order and receipt digest qualify as account-time
+            # reference. A submitted order timestamp is NOT a fill.
+            time_row = con.execute(
+                "SELECT full_order_id,fill_digest,first_trade_ms,last_trade_ms,"
+                "provenance FROM m08_account_buy_trade_times WHERE "
+                "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                (account_fingerprint,symbol,client_order_id),
+            ).fetchone()
+            first_epoch = last_epoch = None
+            if time_row is not None:
+                if (time_row[0] != order[0] or time_row[1] != fill[7]
+                        or time_row[4] !=
+                        "INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"
+                        or type(time_row[2]) is not int
+                        or type(time_row[3]) is not int
+                        or not 1_000_000_000_000 <= order[5]
+                        <= time_row[2] <= time_row[3] <= fill[9]):
+                    raise DecisionConflictError(
+                        "M08_ACCOUNT_FILL_TIME_SOURCE_CONFLICT")
+                first_epoch = time_row[2] // 1000
+                last_epoch = time_row[3] // 1000
             shadow = con.execute(
                 "SELECT r.account_fingerprint,r.symbol,"
                 "r.client_order_id,r.full_order_id,r.executed_qty,"
@@ -888,6 +986,11 @@ class DecisionJournal:
                 "account_buy_gross_idr_reference": format(gross,"f"),
                 "account_buy_fees_including_tax_idr_reference": format(fees,"f"),
                 "account_buy_cost_basis_idr_reference": format(cost,"f"),
+                "account_first_buy_fill_epoch_reference": first_epoch,
+                "account_last_buy_fill_epoch_reference": last_epoch,
+                "account_buy_fill_timestamp_source": (
+                    "INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"
+                    if first_epoch is not None else "UNAVAILABLE"),
                 "local_synthetic_intent_correlation_only": shadow is not None,
             }
 
