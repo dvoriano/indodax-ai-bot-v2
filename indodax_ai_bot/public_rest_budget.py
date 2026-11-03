@@ -2,7 +2,9 @@
 
 A rolling 60-second SQLite quota is reserved BEFORE each outgoing GET.
 It is not exchange IP telemetry and cannot count non-V2 apps/other hosts,
-NAT peers, or manual curl. Fail-closed on exhausted/unavailable storage.
+NAT peers, or manual curl. A lower declared peer cap sticks across V2
+processes using the SAME DB, including callers without the M03 policy.
+Fail-closed on exhausted/unavailable storage.
 No exchange credentials, response bodies, or market data stored.
 """
 from __future__ import annotations
@@ -40,21 +42,26 @@ class SharedPublicRestBudget:
         self.clock = clock or time.time
 
     def reserve(self, *, limit_override: int | None = None) -> int:
-        """Atomic reservation with BEGIN IMMEDIATE; no automatic refunds.
+        """Reserve one public GET with a shared, sticky conservative peer cap.
 
-        A request that times out may still reach the exchange, so its
-        reservation remains until the 60-second rolling window expires.
+        A lowered cap is durable in the SAME V2 cross-process SQLite file.
+        V2 clients without an egress policy cannot silently revert to 168
+        after another V2 client declares a smaller external headroom.
+        The cap only decreases; removing the policy does NOT raise it.
+        An explicit separately reviewed reset procedure is required before
+        any increase. This still does not measure traffic outside V2.
         """
         if (limit_override is not None
                 and (type(limit_override) is not int
                      or not 1 <= limit_override <= 168)):
             raise SharedRestBudgetError("INVALID_PUBLIC_SHARED_RATE_LIMIT")
-        effective_limit = min(self.limit, limit_override) if limit_override is not None else self.limit
         now = self.clock()
         if isinstance(now, bool) or not isinstance(now, (int, float)) or not (0 < now < 1e12):
             raise SharedRestBudgetError("INVALID_PUBLIC_SHARED_RATE_CLOCK")
-        # Any V2 reader/writer running under the same service account must
-        # share this file. No implicit remote IP-wide coordination is claimed.
+        # Every cooperating real V2 transport uses this SAME DB, including
+        # transports without M03 admission enabled.
+        blocked = False
+        used_next = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with sqlite3.connect(self.path, timeout=2.0) as con:
@@ -63,18 +70,55 @@ class SharedPublicRestBudget:
                     "CREATE TABLE IF NOT EXISTS rest_get_reservations "
                     "(id INTEGER PRIMARY KEY, requested_at REAL NOT NULL)"
                 )
-                con.execute("DELETE FROM rest_get_reservations WHERE requested_at <= ?",
-                            (now - 60.0,))
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS rest_shared_egress_cap "
+                    "(id INTEGER PRIMARY KEY CHECK(id=1), "
+                    "max_local_requests_60s INTEGER NOT NULL "
+                    "CHECK(max_local_requests_60s BETWEEN 1 AND 168))"
+                )
+                saved_row = con.execute(
+                    "SELECT max_local_requests_60s "
+                    "FROM rest_shared_egress_cap WHERE id=1"
+                ).fetchone()
+                if saved_row is None:
+                    durable_cap = 168
+                elif (type(saved_row[0]) is not int
+                      or not 1 <= saved_row[0] <= 168):
+                    raise SharedRestBudgetError("PUBLIC_SHARED_REST_CAP_INVALID")
+                else:
+                    durable_cap = saved_row[0]
+                if limit_override is not None and limit_override < durable_cap:
+                    durable_cap = limit_override
+                    con.execute(
+                        "INSERT INTO rest_shared_egress_cap "
+                        "(id,max_local_requests_60s) VALUES (1,?) "
+                        "ON CONFLICT(id) DO UPDATE SET "
+                        "max_local_requests_60s=excluded.max_local_requests_60s",
+                        (durable_cap,),
+                    )
+                effective_limit = min(self.limit, durable_cap)
+                con.execute(
+                    "DELETE FROM rest_get_reservations WHERE requested_at <= ?",
+                    (now - 60.0,),
+                )
                 used = int(con.execute(
                     "SELECT COUNT(*) FROM rest_get_reservations"
                 ).fetchone()[0])
                 if used >= effective_limit:
-                    raise SharedRestBudgetError("PUBLIC_SHARED_REST_RATE_BUDGET_EXCEEDED")
-                con.execute(
-                    "INSERT INTO rest_get_reservations (requested_at) VALUES (?)",
-                    (now,),
+                    # Do not raise before context-manager COMMIT: an exhausted
+                    # request must still durably propagate the lowered cap.
+                    blocked = True
+                else:
+                    con.execute(
+                        "INSERT INTO rest_get_reservations (requested_at) VALUES (?)",
+                        (now,),
+                    )
+                    used_next = used + 1
+            if blocked:
+                raise SharedRestBudgetError(
+                    "PUBLIC_SHARED_REST_RATE_BUDGET_EXCEEDED"
                 )
-            return used + 1
+            return used_next
         except SharedRestBudgetError:
             raise
         except (sqlite3.Error, OSError, ValueError):
