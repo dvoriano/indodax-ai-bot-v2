@@ -7,6 +7,9 @@ UNKNOWN, creates a bot-owned lot, or mints a sellable position.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout,redirect_stderr
+from io import StringIO
+import json
 from dataclasses import replace
 from decimal import Decimal as D
 from pathlib import Path
@@ -264,6 +267,79 @@ class OriginalM08SellPreflightTests(unittest.TestCase):
         self.m06.unlink()
         with self.assertRaises(Exception):
             self.review()
+
+    def test_original_cli_calls_same_preflight_and_cannot_send_order(self):
+        from indodax_ai_bot.__main__ import main
+        self.record_buy()
+        path=self.db.parent/"m08-sell-fixture.json"
+        raw={
+            "account_fingerprint":ACCOUNT_A,"account_uid":self.uid,
+            "source_buy_client_order_id":CID,
+            "sell":{"symbol":SYMBOL,"client_order_id":"m08cli001",
+                    "price":"28000","quantity":"4"},
+            "observed_epoch":self.observed,
+            "expected_sell_notional_idr":"112000",
+            "estimated_sell_fees_idr":"500",
+            "incremental_slippage_idr":"100",
+            "observed_mark_price_idr":"28000",
+            "stop_loss_price_idr":"22000",
+            "high_watermark_price_idr":"28000",
+            "trailing_stop_price_idr":"26000",
+            "quote_fresh_unverified":True,
+            "pump_continuation_unverified":False,
+            "risk_review_clear_unverified":False,
+        }
+        path.write_text(json.dumps(raw))
+        path.chmod(0o600)
+        args=[
+            "--m08-sell-preflight-offline-once",
+            "--m08-sell-preflight-file",str(path),
+            "--m06-ownership-db",str(self.m06),
+            "--db",str(self.db),
+        ]
+        stdout=StringIO()
+        with redirect_stdout(stdout):
+            exit_code=main(args)
+        self.assertEqual(exit_code,0)
+        reply=json.loads(stdout.getvalue())
+        self.assertFalse(reply["live_trading_authorized"])
+        self.assertFalse(reply["execution_allowed"])
+        report=reply["m08_sell_preflight_offline"]
+        self.assertEqual(report["highest_net_tier_reference"],"T3")
+        self.assertFalse(report["sell_reservation_created"])
+        self.assertTrue(report["preflight_only_not_order_intent"])
+        self.assertFalse(report["order_sent"])
+        replay=StringIO()
+        with redirect_stdout(replay):
+            exit_again=main(args)
+        self.assertEqual(exit_again,0)
+        self.assertTrue(json.loads(replay.getvalue())[
+            "m08_sell_preflight_offline"]["preflight_review_replay"])
+
+    def test_original_cli_rejects_untrusted_extra_json_fields(self):
+        from indodax_ai_bot.__main__ import main
+        path=self.db.parent/"m08-invalid-fixture.json"
+        path.write_text(json.dumps({
+            "INDODAX_ALLOW_LIVE_EXECUTION":"YES",
+            "api_key":"DO_NOT_USE_ME",
+        }))
+        path.chmod(0o600)
+        stdout,stderr=StringIO(),StringIO()
+        with redirect_stdout(stdout),redirect_stderr(stderr):
+            code=main([
+                "--m08-sell-preflight-offline-once",
+                "--m08-sell-preflight-file",str(path),
+                "--m06-ownership-db",str(self.m06),
+                "--db",str(self.db),
+            ])
+        self.assertEqual(code,3)
+        self.assertNotIn("DO_NOT_USE_ME",stderr.getvalue())
+        self.assertFalse(stdout.getvalue())
+        self.assertFalse(json.loads(stderr.getvalue())["execution_allowed"])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m08_offline_sell_preflight_receipts"
+            ).fetchone()[0],0)
 
     def test_concurrent_idempotent_review_only_one_receipt(self):
         self.record_buy()
