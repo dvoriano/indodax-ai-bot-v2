@@ -112,6 +112,8 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 
 ## 3. CHECKLIST PEKERJAAN M00–M12
 
+**STANDAR MATRIKS STATUS WAJIB MULAI 3 NOVEMBER 2026, UNTUK SETIAP M00–M12 YANG DIPERIKSA SELANJUTNYA:** tampilkan tabel per **butir checklist asli**, dengan tujuh kolom tetap: `Item | Kode scoped | Audit terarah | Terhubung bot V2 asli | Source GitHub main | Checkout VPS terverifikasi | Penerimaan lengkap`. Setiap kolom dicentang **secara independen** hanya dengan bukti sesuai lingkup: kode ada, tes targeted PASS (sertakan SHA), caller resmi teruji, source sudah merged di `main`, commit source terbukti ter-checkout di VPS, dan seluruh acceptance asli telah benar-benar dipenuhi. **Checkout VPS tidak sama dengan tes VPS, deploy systemd, LIVE atau bukti order.** Jika tes spesifik tidak dijalankan di VPS, sebutkan secara eksplisit. Bila sebuah checklist baru memenuhi bagian referensi/offline, centang hanya *kode scoped/audit/jalur* yang terbukti, **jangan** `Penerimaan lengkap`. Untuk item tanpa implementasi yang relevan, biarkan ☐; jangan membuat mock/fixture sebagai bukti riil. Berikan rekap tiap kolom dan **satu alasan finishing per item yang belum selesai**, terikat bukti SHA/register Bagian 4. **M06–M08 dijadikan contoh; milestone lain diisi saat diperiksa, tanpa mengulang tes PASS atau membuat checklist duplikat.** Angka `[x]`/`[ ]` asli dan total hanya berubah bila acceptance asli tertutup, bukan karena bertambahnya tabel atau subtask.
+
 **`[x]` = item pekerjaan yang sudah didefinisikan dan telah memenuhi acceptance; `[ ]` = item yang belum memenuhi acceptance.** Angka bukan persentase kesiapan LIVE. **Pengujian PASS, staging, hasil canary, atau sub-bukti dari sebuah item `[ ]` dicatat di register bukti Bagian 4, tidak menambah item `[x]` baru.** Konversi item lama dari `[ ]` menjadi `[x]` harus menurunkan jumlah terbuka tepat satu. Bila benar-benar ada kebutuhan baru, definisikan dahulu sebagai `[ ]` dengan cakupan dan persetujuan owner yang jelas, bukan langsung `[x]`. Unit test-only PASS tidak memenuhi checklist integrasi; jangan catat tes gagal.
 
 | Milestone | Selesai `[x]` | Belum `[ ]` |
@@ -207,15 +209,15 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 
 ### M06: Account and protected capital
 
-**Centang kemajuan nyata M06 per 1 November 2026:** lima baris `[ ]` di bawah adalah **gerbang penerimaan lengkap**, bukan status apakah kodenya sudah dibuat. Bukti penyelesaian teknis sudah dicentang di matriks berikut dan di [OPEN_CHECKLIST_STAGES.md](OPEN_CHECKLIST_STAGES.md). **Tidak perlu mengulang 112 tes atau 4 GET private yang sudah diterima.**
+**Matriks M06 (bukti historis sampai 3 November 2026):** bukti scoped/READ ONLY dibedakan dari penerimaan modal siap trading. Kode original M06 sudah di source `main` dan checkout V2 pernah dibuktikan; klaim VPS di sini **hanya source/jalur scoped yang teramati**, bukan semua uji M06 terulang pada SHA terkini, systemd aktif, atau saldo real spendable. Empat item M06-02–05 tetap belum diterima penuh. **Tidak perlu mengulang 112 tes atau 4 GET private yang sudah diterima.**
 
-| Item | Kode | Audit terarah | Terhubung bot V2 asli | Source GitHub `main` / checkout VPS | Penerimaan lengkap |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| M06-01 View Only private scoped GO | ✅ | ✅ | ✅ | ✅ | ✅ |
-| M06-02 Free/locked IDR, shadow reserve lokal | ✅ | ✅ | ✅ | ✅ | ☐ |
-| M06-03 FLOKI 25/75 dan PEPE 30/70 + floor manual | ✅ | ✅ | ✅ | ✅ | ☐ |
-| M06-04 Receipt fill lokal dan rebuy tahan restart | ✅ | ✅ | ✅ | ✅ | ☐ |
-| M06-05 Deteksi konflik UID dan akun lintas proses | ✅ | ✅ | ✅ | ✅ | ☐ |
+| Item | Kode scoped | Audit terarah | Terhubung bot V2 asli (offline/readonly) | Source GitHub `main` | Checkout VPS terverifikasi | Penerimaan lengkap |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| M06-01 View Only private scoped GO | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| M06-02 Free/locked IDR, shadow reserve lokal | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-03 FLOKI 25/75 dan PEPE 30/70 + floor manual | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-04 Receipt fill lokal dan rebuy tahan restart | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M06-05 Deteksi konflik UID dan akun lintas proses | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
 
 **Rekap:** **15/15** kode/audit/jalur bot PASS; **5/5** source tersedia di `main` dan checkout utama VPS; **1/5** checklist besar M06 tuntas, **4/5** masih perlu bukti modal dan kepemilikan aset, bukan tambahan konfirmasi manual. M06-01 memiliki **bukti nyata private View Only empat GET pada satu sesi yang sah**, tetapi belum ada bukti kelengkapan historis akun. M06-02–05 masih mengunci `spendable_capital_verified=false`, `cross_bot_ownership_verified=false`, `bot_owned_fills_verified=false`, dan `execution_allowed=false`. Kolom `main/VPS` bermakna **source terpasang**, bukan pemanggilan otomatis di systemd atau izin akses exchange tanpa GO. Jalur diagnostik aman selesai; jalur otorisasi modal/ownership belum selesai.
 
@@ -257,6 +259,33 @@ Pada pemeriksaan GitHub **31 Oktober 2026**, PR#18–#26 tetap **OPEN/DRAFT**, d
 - [ ] Never SELL over bot-owned verified quantity; scoped fault tests before authorization.
 
 ### M08: Position, SELL dan settled IDR
+
+**Matriks status M08 per 3 November 2026:** mengikuti format M06/M07 dan standar wajib M00–M12. Kode/audit/integrasi ✅ berarti **bagian scoped yang benar-benar diuji pada original V2**; untuk M08-03, itu baru **observasi BUY akun dan cost basis, bukan lot bot-owned**. Tidak ada SELL maupun settlement V2 yang terjadi. `Source GitHub main` dan `Checkout VPS` adalah dua bukti berbeda.
+
+| Item | Kode scoped | Audit terarah | Terhubung bot V2 asli (offline/readonly) | Source GitHub `main` | Checkout VPS terverifikasi | Penerimaan lengkap |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| M08-01 T1/T2/T3 2%/8%/11% netto dari BUY cost basis akun | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+| M08-02 Waktu BUY fill pertama dan kebijakan 30/60/90 menit | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+| M08-03 BUY fills, fee/cost basis akun; bot-owned lots belum sah | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M08-04 Protective stop-loss, trailing dan time-stop (offline) | ✅ | ✅ | ✅ | ✅ | ✅ | ☐ |
+| M08-05 Tier/ownership SELL preflight; partial/cancel/UNKNOWN/restart | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+| M08-06 SELL fill + wallet IDR settled + realized PnL WIB nyata | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| M08-07 Post-SELL sekali-pakai ke scanner M03 yang sama | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ |
+
+**Rekap bukti terarah:** **6/7** implementasi scoped, **6/7** audit terarah PASS, **6/7** sambungan original V2 yang diuji offline, **6/7** tersedia di `main`; **2/7** bukti source pernah ter-checkout di VPS (**M08-03 PR#80 dan M08-04 PR#82** terdapat pada checkout owner pinned `3e8cae5332f748134992d07b13f829eb1b6894f5`, 3 Nov). **Tidak ada tes spesifik M08 yang diterima dari run VPS 21/21 M07-04/05**, sehingga kedua centang VPS **hanya bukti keberadaan source di checkout**, bukan uji M08 di VPS. Perubahan M08-01 PR#84, M08-02 PR#85, M08-05 PR#86 dan M08-07 PR#87 lebih baru daripada checkout tersebut. M08-06 tidak memiliki canonical event issuer/rekonsiliasi settlement yang sah; observasi View Only dari modul lain bukan penggantinya. **0/7 penerimaan penuh M08.**
+
+**Alasan persis mengapa tombol Selesai masih ☐ dan apa yang perlu ditutup saat finishing:**
+
+- **M08-01:** PR#84 net T1/T2/T3 **95/95** scoped PASS; kalkulasi BUY cost/fee berasal dari myTrades **akun**, tetapi belum dari lot BUY bot-owned. Harga SELL/fee/slippage masih skenario, belum ada order/target SELL nyata; cek VPS untuk source baru masih terbuka.
+- **M08-02:** PR#85 **107/107** scoped PASS; timestamp earliest/latest BUY fill myTrades asli disimpan dalam journal, tetapi tidak ada BUY bot-owned, waktu/Risk/market aktual untuk posisi yang dikelola, atau acceptance M08 time-stop riil; checkout VPS perubahan baru belum dibuktikan.
+- **M08-03:** PR#80 **72/72** scoped PASS; akun BUY FILLED, fee termasuk pajak dan referensi cost basis direkonsiliasi, **bukan** bukti V2 mengirim BUY atau memiliki inventory. Perlu confirmed bot-origin submit, order/fill identity dan kepemilikan lot aman; checkout source M08-03 pernah terlihat pada VPS `3e8cae5`, tanpa tes M08 di sana.
+- **M08-04:** PR#82 **83/83** scoped PASS; stop-loss bisa menuntut keluar meski rugi, trailing/time-stop dijalankan sebagai review saja. Perlu posisi bot-owned yang nyata, harga eksekusi fresh, Risk/Final dan pengiriman SELL terotorisasi; checkout source M08-04 pernah terlihat pada VPS `3e8cae5`, tanpa tes M08 di sana.
+- **M08-05:** PR#86 **123/123** scoped PASS; satu original CLI→orchestrator→M07/M08 journal preflight mencakup tier/protective, partial/cancel/UNKNOWN, idempotent/restart, **tetapi** hanya receipt review non-eksekusi, tidak ada bot-owned SELL reservation, order/fill lifecycle atau pemulihan riil. Checkout VPS baru belum dibuktikan.
+- **M08-06:** **Belum ada** penerbit settlement riil yang menghubungkan order SELL bot-owned, confirmed fills, all-in fee, residual/UNKNOWN, wallet free/locked IDR dan realized net PnL WIB. Bukti akun/harga simulasi tidak cukup. Baru bisa ditutup setelah operasi SELL yang sah dan rekonsiliasi sebenarnya, melalui M07/M11/M12 GO terpisah; **jangan buat settled IDR atau PnL palsu**.
+- **M08-07:** PR#87 **136/136** scoped PASS; journal future `POSITION_SETTLED_IDR`→single-claim→scanner M03 yang sama sudah diuji dengan fixture terisolasi. Belum ada M08-06 event dari exchange yang sah, belum ada handoff real pasca-SELL dan checkout VPS terbaru belum terbukti; tidak ada auto-rebuy coin sebelumnya.
+
+**Gerbang M08:** `verified_bot_owned_lots=0`, `sellable_bot_owned_base_qty=0`, `execution_allowed=false` sampai bukti riil dan izin LIVE. **Semua tujuh item utama di bawah tetap `[ ]`**. Sasaran M08 bukan membuktikan kembali saldo IDR snapshot atau sejarah FLOKI/PEPE, tetapi menutup acceptance bot-owned BUY→managed SELL→wallet settled IDR tanpa double-spend. Bukti detail dan SHA tersedia pada register PASS Bagian 4.
+
 - [ ] Hubungkan policy net cost-basis T1/T2/T3 2/8/11% ke bot-owned Position Manager yang dipanggil mainpath; 12/12 scoped policy-only OFFLINE PASS tetap disimpan sebagai bukti modul.
 - [ ] Hubungkan policy waktu posisi <30m/30–60m/≥60m/≥90m ke Position Manager asli dengan input actual bot-owned fills; offline policy-only PASS tetap tersimpan.
 - [ ] Attach real exchange-confirmed BUY fills, owned lots, cost basis and fees to Position Manager.
@@ -572,6 +601,8 @@ Ini adalah **daftar pekerjaan/risiko yang masih terbuka**, bukan jurnal percobaa
 - **M10–M12:** CI runner/release automation memerlukan bukti PASS (atau pengganti setara yang disetujui), keamanan dua bot satu akun, owner explicit LIVE GO, kemudian real limited BUY→SELL→IDR exchange-confirmed pilot. Bukan tugas yang boleh dipercepat karena M03 PASS.
 
 ## 6. Cara memperbarui tracker ini
+
+**Untuk setiap milestone M00–M12 yang diperiksa mulai sekarang:** tampilkan/perbarui matriks tujuh kolom standar di Bagian 3, pertahankan butir checklist asli, dan tulis alasan finishing untuk setiap kolom `Selesai` yang masih ☐. Gunakan `✅` hanya setelah ada bukti sesuai masing-masing kolom; `☐` bila belum. Jangan satukan source GitHub dan checkout VPS, dan jangan tafsirkan checkout sebagai tes VPS, systemd, API real atau LIVE. Catat satu bukti scoped PASS di Bagian 4 tanpa memperbesar hitungan checklist. **Jangan menandai `Selesai` hanya karena 5 tahap teknis ✅.** Berlaku juga saat kembali memeriksa M00–M05/M09–M12, bukan membuat tabel kosong untuk semua milestone sekaligus.
 
 1. **Saat tes gagal:** perbaiki di branch/PR; jangan menambah FAIL ke roadmap. Unit-test PASS tetapi tidak ada caller mainpath = tetap `[ ]` integrasi.
 2. **Sebelum setiap centang `[x]` fitur runtime:** WAJIB tampilkan path & pinned SHA yang dipakai, **caller resmi → orchestrator → modul produksi → Final/ledger/output**, bukti targeted positive/negative integration test yang benar-benar mengeksekusi caller itu, dan untuk klaim ONLINE bukti installed unit serta runtime real. Bila satu mata rantai tidak terbukti, **jangan dicentang**, walaupun semua unit tests PASS. Pengecualian hanya checklist dokumentasi/berkas non-runtime yang memang sudah didefinisikan demikian.
