@@ -31,5 +31,85 @@ class MainSourceJoinTest(unittest.TestCase):
             self.assertEqual(report["status"], "M07_NO_ELIGIBLE_M03_SAME_CYCLE_CANDIDATE")
             self.assertFalse(report["execution_allowed"])
 
+from dataclasses import replace
+from indodax_ai_bot.deep_analysis import DeepCandidate
+from tests.test_m07_main_idr_sourcebound_sizing_original import NOW, RULES, account
+from tests.test_m03_public_quote_friction_mainpath import public_observation
+
+class SourceJoinWithBoundCandidate(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.bot = DailyScalpingOrchestrator(
+            Settings(), DecisionJournal(Path(self.temp.name) / "joined.db"))
+        obs = replace(public_observation(), pair_rule_fields=dict(RULES))
+        with patch.object(self.bot.journal, "record_and_compare_public_wall",
+                          return_value={"status": "UNATTESTED"}):
+            c = self.bot._attach_public_wall_experience(
+                DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None), obs)
+        self.row = c.summary()
+        self.funding = {
+            "requested_ticket_ceiling_idr": Decimal("100000"),
+            "new_floki_sell_rebuy_hold_idr": Decimal("0"),
+            "new_pepe_sell_rebuy_hold_idr": Decimal("0"),
+            "commitments_not_locked_idr": Decimal("0"),
+            "max_spread_bps": Decimal("150"),
+        }
+
+    def run_case(self, rows=None, private_report=None):
+        evidence = CycleResult("once", None, "PUBLIC_UNVERIFIED", bulk={
+            "mode": "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY",
+            "shared_public_scan_context": True,
+            "coverage_status": "ALL_SELECTED_ANALYZED_UNATTESTED",
+            "eligible_cohort": {"status": "ALIGNED_PUBLIC_UNATTESTED",
+                                "eligible_pair_ids": ["btc_idr"]},
+            "provisional_market_evidence": [self.row] if rows is None else rows,
+            "execution_allowed": False,
+        })
+        with (patch("indodax_ai_bot.orchestrator.time.time", return_value=NOW),
+              patch.object(self.bot, "run_bulk_deep_cycle",
+                           return_value=evidence) as scanner,
+              patch.object(self.bot, "inspect_m06_idr_budget_readonly_once",
+                           return_value=private_report or account()) as reader):
+            result = self.bot.run_m07_original_source_join_readonly_once(
+                "once", api_key="viewonly", secret_key="viewonly",
+                funding=self.funding)
+        return result, scanner, reader
+
+    def test_original_modules_join_and_cap_not_entire_free_balance(self):
+        result, scanner, reader = self.run_case()
+        scanner.assert_called_once()
+        reader.assert_called_once()
+        self.assertEqual(result["status"], "M07_REAL_M03_M06_REFERENCE_JOINED_NO_ORDER")
+        self.assertEqual(result["candidate_pair"], "btc_idr")
+        self.assertEqual(result["m06_idr_free_observed"], "920147")
+        self.assertEqual(result["m07_main_sizing"]["main_idr_pool_scenario"], "920147")
+        self.assertLessEqual(Decimal(result["m07_main_sizing"]["buy_max_cost_idr_reference"]),
+                             Decimal("100000"))
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["m05_order_specific_final_verified"])
+        self.assertFalse(result["account_all_in_fee_verified"])
+        self.assertFalse(result["order_sent"])
+
+    def test_stale_public_is_rejected_before_private_get(self):
+        row = dict(self.row)
+        row["m07_same_candidate_public_preflight"] = {
+            **row["m07_same_candidate_public_preflight"],
+            "observed_epoch": NOW - 90,
+        }
+        result, _, reader = self.run_case(rows=[row])
+        reader.assert_not_called()
+        self.assertEqual(result["status"], "M07_M03_PUBLIC_ALREADY_STALE_NO_PRIVATE_GET")
+
+    def test_account_open_orders_and_staleness_block_sizing(self):
+        for mutation in ({"all_pair_open_orders_observed": 1},
+                         {"account_observed_epoch": NOW - 100}):
+            with self.subTest(mutation=mutation):
+                result, _, reader = self.run_case(
+                    private_report={**account(), **mutation})
+                reader.assert_called_once()
+                self.assertEqual(result["status"], "M07_REAL_M03_M06_JOIN_BLOCKED")
+                self.assertFalse(result["execution_allowed"])
+
 if __name__ == "__main__":
     unittest.main()
