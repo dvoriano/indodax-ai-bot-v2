@@ -84,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="One View Only account/history/latest-order GET chain, 3 GET max; no known client ID required")
     group.add_argument("--m07-private-order-status-once", action="store_true",
                        help="Explicit TAPI V2 View Only account + order GET, no trade/cancel/auto retry")
+    group.add_argument("--m07-main-sizing-offline-once", action="store_true",
+                       help="Original M03/M06/M07 source-shaped 0600 local preview only; no private GET or order")
     group.add_argument("--m07-limit-preflight-offline-once", action="store_true",
                        help="Original V2 LIMIT BUY pair/min-step/fee/general IDR scenario preflight, 0600 JSON fixture, no API/trade")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
@@ -154,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
+    parser.add_argument("--m07-main-sizing-file", default=None,
+                        help="Absolute owner-only 0600 JSON observations/inputs, untrusted OFFLINE sizing; no credentials")
     parser.add_argument("--m07-limit-preflight-file", default=None,
                         help="Absolute 0600 JSON of hypothetical rules, quote and IDR buckets, never exchange-verified or order authorization")
     parser.add_argument("--m07-private-symbol", default=None)
@@ -195,6 +199,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if (args.m07_main_sizing_file is not None
+                and not args.m07_main_sizing_offline_once):
+            raise ConfigurationError("M07_MAIN_SIZING_FILE_ONLY_FOR_OFFLINE_REVIEW")
         if (args.m07_limit_preflight_file is not None
                 and not args.m07_limit_preflight_offline_once):
             raise ConfigurationError("M07_PREFLIGHT_FILE_ONLY_FOR_OFFLINE_REVIEW")
@@ -801,6 +808,62 @@ def main(argv: list[str] | None = None) -> int:
                 "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
+        if args.m07_main_sizing_offline_once:
+            # Deliberately accepts *untrusted* local observations only.
+            # This is the original CLI->orchestrator M07 preview, not a
+            # private API poll, owner Final, journal intent, or new executor.
+            settings.require_m01_safety()
+            try:
+                if (type(args.m07_main_sizing_file) is not str
+                        or not args.m07_main_sizing_file.startswith("/")):
+                    raise M07PreflightBlocked("M07_MAIN_SIZING_FILE_REQUIRED")
+                raw = _owner_private_file(args.m07_main_sizing_file)
+                required = {
+                    "public_candidate", "account_snapshot",
+                    "owner_main_source_classified", "requested_ticket_ceiling_idr",
+                    "new_floki_sell_rebuy_hold_idr",
+                    "new_pepe_sell_rebuy_hold_idr",
+                    "commitments_not_locked_idr", "max_spread_bps",
+                }
+                if (type(raw) is not dict or set(raw) != required
+                        or type(raw["public_candidate"]) is not dict
+                        or type(raw["account_snapshot"]) is not dict
+                        or type(raw["owner_main_source_classified"]) is not bool):
+                    raise M07PreflightBlocked("M07_MAIN_SIZING_FILE_SCHEMA_INVALID")
+                numeric = (
+                    "requested_ticket_ceiling_idr", "new_floki_sell_rebuy_hold_idr",
+                    "new_pepe_sell_rebuy_hold_idr",
+                    "commitments_not_locked_idr", "max_spread_bps",
+                )
+                if any(type(raw[k]) is not str or len(raw[k]) > 40
+                       or not raw[k].isascii() for k in numeric):
+                    raise M07PreflightBlocked("M07_MAIN_SIZING_AMOUNT_INVALID")
+                sized = app.review_m07_owner_main_idr_sizing_offline(
+                    public_candidate=raw["public_candidate"],
+                    account_snapshot=raw["account_snapshot"],
+                    owner_main_source_classified=raw["owner_main_source_classified"],
+                    **{k: Decimal(raw[k]) for k in numeric},
+                    now_epoch=int(time.time()),
+                )
+            except (M07PreflightBlocked, M06ScopeDenied,
+                    ArithmeticError, ValueError, TypeError, KeyError) as exc:
+                reason = str(exc)
+                if not re.fullmatch(r"M07_MAIN_SIZING_[A-Z0-9_]{1,90}", reason):
+                    reason = "M07_MAIN_SIZING_INVALID_UNTRUSTED_INPUT"
+                print(json.dumps({
+                    "m07_main_sizing": {"status":"BLOCKED", "reason":reason,
+                                         "execution_allowed":False,
+                                         "order_sent":False},
+                    "final_decision":None, "execution_allowed":False,
+                }, sort_keys=True), file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m07_main_sizing":sized,
+                "source_scope":"UNTRUSTED_LOCAL_FIXTURE_OFFLINE_ONLY",
+                "final_decision":None, "execution_allowed":False,
+                "live_trading_authorized":False,
             }, sort_keys=True))
             return 0
         if args.m07_limit_preflight_offline_once:
