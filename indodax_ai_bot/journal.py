@@ -788,8 +788,27 @@ class DecisionJournal:
                 "CASE WHEN state='OFFLINE_UNKNOWN_HOLD' THEN 1 ELSE 0 END"
                 "),0) FROM m07_offline_order_intents"
             ).fetchone()
+            correlated, partial, terminal, still_unknown = con.execute(
+                "SELECT COUNT(*),"
+                "COALESCE(SUM(CASE WHEN r.order_status='PARTIALLY_FILLED' "
+                "THEN 1 ELSE 0 END),0),"
+                "COALESCE(SUM(CASE WHEN r.order_status IN "
+                "('FILLED','CANCELLED','REJECTED') THEN 1 ELSE 0 END),0),"
+                "COALESCE(SUM(CASE WHEN i.state='OFFLINE_UNKNOWN_HOLD' "
+                "THEN 1 ELSE 0 END),0) "
+                "FROM m07_readonly_intent_recovery_shadow AS r "
+                "JOIN m07_offline_order_intents AS i "
+                "ON i.intent_id=r.intent_id"
+            ).fetchone()
         return {
             "stage": "M07_ORIGINAL_OFFLINE_INTENT_GUARD",
+            # Immutable source correlation survives restart, but never
+            # turns an OFFLINE synthetic intent into a real bot-owned trade.
+            "viewonly_recovery_references_not_bot_owned": correlated,
+            "viewonly_recovery_partial_status_observed": partial,
+            "viewonly_recovery_terminal_status_observed": terminal,
+            "viewonly_recovery_unknown_hold_still_blocked": still_unknown,
+            "viewonly_recovery_does_not_release_or_retry": True,
             "unresolved_simulated_intents": total,
             "offline_unknown_holds": unknown,
             "additional_buy_reservations_blocked": unknown > 0 or total >= 2,
