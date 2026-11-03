@@ -114,7 +114,7 @@ class M03HCoverageTests(unittest.TestCase):
         self.assertEqual(code, 0)  # Probe executed, not a BUY authorization!
         self.assertEqual(output["bulk_probe_status"], "PUBLIC_BULK_INCOMPLETE_UNATTESTED")
         self.assertEqual(output["public_bulk"]["candidate_rejected_count"], 8)
-        self.assertEqual(output["final_decision"], "REJECT")
+        self.assertIsNone(output["final_decision"])
         self.assertFalse(output["execution_allowed"])
         self.assertFalse(output["live_trading_authorized"])
 
