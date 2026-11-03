@@ -98,6 +98,19 @@ def assess_m07_same_candidate_public_boundary(*,
     values["public_quote_price_step_match"] = steps
     values["public_buy_minimum_known"] = minimum_idr > 0 and minimum_base > 0 and increment > 0
     values["public_quote_spread_bps_observed"] = format(spread, "f")
+    # Exact M03 observation values are exported solely for bounded M07
+    # sizing RESEARCH. They are neither order fill prices nor authenticated
+    # account/fee evidence; never copy from another pair or observation.
+    values["public_best_bid_idr_reference"] = format(bid, "f")
+    values["public_best_ask_idr_reference"] = format(ask, "f")
+    values["public_pair_rules_reference"] = {
+        "price_precision": format(tick, "f"),
+        "quantity_increment": format(increment, "f"),
+        "trade_min_base_currency": format(minimum_idr, "f"),
+        "trade_min_traded_currency": format(minimum_base, "f"),
+        "is_market_suspended": rules["is_market_suspended"],
+        "is_maintenance": rules["is_maintenance"],
+    }
     # Explicit false/zero ONLY. Maintenance or unknown flags always block.
     values["public_market_explicitly_active"] = (
         rules["is_market_suspended"] in (0, False, "0")
