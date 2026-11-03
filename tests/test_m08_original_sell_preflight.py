@@ -48,6 +48,7 @@ class OriginalM08SellPreflightTests(unittest.TestCase):
         M06OwnershipLedger(self.m06)
         self.uid=987654
         self.observed=FIRST+1200
+        self.next_sell_status_observed_ms=NOW*1000+1000
 
     def record_buy(self, *,account=ACCOUNT_A):
         obj=order()
@@ -70,10 +71,10 @@ class OriginalM08SellPreflightTests(unittest.TestCase):
             executed_qty=D(executed),client_order_id="account_sell_001",
             full_order_id="ACCOUNT_SELL_1",order_id=9991,
         )
+        self.next_sell_status_observed_ms+=1000
         self.bot.journal.record_m07_authenticated_readonly_order_status(
             account_fingerprint=uid,order=obj,
-            observed_ms=NOW*1000+1000 if status=="NEW"
-                else NOW*1000+2000,
+            observed_ms=self.next_sell_status_observed_ms,
         )
 
     def review(self, *,draft=None,bot=None,account=ACCOUNT_A,
