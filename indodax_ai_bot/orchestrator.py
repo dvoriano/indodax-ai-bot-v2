@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 import hashlib
 import json
+import re
 import sqlite3
 import os
 import stat
@@ -1148,6 +1149,110 @@ class DailyScalpingOrchestrator:
             "private_account_get_invoked": False,
             "live_trading_authorized": False,
             "order_sent": False,
+            "execution_allowed": False,
+        }
+
+    def run_m09_original_recovery_shadow_once(self, trace_id: str, *,
+            account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str,
+            sell_client_order_id: str,
+            requested_settlement_event_id: str,
+            market: IndodaxPublicMarket | None = None,
+            ws_db_path: str | None = None,
+            deep_limit: int = 20) -> dict:
+        """M09-03: SAME original M09 shadow plus M07/M08 recovery facts.
+
+        Account-only PARTIAL/CANCELLED/FILLED, synthetic UNKNOWN and a
+        client-ID collision cannot release bot inventory or create IDR.
+        There is NO authoritative M08-06 settled-IDR publisher. Therefore
+        DO NOT call claim_m08_post_sell_rediscovery_once or rescan as a
+        post-SELL action, even if a synthetic future-event table row exists.
+        A normal M09 PUBLIC scan is still allowed as a separate, non-order
+        research step, with fresh trace ID and G1/owner hardlocked.
+        """
+        self.settings.require_m01_safety()
+        if (type(requested_settlement_event_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                requested_settlement_event_id) is None):
+            raise ValueError("M09_RECOVERY_SETTLEMENT_EVENT_ID_INVALID")
+        before=self.journal.review_m08_sell_account_liabilities_offline(
+            account_fingerprint=account_fingerprint,
+            symbol=symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+            sell_client_order_id=sell_client_order_id,
+        )
+        guard_before=self.journal.m07_offline_intent_summary()
+        shadow=self.run_m09_original_shadow_mainpath_once(
+            trace_id,market=market,ws_db_path=ws_db_path,
+            deep_limit=deep_limit,
+        )
+        after=self.journal.review_m08_sell_account_liabilities_offline(
+            account_fingerprint=account_fingerprint,
+            symbol=symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+            sell_client_order_id=sell_client_order_id,
+        )
+        guard_after=self.journal.m07_offline_intent_summary()
+        # If a different process modifies order/UNKNOWN evidence between
+        # admission and delivery, the diagnostic cannot claim stable state.
+        if (before["snapshot_digest"] != after["snapshot_digest"]
+                or guard_before != guard_after):
+            raise ValueError("M09_RECOVERY_JOURNAL_CHANGED_DURING_SHADOW")
+        m08=self.journal.review_m09_original_m08_position_and_idr_readonly()
+        if after["global_m07_unknown_holds"]:
+            reason="M09_RECOVERY_UNKNOWN_HOLD_BLOCKED"
+        elif after["sell_client_id_collision"]:
+            reason="M09_RECOVERY_DUPLICATE_ID_BLOCKED"
+        elif after["account_seen_partial_sell_count"]:
+            reason="M09_RECOVERY_PARTIAL_SELL_UNSETTLED"
+        elif after["account_seen_open_sell_count"]:
+            reason="M09_RECOVERY_OPEN_SELL_UNSETTLED"
+        elif after["account_seen_cancelled_sell_count"]:
+            reason="M09_RECOVERY_CANCELLED_NO_RELEASE"
+        elif after["account_seen_filled_sell_count"]:
+            reason="M09_RECOVERY_ACCOUNT_SELL_NOT_SETTLED_IDR"
+        else:
+            reason="M09_RECOVERY_ACCOUNT_ORDER_COVERAGE_UNVERIFIED"
+        return {
+            "stage": "M09_ORIGINAL_RECOVERY_TO_REDISCOVERY_SHADOW",
+            "status": reason,
+            "original_m09_public_shadow_invoked": True,
+            "original_m09_source_reason": shadow["m03_scan_reason"],
+            "original_m09_owner_final": None,
+            "original_m09_hardlocked": shadow["m07_hardlock_active"],
+            "m07_unknown_holds": guard_after["offline_unknown_holds"],
+            "m07_readonly_recovery_partial":
+                guard_after["viewonly_recovery_partial_status_observed"],
+            "m07_readonly_recovery_terminal":
+                guard_after["viewonly_recovery_terminal_status_observed"],
+            "m07_outstanding_synthetic_intents":
+                guard_after["unresolved_simulated_intents"],
+            "m08_account_seen_partial_sells":
+                after["account_seen_partial_sell_count"],
+            "m08_account_seen_cancelled_sells":
+                after["account_seen_cancelled_sell_count"],
+            "m08_account_seen_filled_sells":
+                after["account_seen_filled_sell_count"],
+            "m08_account_seen_pending_base_reference":
+                after["account_seen_pending_sell_qty_reference"],
+            "m08_duplicate_sell_client_id":
+                after["sell_client_id_collision"],
+            "m08_status_all_exchange_orders_covered": False,
+            "m08_future_settlement_rows_untrusted":
+                m08["future_event_db_rows_untrusted"],
+            "m08_genuine_settlement_issuer_exists": False,
+            "post_sell_rediscovery_eligible": False,
+            "post_sell_scanner_invoked": False,
+            "original_post_sell_event_claimed": False,
+            "prior_pair_automatically_rebought": False,
+            "m07_unknown_hold_released": False,
+            "sell_unsettled_inventory_recredited": False,
+            "exchange_sell_bot_owned_verified": False,
+            "exchange_wallet_idr_settled_verified": False,
+            "realized_pnl_recorded": False,
+            "spendable_idr_authorized": False,
+            "order_intent_created_by_recovery": False,
+            "signed_order_sent": False,
             "execution_allowed": False,
         }
 
