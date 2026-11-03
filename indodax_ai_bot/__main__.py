@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m09-recovery-shadow-once", action="store_true",
+                       help="Original V2 M09 public shadow and M07/M08 journal recovery review, no post-SELL event claim or trade")
     group.add_argument("--m09-shadow-mainpath-once", action="store_true",
                        help="One original V2 public scanner→AI advisory→M05/M07/M08 shadow; isolated /tmp journal, no paid AI/trade")
     group.add_argument("--m08-post-sell-rediscovery-offline-once",
@@ -165,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Optional PUBLIC bulk 24h IDR-volume floor; staged policy 150000000, 0 preserves existing behavior until rollout")
     parser.add_argument("--m08-settled-event-id", default=None,
                         help="M08-07 event identity in original /tmp DecisionJournal; cannot inject settlement evidence")
+    parser.add_argument("--m09-recovery-file", default=None,
+                        help="Absolute /tmp 0600 JSON with M09 recovery identities only, not settlement facts")
     parser.add_argument("--m08-sell-preflight-file", default=None,
                         help="Absolute 0600 JSON scenario in /tmp for original M08 offline non-executing SELL review only")
     parser.add_argument("--m07-intent-id", default=None,
@@ -214,6 +218,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M07_SYNTHETIC_ID_AND_EXPLICIT_ABSOLUTE_DB_REQUIRED")
         elif args.m07_intent_id is not None:
             raise ConfigurationError("M07_INTENT_ID_ONLY_FOR_OFFLINE_SIMULATION")
+        if args.m09_recovery_shadow_once:
+            settings.require_m01_safety()
+            if (type(args.db) is not str
+                    or not Path(args.db).is_absolute()
+                    or not Path(args.db).resolve().is_relative_to(Path("/tmp"))
+                    or type(args.m09_recovery_file) is not str
+                    or not Path(args.m09_recovery_file).is_absolute()
+                    or not Path(args.m09_recovery_file).resolve().is_relative_to(Path("/tmp"))):
+                raise ConfigurationError("M09_RECOVERY_ISOLATED_TMP_FILES_REQUIRED")
+        elif args.m09_recovery_file is not None:
+            raise ConfigurationError("M09_RECOVERY_FILE_ONLY_FOR_OFFLINE_SHADOW")
         if args.m09_shadow_mainpath_once:
             settings.require_m01_safety()
             if (not Path(args.db).is_absolute()
@@ -561,7 +576,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.scheduled_public_scanner_once and args.m05_shadow_db is not None:
             raise ConfigurationError("M05_SCHEDULED_QUEUE_OPTIN_REQUIRED")
         if args.m05_shadow_db is not None and not (
-                args.once or args.bulk_deep_once or args.m09_shadow_mainpath_once
+                args.once or args.bulk_deep_once
+                or args.m09_recovery_shadow_once or args.m09_shadow_mainpath_once
                 or args.m05_telegram_poll_once
                 or args.m05_telegram_readonly_preflight_once
                 or args.m05_telegram_owner_safe_status_once
@@ -761,6 +777,53 @@ def main(argv: list[str] | None = None) -> int:
             owner_control=owner_control,
             m03_owner_fee_snapshot=m03_owner_fee_snapshot,
         )
+        if args.m09_recovery_shadow_once:
+            settings.require_m01_safety()
+            try:
+                source=_owner_private_file(args.m09_recovery_file)
+                fields={
+                    "account_fingerprint","symbol",
+                    "source_buy_client_order_id","sell_client_order_id",
+                    "requested_settlement_event_id",
+                }
+                if (type(source) is not dict or set(source)!=fields
+                        or any(type(source[k]) is not str
+                               or len(source[k])>70 for k in fields)):
+                    raise ValueError("M09_RECOVERY_SOURCE_IDENTITY_INVALID")
+                report=app.run_m09_original_recovery_shadow_once(
+                    uuid4().hex,
+                    account_fingerprint=source["account_fingerprint"],
+                    symbol=source["symbol"],
+                    source_buy_client_order_id=source[
+                        "source_buy_client_order_id"],
+                    sell_client_order_id=source["sell_client_order_id"],
+                    requested_settlement_event_id=source[
+                        "requested_settlement_event_id"],
+                    ws_db_path=args.ws_db,
+                    deep_limit=args.bulk_deep_limit,
+                )
+            except (ValueError,DecisionConflictError,sqlite3.Error,
+                    OSError) as exc:
+                reason=str(exc)
+                if re.fullmatch(r"M09_[A-Z0-9_]{1,100}",reason) is None:
+                    reason="M09_RECOVERY_SHADOW_SOURCE_UNAVAILABLE"
+                print(json.dumps({
+                    "m09_recovery_shadow":{
+                        "status":reason,
+                        "post_sell_scanner_invoked":False,
+                        "signed_order_sent":False,
+                        "execution_allowed":False,
+                    },
+                    "final_decision":None,"execution_allowed":False,
+                    "live_trading_authorized":False,
+                },sort_keys=True),file=sys.stderr)
+                return 3
+            print(json.dumps({
+                "m09_recovery_shadow":report,
+                "final_decision":None,"execution_allowed":False,
+                "live_trading_authorized":False,
+            },sort_keys=True))
+            return 0
         if args.m09_shadow_mainpath_once:
             settings.require_m01_safety()
             report = app.run_m09_original_shadow_mainpath_once(
