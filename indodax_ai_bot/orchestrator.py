@@ -30,6 +30,7 @@ from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_co
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview
 from .m07_same_candidate_public import assess_m07_same_candidate_public_boundary
+from .m07_main_idr_sizing import assess_m07_owner_main_idr_sizing_offline
 from .m07_last_moment_sources import review_m07_last_moment_sources_offline
 from .m07_private_order_readonly import read_m07_order_status_once, read_m07_latest_order_status_once, read_m07_14day_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
@@ -204,6 +205,32 @@ class DailyScalpingOrchestrator:
             buy_all_in_fee_bps=buy_all_in_fee_bps,
             sell_all_in_fee_bps=sell_all_in_fee_bps,
             max_spread_bps=max_spread_bps,
+        )
+
+    def review_m07_owner_main_idr_sizing_offline(
+            self, *, public_candidate: dict, account_snapshot: dict,
+            owner_main_source_classified: bool,
+            requested_ticket_ceiling_idr: Decimal,
+            new_floki_sell_rebuy_hold_idr: Decimal,
+            new_pepe_sell_rebuy_hold_idr: Decimal,
+            commitments_not_locked_idr: Decimal,
+            max_spread_bps: Decimal, now_epoch: int) -> dict:
+        """One original orchestrator: M03 quote + M06 View Only + M07 math.
+
+        Owner classification admits general IDR as a funding SOURCE only.
+        Account and public observations, ticket, risk and consent remain
+        unverified for execution. NO network, keys, new order or GO.
+        """
+        self.settings.require_m01_safety()
+        return assess_m07_owner_main_idr_sizing_offline(
+            public_candidate=public_candidate,
+            account_snapshot=account_snapshot,
+            owner_main_source_classified=owner_main_source_classified,
+            requested_ticket_ceiling_idr=requested_ticket_ceiling_idr,
+            new_floki_sell_rebuy_hold_idr=new_floki_sell_rebuy_hold_idr,
+            new_pepe_sell_rebuy_hold_idr=new_pepe_sell_rebuy_hold_idr,
+            commitments_not_locked_idr=commitments_not_locked_idr,
+            max_spread_bps=max_spread_bps, now_epoch=now_epoch,
         )
 
     def review_m07_last_moment_gate_offline(
