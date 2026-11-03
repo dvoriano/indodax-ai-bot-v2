@@ -13,6 +13,7 @@ on:
       - "tests/test_m08_original_sell_preflight.py"
       - "tests/test_m08_original_post_sell_rediscovery.py"
       - "tests/test_m09_01_original_shadow_mainpath.py"
+      - "tests/test_m09_02_original_fault_chain.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   push:
     branches: [main]
@@ -27,6 +28,7 @@ on:
       - "tests/test_m08_original_sell_preflight.py"
       - "tests/test_m08_original_post_sell_rediscovery.py"
       - "tests/test_m09_01_original_shadow_mainpath.py"
+      - "tests/test_m09_02_original_fault_chain.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   workflow_dispatch:
 
@@ -61,6 +63,7 @@ jobs:
             tests.test_m08_original_sell_preflight \
             tests.test_m08_original_post_sell_rediscovery \
             tests.test_m09_01_original_shadow_mainpath \
+            tests.test_m09_02_original_fault_chain \
             tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath

@@ -30,7 +30,7 @@ from .policy import ScalpingPolicy, IDRFundingRouteReview
 from .m06_scoped_https import M06ScopedApproval, M06RequestBudget, M06PrivateProbeResult, run_scoped_private_probe
 from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_coverage_readonly_once
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
-from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview
+from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview, M07PreflightBlocked
 from .m07_same_candidate_public import assess_m07_same_candidate_public_boundary
 from .m07_main_idr_sizing import assess_m07_owner_main_idr_sizing_offline
 from .m07_last_moment_sources import review_m07_last_moment_sources_offline
@@ -1052,9 +1052,42 @@ class DailyScalpingOrchestrator:
             raise ValueError("M09_M07_HARDLOCK_INACTIVE")
         m07 = self.journal.m07_offline_intent_summary()
         m08 = self.journal.review_m09_original_m08_position_and_idr_readonly()
+        # M09-02: NEVER trust booleans self-asserted by PUBLIC bulk or
+        # model-shaped advisory as proof of an independent signed G1/Risk.
+        if source is not None and (
+                source.get("g1_verified") is True
+                or source.get("execution_allowed") is True
+                or source.get("trade_authorized") is True):
+            raise ValueError("M09_PUBLIC_CANNOT_PROMOTE_G1_OR_EXECUTION")
+        if (ai.get("execution_allowed") is True
+                or ai.get("live_trading_authorized") is True
+                or ai.get("final_decision") is not None):
+            raise ValueError("M09_RISK_SHADOW_CANNOT_AUTHORIZE_FINAL")
         cohort = source.get("eligible_cohort") if source is not None else None
         cohort = cohort if isinstance(cohort, dict) else {}
         g1 = source.get("g1_source_admission") if source is not None else None
+        if isinstance(g1, dict) and (
+                g1.get("g1_receipt_issuance_allowed") is True
+                or g1.get("execution_allowed") is True):
+            raise ValueError("M09_PUBLIC_G1_ISSUER_NOT_ATTESTED")
+        now = int(time.time())
+        observed = source.get("screening_observed_epoch") if source else None
+        minute = cohort.get("closed_1m_epoch")
+        public_time_aligned = (
+            type(observed) is int and type(minute) is int
+            and 0 <= observed - minute <= 120
+            and 0 <= now - observed <= 60
+        )
+        m05_mode = "M05_OWNER_LEDGER_NOT_CONNECTED"
+        if self._owner_control is not None:
+            owner_uid = self._owner_control.owner_user_id
+            # Same ORIGINAL owner ledger, status only. No callback, update,
+            # Telegram transport or implicit permission when mode=AUTO.
+            snapshot = self._owner_control.status(
+                user_id=owner_uid,chat_id=owner_uid,chat_type="private",
+            )
+            m05_mode = snapshot.get(
+                "owner_mode","M05_OWNER_MODE_UNAVAILABLE")
         return {
             "stage": "M09_ORIGINAL_V2_SHADOW_END_TO_END",
             "status": "M09_SHADOW_CHAIN_NO_ORDER_NO_OWNER_FINAL",
@@ -1068,6 +1101,18 @@ class DailyScalpingOrchestrator:
                 if isinstance(cohort.get("provisional_watchlist_preview"),list)
                 else 0),
             "m04_original_g1_admission_observed": isinstance(g1,dict),
+            "m09_original_public_candle_time_fresh_reference": public_time_aligned,
+            "m09_public_failure_or_rate_blocked": (
+                cycle.reason.startswith("PUBLIC_BULK_BLOCKED:")),
+            "m09_public_rate_budget_ip_wide_verified": False,
+            "m09_unattested_source_never_clears_risk": True,
+            "m09_risk_veto_or_source_unavailable": (
+                not ai or ai.get("status") != "PASS"
+                or "RISK_VETO" in str(ai.get("reason",""))),
+            "m09_m05_observed_mode_reference": m05_mode,
+            "m09_auto_mode_cannot_issue_order_final": True,
+            "m09_quote_fee_precision_balance_authenticated": False,
+            "m09_original_m07_order_preview_authorized": False,
             "independent_g1_issuer_verified": False,
             "g1_source_not_promoted_from_public": True,
             "m04_original_three_role_shadow_invoked": True,
@@ -1104,6 +1149,84 @@ class DailyScalpingOrchestrator:
             "live_trading_authorized": False,
             "order_sent": False,
             "execution_allowed": False,
+        }
+
+    def review_m09_original_fault_preflight_offline(self, *,
+            draft: M07OrderDraft, pair_rules: dict,
+            best_bid_idr: Decimal, best_ask_idr: Decimal,
+            free_idr: Decimal, locked_idr: Decimal,
+            floki_rebuy_idr: Decimal, pepe_rebuy_idr: Decimal,
+            commitments_not_locked_idr: Decimal,
+            buy_all_in_fee_bps: Decimal, sell_all_in_fee_bps: Decimal,
+            max_spread_bps: Decimal,
+            public_candidate: dict | None = None,
+            account_snapshot: dict | None = None,
+            owner_advisory_proposal_id: str | None = None,
+            source_digest: str | None = None,
+            closed_1m_epoch: int | None = None,
+            now_epoch: int) -> dict:
+        """M09-02 original M07 LIMIT and last-moment fault-chain check.
+
+        ALL inputs are scenario/read-only references, NOT independently
+        authenticated exchange facts or a G1 source. Calls the SAME M07
+        preview and last-moment adapter already reachable in V2.
+        Possible aligned price/math, owner advisory button or account free
+        balance can NEVER become order-specific M05 Final or a BUY intent.
+        """
+        self.settings.require_m01_safety()
+        try:
+            limit=self.assess_m07_limit_buy_preflight_offline(
+                draft=draft,pair_rules=pair_rules,
+                best_bid_idr=best_bid_idr,best_ask_idr=best_ask_idr,
+                free_idr=free_idr,locked_idr=locked_idr,
+                floki_rebuy_idr=floki_rebuy_idr,
+                pepe_rebuy_idr=pepe_rebuy_idr,
+                commitments_not_locked_idr=commitments_not_locked_idr,
+                buy_all_in_fee_bps=buy_all_in_fee_bps,
+                sell_all_in_fee_bps=sell_all_in_fee_bps,
+                max_spread_bps=max_spread_bps,
+            )
+        except (M07PreflightBlocked,ValueError) as exc:
+            code=str(exc)
+            if not code.startswith("M07_PREFLIGHT_"):
+                code="M09_SCENARIO_INPUT_INVALID"
+            return {
+                "stage":"M09_ORIGINAL_FAULT_PREFLIGHT_NONEXECUTING",
+                "status":"M09_LIMIT_PREVIEW_FAIL_CLOSED",
+                "preview_reason":code,
+                "m07_limit_math_reference_passed":False,
+                "m07_last_moment_source_bound":False,
+                "m05_order_specific_final_verified":False,
+                "m07_order_intent_created":False,
+                "order_sent":False,"execution_allowed":False,
+            }
+        last=self.review_m07_last_moment_gate_offline(
+            limit_preview=limit,
+            public_candidate=public_candidate,
+            account_snapshot=account_snapshot,
+            owner_advisory_proposal_id=owner_advisory_proposal_id,
+            source_digest=source_digest,
+            closed_1m_epoch=closed_1m_epoch,
+            now_epoch=now_epoch,
+        )
+        return {
+            "stage":"M09_ORIGINAL_FAULT_PREFLIGHT_NONEXECUTING",
+            "status":"M09_LAST_MOMENT_UNVERIFIED_NO_ORDER",
+            "preview_reason":limit.status,
+            "m07_limit_math_reference_passed":
+                limit.checks_passed_unverified,
+            "m07_last_moment_source_bound":
+                last["public_same_candidate_fresh_observed"],
+            "m07_fresh_spendable_capital_verified":False,
+            "m07_rate_egress_all_peers_verified":False,
+            "m07_unresolved_or_unknown_hold":
+                last["m07_unresolved_or_unknown_local_intent"],
+            "m05_owner_advisory_review_pass_reference":
+                last["m05_same_source_advisory_review_pass"],
+            "m05_order_specific_final_verified":False,
+            "m07_missing_requirements":last["missing_requirements"],
+            "m07_order_intent_created":False,
+            "order_sent":False,"execution_allowed":False,
         }
 
     def run_m08_post_sell_rediscovery_once(self, *,
