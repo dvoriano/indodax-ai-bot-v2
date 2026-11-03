@@ -44,6 +44,11 @@ class M07VerifiedReadOnlyFills:
     net_quote: Decimal
     count: int
     sha256: str
+    # Optional for historical fixture/legacy readers. Only a real scoped
+    # myTrades reconciliation fills these immutable exchange account times.
+    # This does NOT attest that the V2 bot authored the exchange order.
+    first_trade_ms: int | None = None
+    last_trade_ms: int | None = None
 
     def __repr__(self) -> str:
         return "<M07VerifiedReadOnlyFills REDACTED account evidence only>"
@@ -122,6 +127,14 @@ def reconcile_m07_mytrades(
         (order.full_order_id, order.client_order_id, order.side,
          entries), separators=(",", ":"), ensure_ascii=True,
     ).encode("ascii")).hexdigest()
+    # Use the matching trade rows, not the order submit time, history
+    # finishTime, local clock or scanner candle. Earliest partial BUY fill
+    # is the conservative reference start for M08 holding-time arithmetic.
+    first_trade_ms = min(row[5] for row in entries)
+    last_trade_ms = max(row[5] for row in entries)
+    if (first_trade_ms < order.created_ms
+            or last_trade_ms > window_end_ms):
+        raise M07ReadOnlyError("M07_FILLS_TRADE_TIME_BEFORE_ORDER_OR_OUTSIDE")
     return M07VerifiedReadOnlyFills(
         account_symbol=order.symbol,
         client_order_id=order.client_order_id,
@@ -130,4 +143,5 @@ def reconcile_m07_mytrades(
         executed_base=base, gross_quote=gross,
         total_commission_including_tax_quote=commission,
         net_quote=net, count=len(entries), sha256=digest,
+        first_trade_ms=first_trade_ms, last_trade_ms=last_trade_ms,
     )
