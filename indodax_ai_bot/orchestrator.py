@@ -582,6 +582,85 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def review_m08_protective_exit_reference_offline(self, *,
+            account_fingerprint: str, symbol: str, client_order_id: str,
+            reference_buy_fill_epoch: int, observed_epoch: int,
+            observed_mark_price_idr: Decimal,
+            stop_loss_price_idr: Decimal,
+            high_watermark_price_idr: Decimal,
+            trailing_stop_price_idr: Decimal | None,
+            quote_fresh_unverified: bool,
+            pump_continuation_unverified: bool = False,
+            risk_clear_unverified: bool = False,
+    ) -> dict:
+        """Original M08 owned-position admission -> protective policy preview.
+
+        Fail closed when same original M07 journal lacks full account BUY
+        fill+tax fee evidence. Even if account evidence is complete, it
+        cannot promote an arbitrary filled account order or synthetic M07
+        intent into a V2 bot-owned SELL lot or authorize a loss exit.
+        """
+        self.settings.require_m01_safety()
+        source = self.review_m08_buy_position_admission_readonly(
+            account_fingerprint=account_fingerprint, symbol=symbol,
+            client_order_id=client_order_id,
+        )
+        if source["account_buy_fills_and_fees_reconciled"] is not True:
+            return {
+                "stage": "M08_ORIGINAL_PROTECTIVE_EXIT_OFFLINE",
+                "status": "M08_PROTECTIVE_MISSING_ACCOUNT_BUY_FILLED_COST_SOURCE",
+                "account_buy_source_status": source["status"],
+                "protection_review": None,
+                "bot_owned_position_verified": False,
+                "protective_sell_quantity_authorized": "0",
+                "owner_order_final_verified": False,
+                "order_sent": False, "execution_allowed": False,
+            }
+        report = ScalpingPolicy().assess_protective_sell_reference_offline(
+            account_buy_base_qty=Decimal(source["account_buy_qty_reference"]),
+            account_buy_cost_basis_idr=Decimal(
+                source["account_buy_cost_basis_idr_reference"]),
+            reference_buy_fill_epoch=reference_buy_fill_epoch,
+            now_epoch=observed_epoch,
+            observed_mark_price_idr=observed_mark_price_idr,
+            stop_loss_price_idr=stop_loss_price_idr,
+            high_watermark_price_idr=high_watermark_price_idr,
+            trailing_stop_price_idr=trailing_stop_price_idr,
+            quote_fresh_unverified=quote_fresh_unverified,
+            pump_continuation_unverified=pump_continuation_unverified,
+            risk_clear_unverified=risk_clear_unverified,
+        )
+        original_intents = self.journal.m07_offline_intent_summary()
+        return {
+            "stage": "M08_ORIGINAL_PROTECTIVE_EXIT_OFFLINE",
+            "status": "M08_PROTECTIVE_REVIEW_ACCOUNT_ONLY_NOT_BOT_OWNED",
+            "account_buy_source_status": source["status"],
+            "protective_trigger_reference": report.trigger,
+            "stop_loss_breached_reference": report.stop_loss_breached_reference,
+            "trailing_stop_breached_reference":
+                report.trailing_stop_breached_reference,
+            "time_stop_review_reference": report.time_stop_review_reference,
+            "review_urgency": report.review_urgency,
+            "position_age_seconds_reference":
+                report.position_age_seconds_reference,
+            "gross_unrealized_idr_reference": format(
+                report.estimated_gross_unrealized_idr_reference,"f"),
+            "gross_unrealized_roi_percent_reference": format(
+                report.estimated_gross_unrealized_roi_percent_reference,"f"),
+            "protective_loss_allowed_by_policy":
+                report.protective_loss_allowed_by_policy,
+            "source_quote_fresh_unverified": report.quote_fresh_unverified,
+            "reference_buy_fill_epoch_independently_attested": False,
+            "m07_unknown_holds_still_blocked":
+                original_intents["offline_unknown_holds"],
+            "bot_owned_position_verified": False,
+            "protective_sell_quantity_authorized": "0",
+            "owner_order_final_verified": False,
+            "risk_executable_verified": False,
+            "realized_pnl_recorded": False,
+            "order_sent": False,"execution_allowed": False,
+        }
+
     def review_m06_account(self, *, observation: AccountObservation | None = None,
                            now_epoch: int) -> M06AccountDecision:
         """One original orchestrator, local offline account diagnostic only."""
