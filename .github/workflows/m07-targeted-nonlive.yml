@@ -38,6 +38,7 @@ jobs:
         run: |
           python -m unittest -v \
             tests.test_m07_original_m03_m06_readonly_cycle \
+            tests.test_m07_04_atomic_shadow_recovery_original \
             tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath

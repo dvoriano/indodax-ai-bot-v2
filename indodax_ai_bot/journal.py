@@ -151,6 +151,42 @@ class DecisionJournal:
                     PRIMARY KEY(account_fingerprint,symbol,client_order_id)
                 )"""
             )
+            # M07-04: immutable OFFLINE draft facts for new synthetic intents.
+            # Older intents have no row and MUST remain unlinked/UNKNOWN.
+            # Never infer ownership from an arbitrary matching client ID.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_offline_intent_draft_facts (
+                    intent_id TEXT PRIMARY KEY,
+                    order_type TEXT NOT NULL CHECK(order_type='LIMIT'),
+                    original_qty TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL CHECK(side='BUY'),
+                    FOREIGN KEY(intent_id) REFERENCES m07_offline_order_intents(intent_id)
+                )"""
+            )
+            # Account-scoped READ ONLY correlation with the original synthetic
+            # order-intent namespace. This is not an exchange submit ledger.
+            # Neither FILLED nor CANCELLED here releases BUY budget, marks a
+            # bot-owned lot, or creates a retry right.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_readonly_intent_recovery_shadow (
+                    intent_id TEXT PRIMARY KEY,
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL,
+                    exchange_order_id INTEGER NOT NULL,
+                    full_order_id TEXT NOT NULL,
+                    order_type TEXT NOT NULL,
+                    original_qty TEXT NOT NULL,
+                    executed_qty TEXT NOT NULL,
+                    order_status TEXT NOT NULL,
+                    observed_ms INTEGER NOT NULL,
+                    provenance TEXT NOT NULL CHECK(
+                        provenance='ACCOUNT_VIEWONLY_CORRELATION_NOT_OWNERSHIP'
+                    ),
+                    FOREIGN KEY(intent_id) REFERENCES m07_offline_order_intents(intent_id)
+                )"""
+            )
             # M03-L: only untrusted, closed PUBLIC research OHLC. Never use
             # these rows to claim full trade-tape coverage or G1 origin.
             con.execute(
@@ -341,6 +377,16 @@ class DecisionJournal:
                 (intent_id,draft.client_order_id,fingerprint,
                  draft.symbol,draft.side,recorded_epoch,recorded_epoch),
             )
+            # Store only the immutable facts that a future View Only status
+            # can independently compare. No order was ever transmitted here.
+            if draft.order_type == "LIMIT" and draft.quantity is not None:
+                con.execute(
+                    "INSERT INTO m07_offline_intent_draft_facts "
+                    "(intent_id,order_type,original_qty,symbol,side) "
+                    "VALUES (?,?,?,?,?)",
+                    (intent_id,draft.order_type,format(draft.quantity,"f"),
+                     draft.symbol,draft.side),
+                )
         return {
             "status": "OFFLINE_RESERVED", "intent_id": intent_id,
             "replay": False, "newly_reserved": True,
@@ -548,7 +594,17 @@ class DecisionJournal:
                     # Rejected after NEW is not automatically a zero-fill release.
                     pass
                 if old[4] == order.status and Decimal(old_qty) == order.executed_qty:
-                    return {"replay": True, "execution_allowed": False}
+                    # Full authenticated order row already immutable. A
+                    # same-source replay may re-inspect shadow correlation,
+                    # but cannot upgrade execution/ownership permissions.
+                    recovery = self._m07_attach_readonly_recovery_in_txn(
+                        con, account_fingerprint=account_fingerprint,
+                        order=order, observed_ms=old[8],
+                    )
+                    return {
+                        "replay": True, "execution_allowed": False,
+                        "recovery_reference_status": recovery,
+                    }
                 if observed_ms <= old[8]:
                     raise DecisionConflictError("M07_READONLY_OBSERVATION_NOT_NEWER")
             values = (
@@ -577,7 +633,99 @@ class DecisionJournal:
                     (order.status, format(order.executed_qty,"f"), observed_ms,
                      account_fingerprint, order.symbol, order.client_order_id),
                 )
-        return {"replay": False, "execution_allowed": False}
+            recovery = self._m07_attach_readonly_recovery_in_txn(
+                con, account_fingerprint=account_fingerprint,
+                order=order, observed_ms=observed_ms,
+            )
+        return {
+            "replay": False, "execution_allowed": False,
+            "recovery_reference_status": recovery,
+        }
+
+    @staticmethod
+    def _m07_attach_readonly_recovery_in_txn(
+        con: sqlite3.Connection, *, account_fingerprint: str,
+        order: M07ReadOnlyOrder, observed_ms: int,
+    ) -> str:
+        """Atomic correlation, never synthetic intent release or fill credit.
+
+        Caller MUST first validate an authenticated V2 View Only order and
+        record it into the original journal in this same transaction. A
+        matching offline client ID alone cannot prove bot ownership, nor
+        that the bot ever submitted an order. Legacy drafts are unbound.
+        """
+        intent = con.execute(
+            "SELECT intent_id,symbol,side,recorded_epoch,state "
+            "FROM m07_offline_order_intents WHERE client_order_id=?",
+            (order.client_order_id,),
+        ).fetchone()
+        if intent is None:
+            return "M07_RECOVERY_NO_LOCAL_INTENT"
+        ident, symbol, side, recorded_epoch, _state = intent
+        if symbol != order.symbol or side != order.side:
+            raise DecisionConflictError("M07_RECOVERY_CLIENT_ID_SCOPE_CONFLICT")
+        facts = con.execute(
+            "SELECT order_type,original_qty,symbol,side "
+            "FROM m07_offline_intent_draft_facts WHERE intent_id=?",
+            (ident,),
+        ).fetchone()
+        if facts is None:
+            return "M07_RECOVERY_LEGACY_OR_MARKET_DRAFT_UNBOUND"
+        if (facts[0] != order.order_type
+                or Decimal(facts[1]) != order.original_qty
+                or facts[2:] != (order.symbol,order.side)):
+            raise DecisionConflictError("M07_RECOVERY_IMMUTABLE_DRAFT_MISMATCH")
+        # The account cannot create an earlier trade and then borrow the
+        # same local client ID retroactively. No assumed live submit time.
+        if not recorded_epoch * 1000 <= order.created_ms <= (
+                recorded_epoch + 300) * 1000:
+            raise DecisionConflictError("M07_RECOVERY_ORDER_TIME_OUTSIDE_INTENT")
+        prior = con.execute(
+            "SELECT account_fingerprint,symbol,client_order_id,"
+            "exchange_order_id,full_order_id,order_type,original_qty,"
+            "executed_qty,order_status,observed_ms "
+            "FROM m07_readonly_intent_recovery_shadow WHERE intent_id=?",
+            (ident,),
+        ).fetchone()
+        if prior is not None:
+            if (prior[:7] != (
+                    account_fingerprint,order.symbol,order.client_order_id,
+                    order.order_id,order.full_order_id,order.order_type,
+                    format(order.original_qty, "f"))
+                and not (prior[:6] == (
+                    account_fingerprint,order.symbol,order.client_order_id,
+                    order.order_id,order.full_order_id,order.order_type)
+                    and Decimal(prior[6]) == order.original_qty)):
+                raise DecisionConflictError("M07_RECOVERY_ACCOUNT_OR_ORDER_CONFLICT")
+            if order.executed_qty < Decimal(prior[7]):
+                raise DecisionConflictError("M07_RECOVERY_EXECUTED_QTY_REGRESSED")
+            if observed_ms < prior[9]:
+                raise DecisionConflictError("M07_RECOVERY_OBSERVATION_REGRESSED")
+            if (prior[8] in ("FILLED","CANCELLED","REJECTED")
+                    and (prior[8] != order.status
+                         or Decimal(prior[7]) != order.executed_qty)):
+                raise DecisionConflictError("M07_RECOVERY_TERMINAL_CONFLICT")
+            con.execute(
+                "UPDATE m07_readonly_intent_recovery_shadow "
+                "SET executed_qty=?,order_status=?,observed_ms=? "
+                "WHERE intent_id=?",
+                (format(order.executed_qty,"f"),order.status,
+                 observed_ms,ident),
+            )
+        else:
+            con.execute(
+                "INSERT INTO m07_readonly_intent_recovery_shadow "
+                "(intent_id,account_fingerprint,symbol,client_order_id,"
+                "exchange_order_id,full_order_id,order_type,original_qty,"
+                "executed_qty,order_status,observed_ms,provenance) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,"
+                "'ACCOUNT_VIEWONLY_CORRELATION_NOT_OWNERSHIP')",
+                (ident,account_fingerprint,order.symbol,order.client_order_id,
+                 order.order_id,order.full_order_id,order.order_type,
+                 format(order.original_qty,"f"),
+                 format(order.executed_qty,"f"),order.status,observed_ms),
+            )
+        return "M07_RECOVERY_SAME_DRAFT_REFERENCE_ONLY_NO_RELEASE"
 
     def record_m07_exchange_readonly_fills(
         self, *, account_fingerprint: str,
@@ -640,8 +788,27 @@ class DecisionJournal:
                 "CASE WHEN state='OFFLINE_UNKNOWN_HOLD' THEN 1 ELSE 0 END"
                 "),0) FROM m07_offline_order_intents"
             ).fetchone()
+            correlated, partial, terminal, still_unknown = con.execute(
+                "SELECT COUNT(*),"
+                "COALESCE(SUM(CASE WHEN r.order_status='PARTIALLY_FILLED' "
+                "THEN 1 ELSE 0 END),0),"
+                "COALESCE(SUM(CASE WHEN r.order_status IN "
+                "('FILLED','CANCELLED','REJECTED') THEN 1 ELSE 0 END),0),"
+                "COALESCE(SUM(CASE WHEN i.state='OFFLINE_UNKNOWN_HOLD' "
+                "THEN 1 ELSE 0 END),0) "
+                "FROM m07_readonly_intent_recovery_shadow AS r "
+                "JOIN m07_offline_order_intents AS i "
+                "ON i.intent_id=r.intent_id"
+            ).fetchone()
         return {
             "stage": "M07_ORIGINAL_OFFLINE_INTENT_GUARD",
+            # Immutable source correlation survives restart, but never
+            # turns an OFFLINE synthetic intent into a real bot-owned trade.
+            "viewonly_recovery_references_not_bot_owned": correlated,
+            "viewonly_recovery_partial_status_observed": partial,
+            "viewonly_recovery_terminal_status_observed": terminal,
+            "viewonly_recovery_unknown_hold_still_blocked": still_unknown,
+            "viewonly_recovery_does_not_release_or_retry": True,
             "unresolved_simulated_intents": total,
             "offline_unknown_holds": unknown,
             "additional_buy_reservations_blocked": unknown > 0 or total >= 2,
