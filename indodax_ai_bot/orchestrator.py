@@ -271,23 +271,78 @@ class DailyScalpingOrchestrator:
         allowed_pairs = allowed_pairs if type(allowed_pairs) is list else []
         rows = bulk.get("provisional_market_evidence")
         rows = rows if type(rows) is list else []
+        ranked = bulk.get("ranked_diagnostics_top10")
+        ranked = ranked if type(ranked) is list else []
+        watchlist = cohort.get("provisional_watchlist_preview")
+        watchlist = watchlist if type(watchlist) is list else []
+        quality = cohort.get("provisional_quality_reviews")
+        quality = quality if type(quality) is list else []
         selected = None
-        # The ORIGINAL deep scanner assembled these source-bound rows during
-        # this call. Never choose a rejected pair or load yesterday's fixture.
-        if (bulk.get("mode") == "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY"
-                and bulk.get("shared_public_scan_context") is True):
-            for row in rows:
-                if type(row) is not dict or row.get("pair") not in allowed_pairs:
-                    continue
-                public = row.get("m07_same_candidate_public_preflight")
-                if (row.get("eligible_for_same_window_comparison") is True
-                        and row.get("trade_authorized") is False
-                        and type(public) is dict
-                        and public.get("candidate_pair") == row["pair"]
-                        and public.get("observed_pair") == row["pair"]
-                        and public.get("status") ==
-                            "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"):
+        selected_lane = None
+        selected_quality_clean = False
+        rejected = {
+            "not_eligible_cohort_member": 0,
+            "no_valid_source_bound_public_rules_or_fee": 0,
+            "invalid_or_rejected_deep_candidate": 0,
+            "stale_public_candidate": 0,
+        }
+        now = int(time.time())
+        # A synchronized cohort is DIFFERENT from a quality-clean watchlist.
+        # M03 may produce aligned valid observations yet zero clean watchlist
+        # candidates. The previous bridge only inspected the watchlist and
+        # incorrectly reported NO_ELIGIBLE even when M03 had good diagnostics.
+        # Read the original same-batch top10 as a READ-ONLY fallback. These
+        # are NOT promoted to quality-clean, G1, Risk, M05 or trading.
+        synchronized = (
+            bulk.get("mode") == "M03G_BULK_PUBLIC_SHARED_SOURCE_ONLY"
+            and bulk.get("shared_public_scan_context") is True
+            and cohort.get("status") == "ALIGNED_PUBLIC_UNATTESTED"
+        )
+        if synchronized:
+            sources = (
+                ("M03_QUALITY_WATCHLIST_REFERENCE_ONLY", rows),
+                ("M03_RANKED_CAUTION_DIAGNOSTIC_ONLY", ranked),
+            )
+            for lane, source_rows in sources:
+                for row in source_rows:
+                    if type(row) is not dict:
+                        rejected["invalid_or_rejected_deep_candidate"] += 1
+                        continue
+                    pair = row.get("pair")
+                    if pair not in allowed_pairs:
+                        rejected["not_eligible_cohort_member"] += 1
+                        continue
+                    if (row.get("eligible_for_same_window_comparison") is not True
+                            or row.get("trade_authorized") is not False):
+                        rejected["invalid_or_rejected_deep_candidate"] += 1
+                        continue
+                    public = row.get("m07_same_candidate_public_preflight")
+                    if (type(public) is not dict
+                            or public.get("candidate_pair") != pair
+                            or public.get("observed_pair") != pair
+                            or public.get("status") !=
+                                "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
+                            or public.get("same_candidate_and_closed_minute") is not True
+                            or public.get("execution_allowed") is not False
+                            or public.get("order_sent") is not False):
+                        rejected["no_valid_source_bound_public_rules_or_fee"] += 1
+                        continue
+                    epoch = public.get("observed_epoch")
+                    if (type(epoch) is not int
+                            or not 0 <= now - epoch <= 30):
+                        rejected["stale_public_candidate"] += 1
+                        continue
                     selected = public
+                    selected_lane = lane
+                    selected_quality_clean = (
+                        lane == "M03_QUALITY_WATCHLIST_REFERENCE_ONLY"
+                        and pair in watchlist
+                        and any(type(q) is dict and q.get("pair") == pair
+                                and q.get("clear_of_provisional_cautions") is True
+                                for q in quality)
+                    )
+                    break
+                if selected is not None:
                     break
         base = {
             "stage": "M07_ORIGINAL_LIVE_SOURCE_JOIN_READONLY",
@@ -295,6 +350,14 @@ class DailyScalpingOrchestrator:
             "trace_id": trace_id,
             "m03_bulk_coverage_status": bulk.get("coverage_status"),
             "m03_eligible_cohort_status": cohort.get("status"),
+            "m03_eligible_cohort_pair_count": len(allowed_pairs),
+            "m03_quality_clean_watchlist_count": len(watchlist),
+            "m03_source_bound_watchlist_rows": len(rows),
+            "m03_ranked_diagnostic_rows": len(ranked),
+            "m03_candidate_rejection_counts": rejected,
+            "m03_candidate_selection_lane": selected_lane,
+            "m03_selected_quality_clean": selected_quality_clean,
+            "m03_cautionary_fallback_cannot_authorize_trade": True,
             "m03_g1_independently_verified": False,
             "m04_risk_three_role_executable_verified": False,
             "m05_order_specific_final_verified": False,
@@ -308,23 +371,20 @@ class DailyScalpingOrchestrator:
             "live_trading_authorized": False,
         }
         if selected is None:
-            self.journal.record_stage_observation(
-                trace_id + "_m07", "M07_READONLY_SOURCE_JOIN",
-                base["status"],
-            )
-            return base
-        # Avoid an authenticated query after a public observation is already
-        # unfit for the original M07 30-second freshness contract.
-        public_epoch = selected.get("observed_epoch")
-        now = int(time.time())
-        if (type(public_epoch) is not int
-                or not 0 <= now - public_epoch <= 30):
-            status = "M07_M03_PUBLIC_ALREADY_STALE_NO_PRIVATE_GET"
+            if not synchronized and bulk:
+                status = "M07_M03_COHORT_NOT_ALIGNED_NO_PRIVATE_GET"
+            elif rejected["stale_public_candidate"] > 0:
+                status = "M07_M03_PUBLIC_ALREADY_STALE_NO_PRIVATE_GET"
+            elif rejected["no_valid_source_bound_public_rules_or_fee"] > 0:
+                status = "M07_NO_READY_PUBLIC_PAIR_RULES_OR_FEE_REFERENCE"
+            else:
+                status = "M07_NO_ELIGIBLE_M03_SAME_CYCLE_CANDIDATE"
             self.journal.record_stage_observation(
                 trace_id + "_m07", "M07_READONLY_SOURCE_JOIN", status,
             )
-            return dict(base, status=status,
-                        candidate_pair=selected["candidate_pair"])
+            return dict(base, status=status)
+        # The selected same-batch source passed freshness before M06 GET.
+        # The original M07 sizing ALSO rechecks both epoch TTLs afterwards.
         # EXACT original M06 two signed View Only GETs, no duplicate HTTP
         # path and no custom credential source. External/unknown commitments
         # cannot be silently inferred as zero by the reader.
