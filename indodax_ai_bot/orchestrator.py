@@ -726,6 +726,33 @@ class DailyScalpingOrchestrator:
             now_epoch=now_epoch,
         )
 
+    def queue_m07_owner_manual_telegram_preview_offline(
+            self, *, user_id: int, chat_id: int,
+            account_fingerprint: str, draft: M07OrderDraft,
+            now_epoch: int) -> dict:
+        """One original M07 draft to SAME M05 owner ledger, preview ONLY.
+
+        No fake market, account, AI, owner Final, preflight, execution or
+        signal is accepted as true. The existing M07 adapter stays HARDLOCKED.
+        """
+        self.settings.require_m01_safety()
+        if self._owner_control is None:
+            raise ValueError("M07_MANUAL_OWNER_LEDGER_NOT_CONNECTED")
+        report = OfficialV2OrderAdapter.contract_status()
+        if (report.get("network_allowed") is not False
+                or report.get("execution_allowed") is not False):
+            raise ValueError("M07_MANUAL_PREVIEW_EXECUTOR_NOT_HARDLOCKED")
+        result = self._owner_control.queue_manual_trade_preview_offline(
+            user_id=user_id,chat_id=chat_id,
+            account_fingerprint=account_fingerprint,
+            draft=draft,now_epoch=now_epoch,
+        )
+        if (result.get("execution_allowed") is not False
+                or result.get("order_sent") is not False
+                if result.get("accepted") is True else False):
+            raise ValueError("M07_MANUAL_PREVIEW_UNEXPECTED_AUTHORITY")
+        return result
+
     def review_m07_original_bot_origin_local_once(
             self, *, action: str, account_uid: int,
             account_fingerprint: str, draft: M07OrderDraft,

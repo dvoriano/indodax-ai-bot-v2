@@ -19,6 +19,9 @@ from typing import Iterator, Any
 PAIR = re.compile(r"^[a-z0-9]+_idr$")
 DIGEST = re.compile(r"^[a-f0-9]{64}$")
 CALLBACK = re.compile(r"^m5:([a-f0-9]{24}):([PR]):([a-f0-9]{32})$")
+MANUAL_TRADE_CALLBACK = re.compile(
+    r"^m5t:([a-f0-9]{24}):([BSR]):([a-f0-9]{32})$"
+)
 PROPOSAL_ID = re.compile(r"^[a-f0-9]{24}$")
 MODES = ("MANUAL", "AUTO")
 TTL_MAX = 90
@@ -91,6 +94,30 @@ class OwnerDecisionLedger:
                     sent_message_id INTEGER,
                     UNIQUE(pair,closed_1m_epoch),
                     FOREIGN KEY(proposal_id) REFERENCES m05_proposals(proposal_id)
+                );
+                CREATE TABLE IF NOT EXISTS m05_manual_trade_previews (
+                    preview_id TEXT PRIMARY KEY,
+                    owner_user_id INTEGER NOT NULL,
+                    account_fingerprint TEXT NOT NULL,
+                    client_order_id TEXT NOT NULL UNIQUE,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),
+                    price_idr TEXT NOT NULL,
+                    quantity_base TEXT NOT NULL,
+                    draft_sha256 TEXT NOT NULL,
+                    created_epoch INTEGER NOT NULL,
+                    expires_epoch INTEGER NOT NULL,
+                    token_hash TEXT NOT NULL,
+                    message_text TEXT NOT NULL,
+                    confirm_callback TEXT NOT NULL,
+                    reject_callback TEXT NOT NULL,
+                    send_state TEXT NOT NULL CHECK(send_state IN
+                        ('QUEUED','CLAIMED','SENT','EXPIRED')),
+                    sent_message_id INTEGER,
+                    owner_choice TEXT CHECK(owner_choice IN
+                        ('BUY','SELL','REJECT')),
+                    decided_epoch INTEGER,
+                    execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
                 );
                 CREATE TABLE IF NOT EXISTS m05_audit (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,6 +370,224 @@ class OwnerDecisionLedger:
             "accepted": True, "owner_mode": mode,
             "final_decision": None,
             "auto_order_authorized": False, "execution_allowed": False,
+        }
+
+    def queue_manual_trade_preview_offline(
+            self, *, user_id: int, chat_id: int,
+            account_fingerprint: str, draft, now_epoch: int,
+            chat_type: str = "private") -> dict[str, Any]:
+        """Original M07 draft → MANUAL owner Telegram preview, NO trade.
+
+        A producer of real execution decisions MUST NOT reuse this method's
+        rows as a source/fee/risk/owner order authorization. No exchange
+        identity is asserted; source status and ownership are UNKNOWN.
+        """
+        from .m07_order_adapter import M07OrderDraft
+        import json
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        if (type(draft) is not M07OrderDraft
+                or draft.order_type != "LIMIT"
+                or draft.side not in ("BUY", "SELL")
+                or type(account_fingerprint) is not str
+                or not DIGEST.fullmatch(account_fingerprint)
+                or type(now_epoch) is not int or now_epoch <= 0):
+            return _blocked("M05_MANUAL_TRADE_DRAFT_SCOPE_INVALID")
+        try:
+            params = draft.parameters()  # exact original V2 M07 adapter
+        except ValueError:
+            return _blocked("M05_MANUAL_TRADE_DRAFT_SCOPE_INVALID")
+        digest = sha256(json.dumps(
+            params, ensure_ascii=True, separators=(",", ":"),
+        ).encode("ascii")).hexdigest()
+        price, qty = str(draft.price), str(draft.quantity)
+        preview_id, secret = secrets.token_hex(12), secrets.token_hex(16)
+        action = "B" if draft.side == "BUY" else "S"
+        confirm = f"m5t:{preview_id}:{action}:{secret}"
+        reject = f"m5t:{preview_id}:R:{secret}"
+        if max(len(confirm), len(reject)) > 64:
+            return _blocked("M05_MANUAL_TRADE_CALLBACK_TOO_LONG")
+        text = (
+            "M05 MANUAL " + draft.side + " (SIMULASI TOMBOL, NO ORDER)\n" +
+            draft.symbol + " | LIMIT harga IDR " + price +
+            " | qty " + qty + "\n" +
+            "ClientOrderID: " + draft.client_order_id + "\n" +
+            "Akun, fee, G1, kepemilikan dan preflight BELUM TERVERIFIKASI.\n" +
+            "Menekan tombol hanya mencatat pilihan owner. Tidak BUY/SELL."
+        )
+        with self._tx() as db:
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if mode != "MANUAL":
+                return _blocked("M05_MANUAL_TRADE_MODE_REQUIRED")
+            if db.execute(
+                "SELECT 1 FROM m05_manual_trade_previews "
+                "WHERE client_order_id=?",
+                (draft.client_order_id,),
+            ).fetchone():
+                return _blocked("M05_MANUAL_TRADE_CLIENT_ID_ALREADY_USED")
+            # Only one unexpired card can be in-flight; do not allow
+            # multiple buttons to impersonate concurrent manual orders.
+            if db.execute(
+                "SELECT 1 FROM m05_manual_trade_previews "
+                "WHERE expires_epoch>? AND owner_choice IS NULL "
+                "AND send_state IN ('QUEUED','CLAIMED','SENT') LIMIT 1",
+                (now_epoch,),
+            ).fetchone():
+                return _blocked("M05_MANUAL_TRADE_CARD_ALREADY_PENDING")
+            db.execute(
+                """INSERT INTO m05_manual_trade_previews(
+                    preview_id,owner_user_id,account_fingerprint,
+                    client_order_id,symbol,side,price_idr,quantity_base,
+                    draft_sha256,created_epoch,expires_epoch,token_hash,
+                    message_text,confirm_callback,reject_callback,
+                    send_state,execution_allowed)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'QUEUED',0)""",
+                (preview_id,self.owner_user_id,account_fingerprint,
+                 draft.client_order_id,draft.symbol,draft.side,price,qty,
+                 digest,now_epoch,now_epoch+TTL_MAX,
+                 sha256(secret.encode()).hexdigest(),text,confirm,reject),
+            )
+            db.execute(
+                "INSERT INTO m05_audit "
+                "(event_epoch,owner_user_id,proposal_id,event,detail) "
+                "VALUES (?,?,?,?,?)",
+                (now_epoch,user_id,preview_id,"MANUAL_PREVIEW_QUEUED",
+                 "DRAFT_ONLY_NO_EXCHANGE_AUTHORITY"),
+            )
+        return {
+            "accepted": True, "stage": "M05_MANUAL_TRADE_BUTTON_PREVIEW",
+            "preview_id": preview_id, "symbol": draft.symbol,
+            "side": draft.side, "draft_sha256": digest,
+            "owner_mode": "MANUAL",
+            "source_attested": False,
+            "owner_order_execution_authorized": False,
+            "order_sent": False, "execution_allowed": False,
+        }
+
+    def claim_manual_trade_preview_delivery(
+            self, *, now_epoch: int) -> dict[str, Any] | None:
+        """One original M05 queue, no uncertain send retry."""
+        if type(now_epoch) is not int or now_epoch <= 0:
+            raise ValueError("M05_MANUAL_TRADE_CLAIM_TIME_INVALID")
+        with self._tx() as db:
+            if db.execute(
+                "SELECT 1 FROM m05_manual_trade_previews "
+                "WHERE send_state='CLAIMED' LIMIT 1"
+            ).fetchone():
+                raise ValueError("M05_MANUAL_TRADE_DELIVERY_UNCERTAIN")
+            db.execute(
+                "UPDATE m05_manual_trade_previews SET send_state='EXPIRED' "
+                "WHERE send_state='QUEUED' AND expires_epoch<=?",
+                (now_epoch,),
+            )
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if mode != "MANUAL":
+                return None
+            row = db.execute(
+                "SELECT preview_id,message_text,confirm_callback,"
+                "reject_callback,side FROM m05_manual_trade_previews "
+                "WHERE send_state='QUEUED' AND owner_choice IS NULL "
+                "AND expires_epoch>? ORDER BY created_epoch,preview_id LIMIT 1",
+                (now_epoch,),
+            ).fetchone()
+            if row is None:
+                return None
+            if db.execute(
+                "UPDATE m05_manual_trade_previews SET send_state='CLAIMED' "
+                "WHERE preview_id=? AND send_state='QUEUED'",
+                (row[0],),
+            ).rowcount != 1:
+                raise ValueError("M05_MANUAL_TRADE_CLAIM_CONFLICT")
+        return {
+            "preview_id": row[0], "message_text": row[1],
+            "confirm_callback": row[2], "reject_callback": row[3],
+            "side": row[4],
+        }
+
+    def confirm_manual_trade_preview_delivery(
+            self, *, preview_id: str, message_id: int) -> None:
+        if (type(preview_id) is not str
+                or not PROPOSAL_ID.fullmatch(preview_id)
+                or type(message_id) is not int or message_id <= 0):
+            raise ValueError("M05_MANUAL_TRADE_DELIVERY_ACK_INVALID")
+        with self._tx() as db:
+            if db.execute(
+                "UPDATE m05_manual_trade_previews "
+                "SET send_state='SENT',sent_message_id=? "
+                "WHERE preview_id=? AND send_state='CLAIMED'",
+                (message_id,preview_id),
+            ).rowcount != 1:
+                raise ValueError("M05_MANUAL_TRADE_DELIVERY_ACK_CONFLICT")
+
+    def apply_manual_trade_preview_callback(
+            self, *, user_id: int, chat_id: int, callback_data: str,
+            now_epoch: int, telegram_message_id: int | None,
+            chat_type: str = "private") -> dict[str, Any]:
+        """One real bot-envelope-bound owner press, PREVIEW ONLY, NO Final.
+
+        Caller must verify Telegram Bot API envelope and private bot message
+        before calling this method. Never turn a raw caller's user_id into
+        evidence of authenticated Telegram or actual order permission.
+        """
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        match = (MANUAL_TRADE_CALLBACK.fullmatch(callback_data)
+                 if isinstance(callback_data, str) else None)
+        if (match is None or type(now_epoch) is not int or now_epoch <= 0
+                or type(telegram_message_id) is not int
+                or telegram_message_id <= 0):
+            return _blocked("M05_MANUAL_TRADE_CALLBACK_INVALID")
+        preview_id, letter, secret = match.groups()
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT owner_user_id,token_hash,side,expires_epoch,"
+                "send_state,sent_message_id,owner_choice "
+                "FROM m05_manual_trade_previews WHERE preview_id=?",
+                (preview_id,),
+            ).fetchone()
+            if (row is None or row[0] != user_id
+                    or not hmac.compare_digest(
+                        row[1],sha256(secret.encode()).hexdigest()
+                    )):
+                return _blocked("M05_MANUAL_TRADE_CALLBACK_FORGED")
+            if (row[4] != "SENT" or row[5] != telegram_message_id):
+                return _blocked("M05_MANUAL_TRADE_MESSAGE_NOT_DELIVERED")
+            if row[6] is not None:
+                return _blocked("M05_MANUAL_TRADE_CALLBACK_ALREADY_USED")
+            if (letter not in ("R", "B" if row[2] == "BUY" else "S")):
+                return _blocked("M05_MANUAL_TRADE_SIDE_MISMATCH")
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if now_epoch >= row[3] or mode != "MANUAL":
+                return _blocked("M05_MANUAL_TRADE_EXPIRED_OR_AUTO_MODE")
+            choice = "REJECT" if letter == "R" else row[2]
+            if db.execute(
+                "UPDATE m05_manual_trade_previews SET owner_choice=?,"
+                "decided_epoch=? WHERE preview_id=? AND owner_choice IS NULL",
+                (choice,now_epoch,preview_id),
+            ).rowcount != 1:
+                return _blocked("M05_MANUAL_TRADE_CALLBACK_ALREADY_USED")
+            db.execute(
+                "INSERT INTO m05_audit "
+                "(event_epoch,owner_user_id,proposal_id,event,detail) "
+                "VALUES (?,?,?,?,?)",
+                (now_epoch,user_id,preview_id,
+                 "MANUAL_PREVIEW_" + choice,"NO_ORDER_NO_FINAL"),
+            )
+        return {
+            "accepted": True,
+            "manual_trade_preview": True,
+            "preview_id": preview_id,
+            "owner_decision": choice,
+            "final_decision": None,
+            "telegram_preview_press_recorded": True,
+            "actual_trade_click_authorized": False,
+            "order_sent": False, "execution_allowed": False,
         }
 
     def issue_offline_shadow_proposal(

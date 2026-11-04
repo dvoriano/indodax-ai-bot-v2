@@ -114,6 +114,49 @@ def _send_one_queued_market_advisory(
     return {"delivery": "SENT_OWNER_PRIVATE", "messages_sent": 1}
 
 
+def _send_one_manual_trade_preview(
+        *, api: TelegramBotApiClient,
+        ledger: OwnerDecisionLedger) -> dict[str, Any]:
+    """One M05 owner-private BUY/SELL preview card. NO trade transport."""
+    try:
+        claimed = ledger.claim_manual_trade_preview_delivery(
+            now_epoch=int(time.time()),
+        )
+    except ValueError:
+        raise TelegramTransportError(
+            "M05_MANUAL_TRADE_DELIVERY_REVIEW_REQUIRED") from None
+    if claimed is None:
+        return {"delivery": "NOT_QUEUED", "messages_sent": 0}
+    msg = api.call("sendMessage", {
+        "chat_id": ledger.owner_user_id,
+        "text": claimed["message_text"],
+        "reply_markup": {"inline_keyboard": [[
+            {"text": claimed["side"] + " (uji, tanpa order)",
+             "callback_data": claimed["confirm_callback"]},
+            {"text": "BATAL", "callback_data": claimed["reject_callback"]},
+        ]]},
+        "disable_notification": False,
+    })
+    if (not isinstance(msg, dict)
+            or type(msg.get("message_id")) is not int
+            or msg["message_id"] <= 0
+            or not isinstance(msg.get("chat"), dict)
+            or type(msg["chat"].get("id")) is not int
+            or msg["chat"]["id"] != ledger.owner_user_id
+            or msg["chat"].get("type") != "private"):
+        raise TelegramTransportError(
+            "M05_MANUAL_TRADE_SEND_UNCERTAIN_REVIEW_REQUIRED")
+    try:
+        ledger.confirm_manual_trade_preview_delivery(
+            preview_id=claimed["preview_id"],
+            message_id=msg["message_id"],
+        )
+    except ValueError:
+        raise TelegramTransportError(
+            "M05_MANUAL_TRADE_ACK_UNCERTAIN_REVIEW_REQUIRED") from None
+    return {"delivery": "SENT_OWNER_PRIVATE_REVIEW_ONLY", "messages_sent": 1}
+
+
 def dedicated_owner_poll_once(
     *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
     expected_bot_id: int, lock_path: str | Path, limit: int = 10,
@@ -153,6 +196,9 @@ def dedicated_owner_poll_once(
         outbound = _send_one_queued_market_advisory(
             api=api, ledger=ledger,
         )
+        manual_preview = _send_one_manual_trade_preview(
+            api=api, ledger=ledger,
+        )
     # The poll summary is not an owner trade proposal. Each individual
     # callback is durably recorded in the owner ledger; batch has no Final.
     if result.get("final_decision") is not None or (
@@ -168,6 +214,7 @@ def dedicated_owner_poll_once(
         "human_owner_verified": False,
         "handler": result,
         "owner_market_advisory_delivery": outbound,
+        "owner_manual_trade_preview_delivery": manual_preview,
         "automatic_polling_enabled": False,
         "live_execution_authorized": False,
         "final_decision": None,
