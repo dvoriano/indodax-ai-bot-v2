@@ -105,6 +105,50 @@ PY
 
 **Fail closed:** this command never inspects ExecStart or another checkout, so even a matching WorkingDirectory is **not proof** that `/ops` is installed or that it is safe to deploy. If the working directory does not equal the original V2 root, do **not** follow or read it. Stop and ask for an explicitly scoped V2-only release decision. An inactive service with an active timer can be normal for a oneshot unit. If the M05 timer is not active, do not unilaterally start it.
 
+## Owner user-unit preflight completed; deployment path STOP (4 Nov 2026)
+
+The owner ran a narrower single read-only V2 named M05 service/timer
+metadata check, marker `M10_M05_OPS_PREFLIGHT_READONLY_COMPLETE`.
+The returned fixed metadata was:
+
+```json
+{
+  "scope": "M05_V2_USER_UNITS_ONLY",
+  "service_metadata_available": true,
+  "timer_metadata_available": true,
+  "service_fragment_matches_v2_name": true,
+  "service_workdir_is_v2_main": false,
+  "timer_active_enabled": true,
+  "actual_execstart_source_verified": false,
+  "deployment_authorized": false,
+  "service_modified": false
+}
+```
+
+**Strict interpretation:** the installed named service's
+`WorkingDirectory` **does not equal** `~/indodax-ai-bot-v2`. This
+does **not** reveal where the alternate directory is, whether it exists,
+whether it is another project, or the executable/source currently used
+by M05. A source `git pull` in the original V2 checkout is NOT proof
+that Telegram M05 `/ops` is deployed. The installed M05 Telegram timer
+remains active/enabled at the moment of inspection.
+
+**STOP:** no follow-up into an alternate WorkingDirectory, source
+checkout, ExecStart raw command, token/environment file, or unrelated
+service. Do not change installed M05 service/timer, swap symlinks,
+restart the poller, change ledger/cursor, or attempt live Telegram
+messages to force proof. Any subsequent operational migration or
+release must be independently authorized and scoped entirely to the
+existing V2 project and GitHub; it is not an action implied by this
+preflight. No further M05 unit probes are required to repeat this fact.
+
+Prior owner original V2 `/ops` **10/10 offline PASS** and GitHub
+**1145/1145** remain accepted. They prove original V2 command wiring
+with synthetic Bot API only, **not** real owner delivery, live runtime
+source identity, or 24/7 continuous monitoring. M10-06 acceptance
+stays **☐**, overall M10 **4/7**. Work independent of this
+operational blocker can continue exclusively inside V2/GitHub.
+
 ## Acceptance phases that remain open
 
 1. **Preflight**: read-only named V2 M05 unit metadata and verified expected original V2 checkout identity, without disclosing credentials. No deployment actions.
