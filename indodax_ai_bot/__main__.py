@@ -222,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Absolute owner-only 0600 JSON observations/inputs, untrusted OFFLINE sizing; no credentials")
     parser.add_argument("--m07-runtime-funding-file", default=None,
                         help="0600 JSON of explicit MAIN order budget assumptions; no market/account snapshots or keys")
+    parser.add_argument("--m07-readonly-m11-source-observation", action="store_true",
+                        help="Opt-in original M07 one-cycle source-bound M11 observation only: reuse existing 2 M06 signed GETs and M08 journal, no extra GET, Final or order")
     parser.add_argument("--m07-limit-preflight-file", default=None,
                         help="Absolute 0600 JSON of hypothetical rules, quote and IDR buckets, never exchange-verified or order authorization")
     parser.add_argument("--m07-preflight-risk-halt-reference", action="store_true",
@@ -373,6 +375,11 @@ def main(argv: list[str] | None = None) -> int:
         if (args.m07_runtime_funding_file is not None
                 and not args.m07_main_readonly_cycle_once):
             raise ConfigurationError("M07_RUNTIME_FUNDING_ONLY_FOR_REAL_READONLY_CYCLE")
+        if args.m07_readonly_m11_source_observation:
+            settings.require_m01_safety()
+            if not args.m07_main_readonly_cycle_once:
+                raise ConfigurationError(
+                    "M07_RUNTIME_M11_OBSERVATION_REQUIRES_ONE_CYCLE")
         if (args.m07_limit_preflight_file is not None
                 and not args.m07_limit_preflight_offline_once):
             raise ConfigurationError("M07_PREFLIGHT_FILE_ONLY_FOR_OFFLINE_REVIEW")
@@ -1213,9 +1220,12 @@ def main(argv: list[str] | None = None) -> int:
                     min_volume_idr=max(bulk_min_volume_idr,
                                        Decimal("150000000")),
                     deep_limit=args.bulk_deep_limit,
+                    include_m11_source_observation=(
+                        args.m07_readonly_m11_source_observation),
                 )
             except (M07PreflightBlocked, M06ScopeDenied, ValueError,
-                    OSError, ArithmeticError, TypeError, KeyError) as exc:
+                    OSError, ArithmeticError, TypeError, KeyError,
+                    sqlite3.Error) as exc:
                 reason = str(exc)
                 if not re.fullmatch(r"M07_RUNTIME_[A-Z0-9_]{1,90}", reason):
                     reason = "M07_RUNTIME_SOURCE_OR_ACCOUNT_UNRESOLVED"
