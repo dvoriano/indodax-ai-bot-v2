@@ -9,7 +9,7 @@ merged code SHA `927f14f1fb63b61edc69452fac000996e7b51bb7`.
 **GitHub CI:** [M01 Actions 41765994133](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/41765994133)
 **1176/1176 PASS** including 19 new focused offline tests and safe CLI PASS.
 [M07 original source targeted 41765994161](https://github.com/dvoriano/indodax-ai-bot-v2/actions/runs/41765994161)
-GREEN. New source has not been tested on owner VPS yet.
+GREEN. **Owner VPS original V2 detached source verification COMPLETE (4 Nov 2026): 19/19 PASS.**
 
 ## What is implemented, and what it does NOT mean
 
@@ -57,9 +57,13 @@ least-privilege secrets, protective SELL, restart/recovery on real
 exchange, or LIVE GO. This is a **pre-release architecture primitive**,
 not full M11-04 acceptance.
 
-## Owner VPS optional one-time scoped offline verification
+## Owner VPS scoped offline verification (COMPLETED 4 November 2026)
 
-Run only the new **19-test** module from exact pinned source using a
+**ACCEPTED OWNER VPS EVIDENCE, do not rerun:** owner verified exact original V2 detached SHA `927f14f1fb63b61edc69452fac000996e7b51bb7`; marker `M11_04_RISK_HALT_ORIGINAL_SOURCE_SHA=927f14f1fb63b61edc69452fac000996e7b51bb7`. Ran `tests.test_m11_04_original_durable_risk_halt` under `NO/NO/DRY_RUN`: **`Ran 19 tests in 1.534s`, `OK`**, marker `M11_04_OWNER_RISK_HALT_OFFLINE_PASS`. All 19 original journal tests passed using independent temporary SQLite fixtures, with no installed runtime database, M03/M05/BTC WS service, external helper, Telegram/network/paid AI or trade. This validates scoped offline functionality only; it does NOT authenticate owner policy, prove real loss caps/installed kill switch, or authorize LIVE.
+
+The historical command below is retained to document the exact bounded proof. Do **not** repeat it.
+
+The accepted owner command ran only the new **19-test** module from exact pinned source using a
 temporary detached worktree. Do **not** `git pull` or reset the original
 V2 `main` checkout. This script does not open any live runtime SQLite
 file. Tests create their own isolated temporary journal under `/tmp`.
