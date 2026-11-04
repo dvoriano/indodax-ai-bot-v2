@@ -115,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="Original V2 M09 public shadow and M07/M08 journal recovery review, no post-SELL event claim or trade")
     group.add_argument("--m09-shadow-mainpath-once", action="store_true",
                        help="One original V2 public scanner→AI advisory→M05/M07/M08 shadow; isolated /tmp journal, no paid AI/trade")
+    group.add_argument("--m08-settlement-admission-offline-once",
+                       action="store_true",
+                       help="M08-06 original V2 READ ONLY buy/sell fill and fee settlement admission, always BLOCK; isolated /tmp M11 fixture only")
     group.add_argument("--m08-post-sell-rediscovery-offline-once",
                        action="store_true",
                        help="One original M08-07 settled-IDR source gate to same public scanner; isolated /tmp journal only, no BUY")
@@ -216,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Absolute /tmp 0600 JSON with M09 recovery identities only, not settlement facts")
     parser.add_argument("--m08-sell-preflight-file", default=None,
                         help="Absolute 0600 JSON scenario in /tmp for original M08 offline non-executing SELL review only")
+    parser.add_argument("--m08-settlement-admission-file", default=None,
+                        help="Owner-private 0600 exact-schema /tmp JSON for future M08-06 issuer review only; never a verified wallet/issuer")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
     parser.add_argument("--m07-main-sizing-file", default=None,
@@ -256,6 +261,43 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m08_settlement_admission_file is not None and not args.m08_settlement_admission_offline_once:
+            raise ConfigurationError("M08_SETTLEMENT_FIXTURE_ONLY_FOR_OFFLINE_ADMISSION")
+        if args.m08_settlement_admission_offline_once:
+            settings.require_m01_safety()
+            # Exact original V2 private synthetic /tmp fixture, read-only
+            # SAME DecisionJournal. Must reject before normal constructor.
+            try:
+                journal = DecisionJournal.open_m11_offline_fixture_readonly(args.db)
+                fixture_path = Path(args.m08_settlement_admission_file)
+                if (not fixture_path.is_absolute()
+                        or fixture_path.is_symlink()
+                        or fixture_path.parent != journal._db_path.parent
+                        or not fixture_path.is_file()
+                        or fixture_path.stat().st_size > 4096):
+                    raise ValueError("M08_SETTLEMENT_FIXTURE_SCOPE_INVALID")
+                raw = _owner_private_file(str(fixture_path))
+                expected = {"account_fingerprint", "symbol",
+                            "source_buy_client_order_id",
+                            "sell_client_order_id", "observed_epoch"}
+                if (type(raw) is not dict or set(raw) != expected
+                        or type(raw["observed_epoch"]) is not int
+                        or any(type(raw[k]) is not str for k in expected
+                               - {"observed_epoch"})):
+                    raise ValueError("M08_SETTLEMENT_FIXTURE_SCHEMA_INVALID")
+                report = DailyScalpingOrchestrator(
+                    settings, journal,
+                ).review_m08_original_sell_settlement_admission_offline_once(**raw)
+            except (sqlite3.Error, ValueError, OSError,
+                    DecisionConflictError, M06ScopeDenied):
+                raise ConfigurationError(
+                    "M08_SETTLEMENT_OFFLINE_ADMISSION_UNVERIFIED") from None
+            print(json.dumps({
+                "m08_settlement_issuer_admission": report,
+                "final_decision": None, "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0  # Review only; not a settlement event or BUY/SELL.
         if args.m11_release_risk_offline_once:
             settings.require_m01_safety()
             result = review_m11_release_risk_offline(settings=settings)
