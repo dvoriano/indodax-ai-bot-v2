@@ -134,6 +134,158 @@ PY
 
 **Interpretation:** positive counts can identify whether additional `ExecCondition` or `Condition*` directives occur in the V2 installed base file or its user-owned drop-ins. They **cannot prove why the command returned 1**, or whether the condition was intentionally installed as an owner safety stop. Any missing/untrusted file, external drop-in, unparseable directive or ambiguous reset means **UNVERIFIED**. Never restart, remove or bypass the guard based on a count alone.
 
+## Installed guard origin now confirmed by owner (4 November 2026)
+
+The owner completed the V2-only guard-origin inspection with marker
+`M10_BTC_WS_GUARD_ORIGIN_READONLY_COMPLETED`. Exact sanitized result:
+
+```json
+{
+  "scope": "ONE_V2_USER_UNIT_ONLY",
+  "installed_base": {
+    "exec_condition_rules": 0,
+    "condition_assert_rules": 0
+  },
+  "v2_dropins_trusted": 1,
+  "other_or_untrusted_dropins": 0,
+  "v2_dropin_exec_condition_rules": 1,
+  "v2_dropin_condition_assert_rules": 0,
+  "guard_purpose_verified": false,
+  "service_restart_authorized": false
+}
+```
+
+Thus the observed `ExecCondition` directive originated in exactly **one
+trusted V2 owner user-unit drop-in**, not the base unit. This is a meaningful
+**location** proof, **not** proof that its command is safe, that it was
+intentionally installed, or why it returned exit status 1. Do not remove
+or edit the confirmed guard as a workaround. The original main-path V2
+code and previously qualified batches remain unchanged.
+
+### Optional last read-only classification of the single V2 guard
+
+Only if further root-cause analysis is authorized, this bounded command
+re-reads **just the active allowlisted V2-owned drop-in** to print fixed,
+non-sensitive categories. It never invokes the guard command or outputs its
+argument string, script path, raw file text, environment variables, owner
+credentials, or any unrelated service. Booleans are **textual hints only**:
+if a guard invokes a separate script, its actual behavior cannot be
+established by this classification.
+
+```bash
+(
+  set -euo pipefail
+  "$HOME/indodax-ai-bot-v2/.venv/bin/python" -B - <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+
+unit = "indodax-v2-public-ws-btc.service"
+base_dir = Path.home() / ".config" / "systemd" / "user"
+expected_base = base_dir / unit
+expected_drop_dir = base_dir / (unit + ".d")
+result = {
+    "scope": "ONE_INSTALLED_V2_BTC_WS_DROPIN_STATIC_ONLY",
+    "status": "UNVERIFIED",
+    "trusted_single_dropin": False,
+    "service_section_exec_condition_rules": None,
+    "guard_mentions_v2_home": None,
+    "guard_mentions_ws_status_sidecar": None,
+    "guard_mentions_ws_sqlite": None,
+    "guard_mentions_clean_batch_flag": None,
+    "guard_mentions_reject_state": None,
+    "guard_has_shell_wrapper_hint": None,
+    "guard_calls_external_script_hint": None,
+    "guard_exact_intent_verified": False,
+    "exec_condition_exit1_root_cause_verified": False,
+    "service_restart_authorized": False,
+    "guard_bypass_authorized": False,
+}
+try:
+    p = subprocess.run(
+        ["/usr/bin/systemctl", "--user", "--no-pager", "show",
+         "-p", "FragmentPath", "-p", "DropInPaths", unit],
+        capture_output=True, text=True, timeout=8, check=False,
+        env={k: v for k, v in os.environ.items()
+             if k in ("HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "PATH")},
+    )
+    if p.returncode != 0 or len(p.stdout) > 16384:
+        raise ValueError("UNAVAILABLE")
+    props = {}
+    for line in p.stdout.splitlines():
+        k, sep, val = line.partition("=")
+        if sep and k in ("FragmentPath", "DropInPaths") and k not in props:
+            props[k] = val
+    paths = props.get("DropInPaths", "").split()
+    if props.get("FragmentPath") != str(expected_base) or len(paths) != 1:
+        raise ValueError("OUTSIDE_V2_SCOPE")
+    path = Path(paths[0])
+    if (path.parent != expected_drop_dir
+            or path.suffix != ".conf"
+            or ".." in path.parts):
+        raise ValueError("OUTSIDE_V2_SCOPE")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode)
+                or st.st_uid != os.geteuid()
+                or st.st_mode & 0o022
+                or not 1 <= st.st_size <= 32768):
+            raise ValueError("UNTRUSTED_FILE")
+        raw = os.read(fd, 32769).decode("utf-8")
+    finally:
+        os.close(fd)
+
+    active = False
+    commands = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            active = line == "[Service]"
+        elif active:
+            m = re.fullmatch(r"ExecCondition\s*=\s*(.*)", line)
+            if m:
+                commands.append(m.group(1))
+    result["trusted_single_dropin"] = True
+    result["service_section_exec_condition_rules"] = len(commands)
+    # Text pattern hints. They are NOT a verified call graph or policy.
+    if len(commands) == 1:
+        value = commands[0]
+        result.update({
+            "guard_mentions_v2_home": "indodax-ai-bot-v2" in value,
+            "guard_mentions_ws_status_sidecar": "public_ws_btc.status.json" in value,
+            "guard_mentions_ws_sqlite": "public_ws_btc.sqlite3" in value,
+            "guard_mentions_clean_batch_flag":
+                "restart_only_after_clean_batch" in value,
+            "guard_mentions_reject_state": "REJECT" in value,
+            "guard_has_shell_wrapper_hint": bool(re.search(
+                r"(?:^|/)(?:bash|sh)(?:\s|$)", value)),
+            "guard_calls_external_script_hint": bool(re.search(
+                r"\.(?:sh|py)(?:\s|$|[\"'])", value)),
+        })
+        result["status"] = "V2_GUARD_TEXT_HINTS_ONLY"
+    else:
+        result["status"] = "V2_GUARD_MULTIPLE_OR_MISSING_RULES"
+except (OSError, ValueError, UnicodeError, subprocess.TimeoutExpired):
+    result["status"] = "V2_GUARD_STATIC_READ_UNAVAILABLE"
+
+print(json.dumps(result, sort_keys=True))
+PY
+  echo "M10_BTC_WS_GUARD_STATIC_READONLY_COMPLETED"
+)
+```
+
+**Readout rule:** even a hint `true` does not prove why
+`ExecCondition` exited 1 or permit a restart. Any unknown, absent status
+file, external helper or complex shell expression remains **UNVERIFIED**.
+Owner approval is required before any service change. M03 timer and
+trading LIVE remain OFF.
+
 ## Single read-only proof, no service mutation
 
 This command prints **sanitized booleans/statuses only**. It reads one fixed allowlisted V2 user-unit via `systemctl --user show` and one V2 owner status JSON via `O_NOFOLLOW` bounded read. No journal, service source file, environment values, command/argv, private API, other repos, restart, credential, or trading request is output. Even if an ExecCondition value contains arguments, the script returns only **presence and numeric status codes**, never the command.
