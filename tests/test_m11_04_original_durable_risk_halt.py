@@ -111,7 +111,8 @@ class M11OriginalV2DurableOfflineHaltTests(unittest.TestCase):
             reason_code="UNKNOWN_ORDER", observed_epoch=EPOCH)
         self.assertFalse(r["replay"])
         self.assertFalse(r["halt_cleared"])
-        self.forbidden_go(r) if "m11_live_release_authorized" in r else self.assertFalse(r["live_execution_unlocked"])
+        self.assertFalse(r["live_execution_unlocked"])
+        self.forbidden_go(r)
         snapshot = self.journal.review_m11_offline_risk_halt(
             owner_user_id=OWNER, observed_epoch=EPOCH)
         self.assertEqual(snapshot["halt_event_count_observed"], 1)
@@ -253,6 +254,32 @@ class M11OriginalV2DurableOfflineHaltTests(unittest.TestCase):
         self.assertFalse(state["offline_policy_present_for_caller"])
         self.assertNotIn(str(OWNER), str(state))
         self.forbidden_go(state)
+
+    def test_earlier_unbound_owner_halt_cannot_be_taken_over(self):
+        self.journal.engage_m11_offline_emergency_halt_once(
+            owner_user_id=OWNER + 1, event_id=EVENT,
+            reason_code="RECOVERY_UNVERIFIED", observed_epoch=EPOCH)
+        with self.assertRaisesRegex(DecisionConflictError,
+                                    "M11_RISK_POLICY_HALT_OWNER_CONFLICT"):
+            self.journal.record_m11_offline_risk_limits_once(**limits())
+        state = self.journal.review_m11_offline_risk_halt(
+            owner_user_id=OWNER, observed_epoch=EPOCH)
+        self.assertFalse(state["offline_policy_present_for_caller"])
+        self.forbidden_go(state)
+
+    def test_tampered_risk_ceiling_fails_immutable_policy_digest(self):
+        self.journal.record_m11_offline_risk_limits_once(**limits())
+        with sqlite3.connect(self.db) as con:
+            con.execute(
+                "UPDATE m11_offline_risk_limits "
+                "SET capital_ceiling_idr='9000000' WHERE singleton=1"
+            )
+        record = self.journal.review_m11_offline_risk_halt(**review())
+        self.assertFalse(record["offline_policy_present_for_caller"])
+        self.assertIn("OWNER_OFFLINE_POLICY_UNVERIFIED_OR_MISSING",
+                      record["reason_codes"])
+        self.assertIsNone(record["scenario_proposed_total_capital_within"])
+        self.forbidden_go(record)
 
     def test_corrupted_event_count_and_missing_halt_fail_closed(self):
         self.journal.record_m11_offline_risk_limits_once(**limits())
