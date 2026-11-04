@@ -174,6 +174,59 @@ class DailyScalpingOrchestrator:
             raise TypeError("M03_INVALID_OWNER_ENTERED_FEE_SNAPSHOT")
         self._m03_owner_fee_snapshot = m03_owner_fee_snapshot
 
+    def review_m11_offline_shadow_safety_once(
+        self, *, owner_user_id: int, observed_epoch: int,
+        proposed_buy_cost_idr: Decimal | None = None,
+        existing_exposure_idr: Decimal | None = None,
+        open_order_count: int | None = None,
+        daily_realized_net_idr: Decimal | None = None,
+        realized_pnl_day_wib: str | None = None,
+    ) -> dict:
+        """CLI → ORIGINAL orchestrator → SAME M11 journal read-only review.
+
+        Only explicitly isolated synthetic /tmp fixtures are allowed.
+        Neither public M03/M04 data, a provider nor a Telegram owner source
+        may become an M11 release credential or an executable Risk verdict.
+        """
+        self.settings.require_m01_safety()
+        if not getattr(self.journal, "_m11_readonly_fixture", False):
+            raise ValueError("M11_SHADOW_READONLY_FIXTURE_REQUIRED")
+        if (self._ai_role_caller is not None
+                or self._source_verifier is not None
+                or self._owner_control is not None):
+            raise ValueError("M11_SHADOW_EXTERNAL_AUTHORITY_FORBIDDEN")
+        snapshot = self.journal.review_m11_offline_risk_halt(
+            owner_user_id=owner_user_id, observed_epoch=observed_epoch,
+            proposed_buy_cost_idr=proposed_buy_cost_idr,
+            existing_exposure_idr=existing_exposure_idr,
+            open_order_count=open_order_count,
+            daily_realized_net_idr=daily_realized_net_idr,
+            realized_pnl_day_wib=realized_pnl_day_wib,
+        )
+        if (snapshot.get("status") !=
+                "REJECT_OFFLINE_RISK_HALT_AND_UNVERIFIED_SOURCES"
+                or snapshot.get("execution_allowed") is not False
+                or snapshot.get("m11_live_release_authorized") is not False
+                or snapshot.get("scenario_is_real_exchange_evidence") is not False
+                or snapshot.get("owner_identity_authenticated") is not False):
+            raise ValueError("M11_SHADOW_UNEXPECTED_AUTHORITY_DENIED")
+        return {
+            "stage": "M11_ORIGINAL_V2_SHADOW_RISK_HALT_READONLY",
+            "status": "REJECT_SHADOW_OFFLINE_ONLY",
+            "source": "ISOLATED_SYNTHETIC_FIXTURE_NOT_EXCHANGE",
+            "original_orchestrator_invoked": True,
+            "same_original_decision_journal_review_invoked": True,
+            "risk_halt_review": snapshot,
+            "owner_final_decision": None,
+            "g1_independent_source_verified": False,
+            "account_or_real_pnl_verified": False,
+            "risk_release_live_gate_connected": False,
+            "telegram_or_paid_ai_called": False,
+            "order_sent": False,
+            "execution_allowed": False,
+            "m11_live_release_authorized": False,
+        }
+
     def inspect_m07_official_order_adapter_once(self) -> dict:
         """Original V2 mainpath, bounded offline signed-contract status ONLY.
 

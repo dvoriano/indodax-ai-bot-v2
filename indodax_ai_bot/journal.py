@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 import hashlib
+import os
+import stat
 import json
 import re
 from decimal import Decimal
@@ -35,6 +37,7 @@ class DeepWindow:
 
 class DecisionJournal:
     def __init__(self, db_path: str | Path):
+        self._m11_readonly_fixture = False
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
@@ -460,9 +463,55 @@ class DecisionJournal:
 
 
 
+    @classmethod
+    def open_m11_offline_fixture_readonly(
+        cls, db_path: str | Path,
+    ) -> "DecisionJournal":
+        """Open one existing private /tmp M11 fixture without schema writes.
+
+        This is the SAME DecisionJournal and review implementation. It is
+        intentionally unavailable for normal runtime SQLite, Telegram,
+        private account, owner Final, M07 execution or LIVE authorization.
+        """
+        path = Path(db_path)
+        if not path.is_absolute() or path.name != "m11_offline_fixture.sqlite3":
+            raise ValueError("M11_SHADOW_FIXTURE_SCOPE_INVALID")
+        try:
+            resolved = path.resolve(strict=True)
+            file_st = path.lstat()
+            parent_st = path.parent.stat()
+        except (OSError, RuntimeError):
+            raise ValueError("M11_SHADOW_FIXTURE_UNAVAILABLE") from None
+        if (resolved != path or path.is_symlink()
+                or path.parent == Path("/tmp")
+                or not path.parent.is_relative_to(Path("/tmp"))
+                or not stat.S_ISREG(file_st.st_mode)
+                or not stat.S_ISDIR(parent_st.st_mode)
+                or file_st.st_uid != os.getuid()
+                or parent_st.st_uid != os.getuid()
+                or stat.S_IMODE(file_st.st_mode) & 0o077
+                or not stat.S_IMODE(file_st.st_mode) & 0o400
+                or stat.S_IMODE(parent_st.st_mode) & 0o077):
+            raise ValueError("M11_SHADOW_FIXTURE_SCOPE_INVALID")
+        # A WAL/SHM/journal sidecar could alter which version is read.
+        # Treat it as unverified rather than promoting a stale snapshot.
+        if any(Path(str(path) + suffix).exists()
+               for suffix in ("-wal", "-shm", "-journal")):
+            raise ValueError("M11_SHADOW_FIXTURE_SIDECAR_UNVERIFIED")
+        instance = cls.__new__(cls)
+        instance._db_path = path
+        instance._m11_readonly_fixture = True
+        return instance
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        con = sqlite3.connect(self._db_path, timeout=10)
+        if getattr(self, "_m11_readonly_fixture", False):
+            con = sqlite3.connect(
+                self._db_path.as_uri() + "?mode=ro", uri=True, timeout=10,
+            )
+            con.execute("PRAGMA query_only=ON")
+        else:
+            con = sqlite3.connect(self._db_path, timeout=10)
         try:
             with con:
                 yield con
@@ -3019,7 +3068,10 @@ class DecisionJournal:
                     re.fullmatch(r"\d{4}-\d{2}-\d{2}", realized_pnl_day_wib) is None):
                 raise ValueError("M11_RISK_DAY_WIB_INVALID")
         with self._connect() as con:
-            con.execute("BEGIN IMMEDIATE")
+            # A read-only fixture takes an atomic SQLite snapshot, not a
+            # RESERVED write lock. Existing mutable review path is unchanged.
+            con.execute("BEGIN" if getattr(self, "_m11_readonly_fixture", False)
+                        else "BEGIN IMMEDIATE")
             policy = con.execute(
                 "SELECT owner_user_id,policy_id,policy_sha256,"
                 "capital_ceiling_idr,max_open_orders,daily_loss_ceiling_idr,"
