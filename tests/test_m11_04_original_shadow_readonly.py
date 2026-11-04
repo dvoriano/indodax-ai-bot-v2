@@ -150,10 +150,12 @@ class M11OriginalShadowReadonlyTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("M11_SHADOW_READONLY_FIXTURE_UNVERIFIED", err)
         self.assertFalse(missing.exists())
-        with patch.dict(os.environ, {}, clear=True), redirect_stdout(StringIO()), redirect_stderr(StringIO()) as e:
-            code = main(["--m11-risk-halt-shadow-offline-once"])
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(StringIO()) as stdout, redirect_stderr(StringIO()) as stderr:
+                code = main(["--m11-risk-halt-shadow-offline-once"])
         self.assertEqual(code, 2)
-        self.assertFalse(Path("runtime/decisions.sqlite3").exists() and False)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("M11_SHADOW_READONLY_FIXTURE_UNVERIFIED", stderr.getvalue())
 
     def test_external_checkout_path_and_wrong_filename_denied(self):
         for value in (Path("/home/ubuntu/indodax-ai-bot-v2/runtime/decisions.sqlite3"),
