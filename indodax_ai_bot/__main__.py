@@ -224,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="0600 JSON of explicit MAIN order budget assumptions; no market/account snapshots or keys")
     parser.add_argument("--m07-limit-preflight-file", default=None,
                         help="Absolute 0600 JSON of hypothetical rules, quote and IDR buckets, never exchange-verified or order authorization")
+    parser.add_argument("--m07-preflight-risk-halt-reference", action="store_true",
+                        help="Opt-in M07 synthetic LIMIT preflight: same existing private /tmp M11 SQLite fixture, offline read-only report, never GO/order")
     parser.add_argument("--m07-private-symbol", default=None)
     parser.add_argument("--m07-private-client-order-id", default=None)
     parser.add_argument("--m07-observation-id", default=None)
@@ -374,6 +376,25 @@ def main(argv: list[str] | None = None) -> int:
         if (args.m07_limit_preflight_file is not None
                 and not args.m07_limit_preflight_offline_once):
             raise ConfigurationError("M07_PREFLIGHT_FILE_ONLY_FOR_OFFLINE_REVIEW")
+        if args.m07_preflight_risk_halt_reference:
+            settings.require_m01_safety()
+            if (not args.m07_limit_preflight_offline_once
+                    or type(args.m07_limit_preflight_file) is not str):
+                raise ConfigurationError(
+                    "M07_PREFLIGHT_RISK_REFERENCE_REQUIRES_OFFLINE_PREFLIGHT")
+            # Deny BEFORE constructor would initialize an arbitrary runtime
+            # journal. The scenario must share a private synthetic folder
+            # with the SAME existing M11 fixture. Never deployed DB.
+            try:
+                refdb = DecisionJournal.open_m11_offline_fixture_readonly(args.db)
+                p = Path(args.m07_limit_preflight_file)
+                if (not p.is_absolute()
+                        or p.parent != refdb._db_path.parent
+                        or p.is_symlink() or not p.is_file()):
+                    raise ValueError("M07_PREFLIGHT_RISK_REFERENCE_SCENARIO_SCOPE")
+            except (OSError, ValueError, sqlite3.Error):
+                raise ConfigurationError(
+                    "M07_PREFLIGHT_RISK_REFERENCE_PRIVATE_FIXTURE_REQUIRED") from None
         status_fields = (
             args.m07_observation_id, args.m07_observed_status,
             args.m07_cumulative_base, args.m07_cumulative_quote,
@@ -1431,13 +1452,32 @@ def main(argv: list[str] | None = None) -> int:
             late_gate = app.review_m07_last_moment_gate_offline(
                 limit_preview=preview, now_epoch=int(time.time()),
             )
-            print(json.dumps({
+            result = {
                 "m07_last_moment_gate": late_gate,
                 "m07_limit_preflight": asdict(preview),
                 "final_decision": None,
                 "execution_allowed": False,
                 "live_trading_authorized": False,
-            }, sort_keys=True))
+            }
+            if args.m07_preflight_risk_halt_reference:
+                try:
+                    result["m07_risk_halt_readonly_reference"] = (
+                        app.review_m07_preflight_m11_risk_halt_offline_once(
+                            limit_preview=preview, last_moment=late_gate,
+                        )
+                    )
+                except (ValueError, OSError, sqlite3.Error):
+                    print(json.dumps({
+                        "m07_limit_preflight": {
+                            "status": "BLOCKED",
+                            "reason": "M07_PREFLIGHT_RISK_REFERENCE_UNAVAILABLE",
+                            "order_sent": False, "execution_allowed": False,
+                        },
+                        "final_decision": None, "execution_allowed": False,
+                        "live_trading_authorized": False,
+                    }, sort_keys=True), file=sys.stderr)
+                    return 3
+            print(json.dumps(result, sort_keys=True))
             return 0
         if args.m07_order_adapter_offline_once:
             settings.require_m01_safety()

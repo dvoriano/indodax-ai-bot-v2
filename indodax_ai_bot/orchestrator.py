@@ -263,6 +263,72 @@ class DailyScalpingOrchestrator:
             max_spread_bps=max_spread_bps,
         )
 
+    def review_m07_preflight_m11_risk_halt_offline_once(
+            self, *, limit_preview: M07LimitBuyPreflightPreview,
+            last_moment: dict) -> dict:
+        """Original M07 synthetic preflight → SAME original M11 journal.
+
+        An opt-in REPORT, never a trading gate, Final or Risk approval.
+        This does not feed hypothetical limit price, quantity, balances,
+        fees, commitments, PAPER PnL or timestamps into M11 account caps
+        or daily realized loss; those facts require authenticated sources.
+        """
+        self.settings.require_m01_safety()
+        if (type(limit_preview) is not M07LimitBuyPreflightPreview
+                or type(last_moment) is not dict
+                or last_moment.get("execution_allowed") is not False
+                or last_moment.get("order_sent") is not False
+                or limit_preview.execution_allowed is not False
+                or limit_preview.order_sent is not False):
+            raise ValueError("M07_PREFLIGHT_RISK_REFERENCE_UNTRUSTED_INPUT")
+        if (self._owner_control is not None
+                or self._ai_role_caller is not None
+                or self._source_verifier is not None
+                or self._m03_owner_fee_snapshot is not None):
+            raise ValueError("M07_PREFLIGHT_RISK_REFERENCE_EXTERNAL_SOURCE_DENIED")
+        # Do not create a new ledger. The same original DecisionJournal file
+        # is opened read-only with a private synthetic /tmp scope hardcheck.
+        readonly = DecisionJournal.open_m11_offline_fixture_readonly(
+            self.journal._db_path)
+        if readonly._db_path != self.journal._db_path:
+            raise ValueError("M07_PREFLIGHT_RISK_REFERENCE_NOT_SAME_JOURNAL")
+        report = DailyScalpingOrchestrator(
+            self.settings, readonly,
+        ).review_m11_offline_shadow_safety_once(
+            owner_user_id=1, observed_epoch=1793781000,
+        )
+        snap = report["risk_halt_review"]
+        if (report["status"] != "REJECT_SHADOW_OFFLINE_ONLY"
+                or snap["realized_pnl_settlement_verified"] is not False
+                or snap["scenario_daily_loss_below_limit"] is not None
+                or snap["scenario_proposed_total_capital_within"] is not None
+                or snap["scenario_order_slots_within"] is not None
+                or snap["owner_identity_authenticated"] is not False
+                or report["owner_final_decision"] is not None
+                or report["m11_live_release_authorized"] is not False
+                or report["execution_allowed"] is not False):
+            raise ValueError("M07_PREFLIGHT_RISK_REFERENCE_AUTHORITY_DENIED")
+        return {
+            "stage": "M07_M11_ORIGINAL_OFFLINE_PREFLIGHT_RISK_OBSERVATION",
+            "status": "REJECT_OFFLINE_UNVERIFIED_RELEASE",
+            "source": "SAME_ORIGINAL_V2_PRIVATE_SYNTHETIC_JOURNAL",
+            "m07_limit_math_reference_passed_unverified":
+                limit_preview.checks_passed_unverified,
+            "m07_last_moment_status_reference": last_moment.get("status"),
+            "m11_risk_halt": report,
+            "owner_identity_status": "UNKNOWN_SYNTHETIC_FIXTURE_ONLY",
+            "existing_exposure_status": "UNKNOWN_NO_AUTHENTICATED_ACCOUNT",
+            "open_orders_status": "UNKNOWN_NO_AUTHENTICATED_EXCHANGE_STATE",
+            "realized_daily_loss_status":
+                "UNKNOWN_NO_EXCHANGE_SETTLED_IDR_EVIDENCE",
+            "g1_source_status": "UNVERIFIED_NO_INDEPENDENT_ISSUER",
+            "m07_order_intent_created": False,
+            "owner_final_decision": None,
+            "order_sent": False,
+            "execution_allowed": False,
+            "m11_live_release_authorized": False,
+        }
+
     def review_m07_owner_main_idr_sizing_offline(
             self, *, public_candidate: dict, account_snapshot: dict,
             owner_main_source_classified: bool,
