@@ -82,6 +82,56 @@ class DecisionJournal:
                     next_index INTEGER NOT NULL
                 )"""
             )
+            # M11-04: ONE original DecisionJournal SQLite, NEVER a second
+            # risk database, owner authorization, account source, or BUY gate.
+            # Missing/ambiguous policy is denied. The halt is *born engaged*
+            # and has NO clear/disengage API in the offline source contract.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m11_offline_risk_limits (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    owner_user_id INTEGER NOT NULL,
+                    policy_id TEXT NOT NULL UNIQUE,
+                    policy_sha256 TEXT NOT NULL,
+                    capital_ceiling_idr TEXT NOT NULL,
+                    max_open_orders INTEGER NOT NULL,
+                    daily_loss_ceiling_idr TEXT NOT NULL,
+                    recorded_epoch INTEGER NOT NULL,
+                    source_kind TEXT NOT NULL
+                        CHECK(source_kind='OWNER_ENTERED_OFFLINE_UNVERIFIED'),
+                    execution_allowed INTEGER NOT NULL
+                        CHECK(execution_allowed=0)
+                )"""
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m11_offline_risk_halt (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    state TEXT NOT NULL CHECK(state='ENGAGED'),
+                    event_count INTEGER NOT NULL CHECK(event_count>=0),
+                    execution_allowed INTEGER NOT NULL
+                        CHECK(execution_allowed=0)
+                )"""
+            )
+            con.execute(
+                "INSERT OR IGNORE INTO m11_offline_risk_halt "
+                "(singleton,state,event_count,execution_allowed) "
+                "VALUES (1,'ENGAGED',0,0)"
+            )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m11_offline_risk_halt_events (
+                    event_id TEXT PRIMARY KEY,
+                    owner_user_id INTEGER NOT NULL,
+                    reason_code TEXT NOT NULL CHECK(reason_code IN (
+                        'OWNER_EMERGENCY','LIMIT_REVIEW',
+                        'UNKNOWN_ORDER','RECOVERY_UNVERIFIED'
+                    )),
+                    observed_epoch INTEGER NOT NULL,
+                    event_digest TEXT NOT NULL,
+                    source_kind TEXT NOT NULL
+                        CHECK(source_kind='OFFLINE_UNVERIFIED'),
+                    execution_allowed INTEGER NOT NULL
+                        CHECK(execution_allowed=0)
+                )"""
+            )
             # M07-01/03: original V2 journal owns one durable OFFLINE-only
             # order-intent reservation namespace. This table is NOT a
             # signed exchange execution log or authenticated ownership.
@@ -2760,4 +2810,299 @@ class DecisionJournal:
             "trainable_model_authorized":False,
             "g1_verified":False,
             "trade_authorized":False,
+        }
+
+
+
+    # M11-04 ONLY: durable owner-entered risk scenario + permanent OFFLINE
+    # emergency halt contract in the ORIGINAL DecisionJournal. Not called
+    # by any execution, private API, Telegram or normal scanner route.
+    @staticmethod
+    def _m11_offline_id(value: str) -> str:
+        if type(value) is not str or re.fullmatch(r"[a-f0-9]{24}", value) is None:
+            raise ValueError("M11_RISK_OFFLINE_ID_INVALID")
+        return value
+
+    @staticmethod
+    def _m11_offline_epoch(value: int) -> int:
+        if type(value) is not int or not 1 <= value <= 9999999999:
+            raise ValueError("M11_RISK_OFFLINE_EPOCH_INVALID")
+        return value
+
+    @staticmethod
+    def _m11_offline_owner(value: int) -> int:
+        # This is only a caller-provided identifier, not authentication.
+        if type(value) is not int or not 1 <= value <= 9999999999:
+            raise ValueError("M11_RISK_OFFLINE_OWNER_INVALID")
+        return value
+
+    @staticmethod
+    def _m11_offline_amount(value: Decimal, *, zero_ok: bool = False,
+                            signed: bool = False) -> str:
+        if (type(value) is not Decimal or not value.is_finite()
+                or value != 0 and not -18 <= value.adjusted() <= 20
+                or (not zero_ok and not signed and value <= 0)
+                or (zero_ok and not signed and value < 0)):
+            raise ValueError("M11_RISK_OFFLINE_AMOUNT_INVALID")
+        return format(value, "f")
+
+    def record_m11_offline_risk_limits_once(
+        self, *, owner_user_id: int, policy_id: str,
+        capital_ceiling_idr: Decimal, max_open_orders: int,
+        daily_loss_ceiling_idr: Decimal, recorded_epoch: int,
+    ) -> dict:
+        """Persist immutable, explicitly *unverified* offline owner inputs.
+
+        An identical replay is inert; ANY change to owner/budget/policy
+        requires a FUTURE separately approved mechanism, not overwrite.
+        Creates no usable BUY budget, free balance or live risk permission.
+        """
+        uid = self._m11_offline_owner(owner_user_id)
+        pid = self._m11_offline_id(policy_id)
+        epoch = self._m11_offline_epoch(recorded_epoch)
+        capital = self._m11_offline_amount(capital_ceiling_idr)
+        dayloss = self._m11_offline_amount(daily_loss_ceiling_idr)
+        if type(max_open_orders) is not int or not 1 <= max_open_orders <= 10000:
+            raise ValueError("M11_RISK_OFFLINE_ORDER_LIMIT_INVALID")
+        payload = (uid, pid, capital, max_open_orders, dayloss, epoch)
+        digest = hashlib.sha256(json.dumps(
+            payload, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")).hexdigest()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            halt = con.execute(
+                "SELECT state,execution_allowed FROM m11_offline_risk_halt "
+                "WHERE singleton=1"
+            ).fetchone()
+            if halt != ("ENGAGED", 0):
+                raise DecisionConflictError("M11_RISK_HALT_UNTRUSTED")
+            event_owners = con.execute(
+                "SELECT DISTINCT owner_user_id FROM m11_offline_risk_halt_events"
+            ).fetchall()
+            if any(row[0] != uid for row in event_owners):
+                raise DecisionConflictError("M11_RISK_POLICY_HALT_OWNER_CONFLICT")
+            prior = con.execute(
+                "SELECT owner_user_id,policy_id,policy_sha256,"
+                "capital_ceiling_idr,max_open_orders,"
+                "daily_loss_ceiling_idr,recorded_epoch,source_kind,"
+                "execution_allowed FROM m11_offline_risk_limits "
+                "WHERE singleton=1"
+            ).fetchone()
+            if prior is not None:
+                if prior != (uid, pid, digest, capital, max_open_orders,
+                             dayloss, epoch, "OWNER_ENTERED_OFFLINE_UNVERIFIED", 0):
+                    raise DecisionConflictError("M11_RISK_POLICY_REPLAY_CONFLICT")
+                replay = True
+            else:
+                con.execute(
+                    "INSERT INTO m11_offline_risk_limits "
+                    "(singleton,owner_user_id,policy_id,policy_sha256,"
+                    "capital_ceiling_idr,max_open_orders,"
+                    "daily_loss_ceiling_idr,recorded_epoch,source_kind,"
+                    "execution_allowed) VALUES (1,?,?,?,?,?,?,?,?,0)",
+                    (uid, pid, digest, capital, max_open_orders,
+                     dayloss, epoch, "OWNER_ENTERED_OFFLINE_UNVERIFIED"),
+                )
+                replay = False
+        return {
+            "status": "OFFLINE_RISK_POLICY_STORED_NOT_AUTHORITY",
+            "replay": replay, "persistent_halt_engaged": True,
+            "owner_authenticated": False, "policy_owner_approved": False,
+            "execution_allowed": False, "m11_live_release_authorized": False,
+        }
+
+    def engage_m11_offline_emergency_halt_once(
+        self, *, owner_user_id: int, event_id: str,
+        reason_code: str, observed_epoch: int,
+    ) -> dict:
+        """Idempotent ENGAGE only; cannot clear halt or authorize SELL/BUY."""
+        uid = self._m11_offline_owner(owner_user_id)
+        eid = self._m11_offline_id(event_id)
+        epoch = self._m11_offline_epoch(observed_epoch)
+        if type(reason_code) is not str or reason_code not in (
+            "OWNER_EMERGENCY", "LIMIT_REVIEW", "UNKNOWN_ORDER",
+            "RECOVERY_UNVERIFIED",
+        ):
+            raise ValueError("M11_RISK_HALT_REASON_INVALID")
+        fingerprint = hashlib.sha256(json.dumps(
+            (uid, eid, reason_code, epoch), separators=(",", ":")
+        ).encode("ascii")).hexdigest()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            halt = con.execute(
+                "SELECT state,event_count,execution_allowed "
+                "FROM m11_offline_risk_halt WHERE singleton=1"
+            ).fetchone()
+            if (halt is None or halt[0] != "ENGAGED"
+                    or type(halt[1]) is not int or halt[1] < 0
+                    or halt[2] != 0):
+                raise DecisionConflictError("M11_RISK_HALT_UNTRUSTED")
+            prior = con.execute(
+                "SELECT owner_user_id,reason_code,observed_epoch,"
+                "event_digest,source_kind,execution_allowed "
+                "FROM m11_offline_risk_halt_events WHERE event_id=?",
+                (eid,),
+            ).fetchone()
+            if prior is not None:
+                if prior != (uid, reason_code, epoch, fingerprint,
+                             "OFFLINE_UNVERIFIED", 0):
+                    raise DecisionConflictError("M11_HALT_EVENT_REPLAY_CONFLICT")
+                replay = True
+            else:
+                # An event from a different owner cannot alter the same
+                # singleton's owner-bound offline policy once recorded.
+                policy = con.execute(
+                    "SELECT owner_user_id FROM m11_offline_risk_limits "
+                    "WHERE singleton=1"
+                ).fetchone()
+                if policy is not None and policy[0] != uid:
+                    raise DecisionConflictError("M11_HALT_OWNER_CONFLICT")
+                last = con.execute(
+                    "SELECT MAX(observed_epoch) FROM m11_offline_risk_halt_events"
+                ).fetchone()[0]
+                if last is not None and epoch < last:
+                    raise DecisionConflictError("M11_HALT_OLDER_EVENT_DENIED")
+                con.execute(
+                    "INSERT INTO m11_offline_risk_halt_events "
+                    "(event_id,owner_user_id,reason_code,observed_epoch,"
+                    "event_digest,source_kind,execution_allowed) "
+                    "VALUES (?,?,?,?,?,'OFFLINE_UNVERIFIED',0)",
+                    (eid, uid, reason_code, epoch, fingerprint),
+                )
+                changed = con.execute(
+                    "UPDATE m11_offline_risk_halt "
+                    "SET event_count=event_count+1 WHERE singleton=1 "
+                    "AND state='ENGAGED' AND execution_allowed=0"
+                ).rowcount
+                if changed != 1:
+                    raise DecisionConflictError("M11_HALT_UPDATE_FAILED")
+                replay = False
+        return {
+            "status": "OFFLINE_EMERGENCY_HALT_DURABLE",
+            "replay": replay, "persistent_halt_engaged": True,
+            "halt_cleared": False, "execution_allowed": False,
+            "live_execution_unlocked": False,
+            "m11_live_release_authorized": False,
+        }
+
+    def review_m11_offline_risk_halt(
+        self, *, owner_user_id: int, observed_epoch: int,
+        proposed_buy_cost_idr: Decimal | None = None,
+        existing_exposure_idr: Decimal | None = None,
+        open_order_count: int | None = None,
+        daily_realized_net_idr: Decimal | None = None,
+        realized_pnl_day_wib: str | None = None,
+    ) -> dict:
+        """One snapshot of original V2 OFFLINE contract state.
+
+        All account/exposure/PnL inputs are UNTRUSTED user-supplied
+        scenarios. Even if all caps pass, the permanent halt remains
+        ENGAGED and release is always rejected. No state mutation.
+        """
+        uid = self._m11_offline_owner(owner_user_id)
+        epoch = self._m11_offline_epoch(observed_epoch)
+        values = (proposed_buy_cost_idr, existing_exposure_idr,
+                  open_order_count, daily_realized_net_idr,
+                  realized_pnl_day_wib)
+        if all(x is None for x in values):
+            supplied = False
+        elif any(x is None for x in values):
+            raise ValueError("M11_RISK_SNAPSHOT_INCOMPLETE")
+        else:
+            supplied = True
+            self._m11_offline_amount(proposed_buy_cost_idr)
+            self._m11_offline_amount(existing_exposure_idr, zero_ok=True)
+            self._m11_offline_amount(daily_realized_net_idr, signed=True)
+            if type(open_order_count) is not int or not 0 <= open_order_count <= 10000:
+                raise ValueError("M11_RISK_OPEN_ORDER_COUNT_INVALID")
+            if (type(realized_pnl_day_wib) is not str or
+                    re.fullmatch(r"\d{4}-\d{2}-\d{2}", realized_pnl_day_wib) is None):
+                raise ValueError("M11_RISK_DAY_WIB_INVALID")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            policy = con.execute(
+                "SELECT owner_user_id,policy_id,policy_sha256,"
+                "capital_ceiling_idr,max_open_orders,daily_loss_ceiling_idr,"
+                "recorded_epoch,source_kind,execution_allowed "
+                "FROM m11_offline_risk_limits WHERE singleton=1"
+            ).fetchone()
+            halt = con.execute(
+                "SELECT state,event_count,execution_allowed "
+                "FROM m11_offline_risk_halt WHERE singleton=1"
+            ).fetchone()
+            count = con.execute(
+                "SELECT COUNT(*) FROM m11_offline_risk_halt_events"
+            ).fetchone()[0]
+        halt_valid = (
+            halt is not None and halt[0] == "ENGAGED" and
+            type(halt[1]) is int and halt[1] == count and halt[2] == 0
+        )
+        policy_valid = (policy is not None and policy[0] == uid and
+                        policy[7] == "OWNER_ENTERED_OFFLINE_UNVERIFIED" and
+                        policy[8] == 0)
+        if policy_valid:
+            expected_digest = hashlib.sha256(json.dumps(
+                (policy[0], policy[1], policy[3], policy[4],
+                 policy[5], policy[6]),
+                separators=(",", ":"), ensure_ascii=True,
+            ).encode("ascii")).hexdigest()
+            policy_valid = (expected_digest == policy[2])
+        reason_codes = []
+        if not halt_valid:
+            reason_codes.append("HALT_STATE_OR_EVENT_COUNT_UNVERIFIED")
+        else:
+            reason_codes.append("PERSISTENT_EMERGENCY_HALT_ENGAGED")
+        if not policy_valid:
+            reason_codes.append("OWNER_OFFLINE_POLICY_UNVERIFIED_OR_MISSING")
+        if not supplied:
+            reason_codes.append("RISK_OBSERVATION_MISSING")
+        day_matches = None
+        cap_ok = count_ok = loss_ok = None
+        if policy_valid and supplied:
+            expected_day = datetime.fromtimestamp(
+                epoch, ZoneInfo("Asia/Jakarta")
+            ).date().isoformat()
+            day_matches = realized_pnl_day_wib == expected_day
+            if not day_matches:
+                reason_codes.append("WIB_DAY_UNVERIFIED")
+            try:
+                ceiling = Decimal(policy[3])
+                max_orders = policy[4]
+                loss_ceiling = Decimal(policy[5])
+                if (not ceiling.is_finite() or ceiling <= 0
+                        or type(max_orders) is not int or max_orders <= 0
+                        or not loss_ceiling.is_finite() or loss_ceiling <= 0):
+                    raise ValueError("M11_RISK_PERSISTED_POLICY_INVALID")
+                cap_ok = (existing_exposure_idr + proposed_buy_cost_idr <= ceiling)
+                count_ok = open_order_count < max_orders
+                loss_ok = (day_matches and
+                           daily_realized_net_idr > -loss_ceiling)
+            except (TypeError, ValueError, ArithmeticError):
+                cap_ok = count_ok = loss_ok = None
+                reason_codes.append("RISK_POLICY_FIELDS_UNTRUSTED")
+            if cap_ok is False:
+                reason_codes.append("CAPITAL_SCENARIO_CEILING_BREACHED")
+            if count_ok is False:
+                reason_codes.append("ORDER_SCENARIO_CEILING_BREACHED")
+            if loss_ok is False:
+                reason_codes.append("DAILY_LOSS_SCENARIO_CEILING_OR_DAY_BREACHED")
+        return {
+            "stage": "M11_ORIGINAL_V2_JOURNAL_RISK_HALT_OFFLINE",
+            "status": "REJECT_OFFLINE_RISK_HALT_AND_UNVERIFIED_SOURCES",
+            "reason_codes": sorted(set(reason_codes)),
+            "offline_policy_present_for_caller": policy_valid,
+            "persistent_halt_engaged_observed": halt_valid,
+            "halt_event_count_observed": count if halt_valid else None,
+            "scenario_proposed_total_capital_within": cap_ok,
+            "scenario_order_slots_within": count_ok,
+            "scenario_daily_loss_below_limit": loss_ok,
+            "scenario_day_wib_matches": day_matches,
+            "scenario_is_real_exchange_evidence": False,
+            "owner_identity_authenticated": False,
+            "owner_policy_signed_verified": False,
+            "realized_pnl_settlement_verified": False,
+            "kill_switch_installed_runtime_verified": False,
+            "m11_04_full_acceptance": False,
+            "execution_allowed": False,
+            "m11_live_release_authorized": False,
         }
