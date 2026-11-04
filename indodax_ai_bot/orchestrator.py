@@ -356,13 +356,111 @@ class DailyScalpingOrchestrator:
         )
 
 
+    def observe_m11_m07_sourcebound_account_and_loss_readonly_once(
+            self, *, account: dict | None, now_epoch: int) -> dict:
+        """M11 observation on already-collected M06 data, NEVER an M11 gate.
+
+        Reuses EXACT original DecisionJournal M08 source inspection; no
+        second REST/private GET, synthetic/PAPER PnL, owner attestation,
+        risk-limit release, new ledger, order intent or executable verdict.
+        A signed View Only response can observe free/locked IDR and all-pair
+        openOrders but cannot prove all peer liabilities or M08 settlement.
+        """
+        self.settings.require_m01_safety()
+        if type(now_epoch) is not int or now_epoch <= 0:
+            raise ValueError("M11_M07_OBSERVATION_EPOCH_INVALID")
+        m08 = self.journal.review_m09_original_m08_position_and_idr_readonly()
+        if (type(m08) is not dict
+                or m08.get("status") !=
+                    "M08_NO_AUTHENTICATED_BOT_OWNED_SETTLEMENT_ISSUER"
+                or m08.get("wallet_settled_idr_verified") is not False
+                or m08.get("realized_net_pnl_wib_verified") is not False
+                or m08.get("execution_allowed") is not False):
+            raise ValueError("M11_M07_UNVERIFIED_M08_ISSUER_OR_SETTLEMENT")
+        observed = None
+        if (type(account) is dict
+                and account.get("status") ==
+                    "M06_IDR_BALANCE_OBSERVED_SOURCE_RESERVE_UNVERIFIED"
+                and account.get("source_currency") == "IDR"
+                and account.get("requests_completed") == 2
+                and type(account.get("requests_completed")) is int
+                and account.get("view_only_permissions_verified") is True
+                and account.get("source_authenticated") is False
+                and account.get("execution_allowed") is False
+                and account.get("order_sent") is False
+                and type(account.get("account_observed_epoch")) is int
+                and 0 <= now_epoch - account["account_observed_epoch"] <= 30):
+            try:
+                free_raw = account.get("exchange_idr_free_observed")
+                locked_raw = account.get("exchange_idr_locked_observed")
+                orders = account.get("all_pair_open_orders_observed")
+                if (type(free_raw) is not str or not 1 <= len(free_raw) <= 45
+                        or type(locked_raw) is not str
+                        or not 1 <= len(locked_raw) <= 45
+                        or type(orders) is not int or not 0 <= orders < 1000):
+                    raise ValueError("M11_M07_VIEWONLY_NUMERIC_SCOPE")
+                free = Decimal(free_raw)
+                locked = Decimal(locked_raw)
+                if (not free.is_finite() or not locked.is_finite()
+                        or min(free, locked) < 0
+                        or max(free, locked) >= Decimal("1e25")):
+                    raise ValueError("M11_M07_VIEWONLY_NUMERIC_INVALID")
+            except (ValueError, TypeError, ArithmeticError):
+                pass
+            else:
+                observed = {
+                    "m06_free_idr_observed": format(free, "f"),
+                    "m06_locked_idr_observed": format(locked, "f"),
+                    "m06_all_pair_open_order_count_observed": orders,
+                    "m06_viewonly_observed_epoch": account["account_observed_epoch"],
+                    "m06_snapshot_age_seconds": (
+                        now_epoch - account["account_observed_epoch"]),
+                }
+        # If M06 GET did not happen, was stale, malformed, spoofed, or
+        # returned an unauthorized source, disclose NO apparent balance.
+        # 'observed' means the existing M06 contract reported its own
+        # signed 2-GET result, NOT independently certified whole-account
+        # funding or a live execution authority.
+        return {
+            "stage": "M11_M07_ORIGINAL_SOURCEBOUND_READONLY_OBSERVATION",
+            "status": "REJECT_NONLIVE_UNVERIFIED_RISK_RELEASE",
+            "m06_viewonly_status": (
+                "M06_TWO_SIGNED_GETS_REPORTED_RECENT_NOT_FULLY_ATTESTED"
+                if observed is not None else "UNKNOWN_NO_VALID_RECENT_M06_2GET"),
+            "m06_transport_observed": observed is not None,
+            "m06_full_account_funding_authenticated": False,
+            "m06_balance_and_open_orders_observation": observed,
+            "all_peer_liabilities_verified": False,
+            "account_exposure_idr_verified": False,
+            "order_slots_completely_reconciled": False,
+            "risk_owner_identity_authenticated": False,
+            "m11_owner_risk_limits_authenticated": False,
+            "m11_operational_halt_release_verified": False,
+            "m11_limit_scenario_evaluated": False,
+            "m08_original_journal_source_status": m08["status"],
+            "m08_future_event_rows_untrusted": m08["future_event_db_rows_untrusted"],
+            "m08_bot_owned_settlement_verified": False,
+            "m08_realized_net_pnl_wib_verified": False,
+            "realized_daily_net_loss_idr_verified": None,
+            "realized_pnl_day_wib_verified": None,
+            "g1_independent_issuer_verified": False,
+            "owner_final_decision": None,
+            "paid_ai_called": False,
+            "private_gets_added_by_m11": 0,
+            "m07_order_intent_created_by_m11": False,
+            "order_sent": False,
+            "execution_allowed": False,
+            "m11_live_release_authorized": False,
+        }
+
     def run_m07_original_source_join_readonly_once(
             self, trace_id: str, *, api_key: str, secret_key: str,
             funding: dict, local_ownership_db: str | None = None,
             market: IndodaxPublicMarket | None = None,
             ws_db_path: str | None = None,
             min_volume_idr: Decimal = Decimal("150000000"),
-            deep_limit: int = 20) -> dict:
+            deep_limit: int = 20,
+            include_m11_source_observation: bool = False) -> dict:
         """One ORIGINAL M03 bulk -> fresh M06 View Only -> M07 sizing.
 
         The M03 public scanner and M06 signed account reader are called here,
@@ -371,6 +469,8 @@ class DailyScalpingOrchestrator:
         No AI provider, Telegram decision, order transport, or LIVE permission.
         """
         self.settings.require_m01_safety()
+        if type(include_m11_source_observation) is not bool:
+            raise ValueError("M11_M07_OBSERVATION_FLAG_INVALID")
         required = {
             "requested_ticket_ceiling_idr",
             "new_floki_sell_rebuy_hold_idr",
@@ -533,7 +633,14 @@ class DailyScalpingOrchestrator:
             self.journal.record_stage_observation(
                 trace_id + "_m07", "M07_READONLY_SOURCE_JOIN", status,
             )
-            return dict(base, status=status)
+            report = dict(base, status=status)
+            if include_m11_source_observation:
+                report["m11_sourcebound_risk_observation"] = (
+                    self.observe_m11_m07_sourcebound_account_and_loss_readonly_once(
+                        account=None, now_epoch=int(time.time()),
+                    )
+                )
+            return report
         # The selected same-batch source passed freshness before M06 GET.
         # The original M07 sizing ALSO rechecks both epoch TTLs afterwards.
         # EXACT original M06 two signed View Only GETs, no duplicate HTTP
@@ -564,7 +671,7 @@ class DailyScalpingOrchestrator:
         self.journal.record_stage_observation(
             trace_id + "_m07", "M07_READONLY_SOURCE_JOIN", status,
         )
-        return dict(
+        report = dict(
             base, status=status,
             candidate_pair=selected["candidate_pair"],
             m06_authenticated_viewonly_get_count=account.get(
@@ -575,6 +682,13 @@ class DailyScalpingOrchestrator:
             m06_idr_locked_observed=account.get("exchange_idr_locked_observed"),
             m07_main_sizing=sized,
         )
+        if include_m11_source_observation:
+            report["m11_sourcebound_risk_observation"] = (
+                self.observe_m11_m07_sourcebound_account_and_loss_readonly_once(
+                    account=account, now_epoch=int(time.time()),
+                )
+            )
+        return report
 
     def review_m07_last_moment_gate_offline(
             self, *, limit_preview: M07LimitBuyPreflightPreview,
