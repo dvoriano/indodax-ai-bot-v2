@@ -2876,6 +2876,11 @@ class DecisionJournal:
             ).fetchone()
             if halt != ("ENGAGED", 0):
                 raise DecisionConflictError("M11_RISK_HALT_UNTRUSTED")
+            event_owners = con.execute(
+                "SELECT DISTINCT owner_user_id FROM m11_offline_risk_halt_events"
+            ).fetchall()
+            if any(row[0] != uid for row in event_owners):
+                raise DecisionConflictError("M11_RISK_POLICY_HALT_OWNER_CONFLICT")
             prior = con.execute(
                 "SELECT owner_user_id,policy_id,policy_sha256,"
                 "capital_ceiling_idr,max_open_orders,"
@@ -2977,6 +2982,7 @@ class DecisionJournal:
             "replay": replay, "persistent_halt_engaged": True,
             "halt_cleared": False, "execution_allowed": False,
             "live_execution_unlocked": False,
+            "m11_live_release_authorized": False,
         }
 
     def review_m11_offline_risk_halt(
@@ -3015,8 +3021,9 @@ class DecisionJournal:
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             policy = con.execute(
-                "SELECT owner_user_id,capital_ceiling_idr,max_open_orders,"
-                "daily_loss_ceiling_idr,source_kind,execution_allowed "
+                "SELECT owner_user_id,policy_id,policy_sha256,"
+                "capital_ceiling_idr,max_open_orders,daily_loss_ceiling_idr,"
+                "recorded_epoch,source_kind,execution_allowed "
                 "FROM m11_offline_risk_limits WHERE singleton=1"
             ).fetchone()
             halt = con.execute(
@@ -3030,10 +3037,16 @@ class DecisionJournal:
             halt is not None and halt[0] == "ENGAGED" and
             type(halt[1]) is int and halt[1] == count and halt[2] == 0
         )
-        policy_valid = (policy is not None and
-                        policy[0] == uid and
-                        policy[4] == "OWNER_ENTERED_OFFLINE_UNVERIFIED" and
-                        policy[5] == 0)
+        policy_valid = (policy is not None and policy[0] == uid and
+                        policy[7] == "OWNER_ENTERED_OFFLINE_UNVERIFIED" and
+                        policy[8] == 0)
+        if policy_valid:
+            expected_digest = hashlib.sha256(json.dumps(
+                (policy[0], policy[1], policy[3], policy[4],
+                 policy[5], policy[6]),
+                separators=(",", ":"), ensure_ascii=True,
+            ).encode("ascii")).hexdigest()
+            policy_valid = (expected_digest == policy[2])
         reason_codes = []
         if not halt_valid:
             reason_codes.append("HALT_STATE_OR_EVENT_COUNT_UNVERIFIED")
@@ -3053,9 +3066,9 @@ class DecisionJournal:
             if not day_matches:
                 reason_codes.append("WIB_DAY_UNVERIFIED")
             try:
-                ceiling = Decimal(policy[1])
-                max_orders = policy[2]
-                loss_ceiling = Decimal(policy[3])
+                ceiling = Decimal(policy[3])
+                max_orders = policy[4]
+                loss_ceiling = Decimal(policy[5])
                 if (not ceiling.is_finite() or ceiling <= 0
                         or type(max_orders) is not int or max_orders <= 0
                         or not loss_ceiling.is_finite() or loss_ceiling <= 0):
