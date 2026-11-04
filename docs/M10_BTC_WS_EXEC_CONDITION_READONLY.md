@@ -4,6 +4,136 @@
 
 **Important interpretation:** `stream_status=DISCONNECTED` is the expected safe end-of-batch state and by itself is neither PASS nor failure. For a qualifying historical batch, check `status=PUBLIC_COLLECTION_BATCH_OK_UNATTESTED`, `attempted_sessions=requested_sessions=completed_safe_sessions`, `restart_only_after_clean_batch=true`, and no failure code. `last_completed_batch_epoch` is when the sidecar was last written, **not proof the service is currently running**. `Result=exec-condition` indicates systemd evaluated an ExecCondition path, but its reason cannot be inferred from `ExecMainStatus=0` alone.
 
+## Confirmed second probe and evidence separation (4 Nov 2026)
+
+Owner's original V2-only probe emitted `M10_BTC_WS_CONDITION_PROBE_COMPLETED`:
+
+| Check | Actual observed value | Acceptance consequence |
+| --- | --- | --- |
+| `Result` | `exec-condition` | Systemd start guarded, not proof Python main crashed |
+| `ConditionResult` / `AssertResult` | `no` / `yes` | A unit condition did not pass; exact directive not disclosed |
+| `ExecCondition` | present, status code `1` | Extra installed condition returned 1; not present in repository-shipped V2 unit |
+| `DropInPaths` | present | A local user-unit drop-in can explain deviation, but intent is unknown |
+| Original V2 supervisor `status` | `REJECT` | Last persisted batch did not satisfy completion contract |
+| Sessions | requested `10`, attempted `5`, completed safe `4` | Batch incomplete |
+| `collector_failure_code` | `WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED` | A streamed session returned empty/closed evidence |
+| `restart_only_after_clean_batch` | `false` | No clean batch attestation and no restart permission |
+| `last_completed_batch_epoch` | `1793466155` | **1 November 2026, 00:02:35 WIB** (31 Oct 17:02:35 UTC), not the date of 4 Nov unit-status snapshot |
+| `stream_status` | `DISCONNECTED` | Expected cleanup state; not independently the failure reason |
+
+The **historical incomplete batch** and **currently configured systemd guard** are two different observations. No proof yet that the guard was created as a consequence of this specific batch failure. Source `deploy/indodax-v2-public-ws-btc.service` has no `ExecCondition`, so do **not** remove/replace the installed drop-in or restart to "test" its behavior.
+
+## Optional V2-owned guard-file origin probe: read-only, sanitized
+
+Run this **only if the owner wants to trace the installed guard**. It queries just this known V2 user service and reads only owner-owned, non-symlinked, private-or-readonly control files in the exact V2 user-unit namespace. It emits counts of condition directives by *location* but no file path, file content, shell command, process environment, credential, IP, or external repository identity. Unexpected non-V2 drop-in paths are counted but **not opened**. This is evidence of configuration origin, not evidence of why an external command returned code 1.
+
+```bash
+(
+  set -euo pipefail
+  "$HOME/indodax-ai-bot-v2/.venv/bin/python" -B - <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+
+unit = "indodax-v2-public-ws-btc.service"
+base_dir = Path.home() / ".config" / "systemd" / "user"
+base = base_dir / unit
+dropin_dir = base_dir / (unit + ".d")
+result = {
+    "scope": "ONE_V2_USER_UNIT_CONTROL_METADATA_ONLY",
+    "observation": "UNKNOWN",
+    "installed_base_trusted": False,
+    "base_exec_condition_count": None,
+    "base_unit_condition_count": None,
+    "reported_dropins": None,
+    "trusted_v2_dropins": 0,
+    "other_or_untrusted_dropins": None,
+    "dropin_exec_condition_count": 0,
+    "dropin_unit_condition_count": 0,
+    "exact_guard_purpose_verified": False,
+    "service_restart_authorized": False,
+    "m03_timer_go_authorized": False,
+}
+def counts(path):
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o022
+                or not 1 <= info.st_size <= 65536):
+            return None
+        raw = os.read(fd, 65537)
+    finally:
+        os.close(fd)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError:
+        return None
+    exec_count = 0
+    condition_count = 0
+    for line in text.splitlines():
+        # A blank ExecCondition= resets previous commands; report as
+        # "present", not assert how systemd merges its directives.
+        match = re.fullmatch(r"\s*([A-Za-z][A-Za-z0-9]*)\s*=\s*(.*)", line)
+        if not match:
+            continue
+        key = match.group(1)
+        if key == "ExecCondition":
+            exec_count += 1
+        if key.startswith(("Condition", "Assert")):
+            condition_count += 1
+    return exec_count, condition_count
+try:
+    p = subprocess.run(
+        ["/usr/bin/systemctl", "--user", "--no-pager",
+         "show", "-p", "FragmentPath", "-p", "DropInPaths", unit],
+        capture_output=True, text=True, timeout=8, check=False,
+    )
+    if p.returncode == 0 and len(p.stdout) <= 16384:
+        props = {}
+        for line in p.stdout.splitlines():
+            k, sep, v = line.partition("=")
+            if sep and k in ("FragmentPath", "DropInPaths") and k not in props:
+                props[k] = v
+        if props.get("FragmentPath") == str(base):
+            found = counts(base)
+            if found is not None:
+                result["installed_base_trusted"] = True
+                result["base_exec_condition_count"] = found[0]
+                result["base_unit_condition_count"] = found[1]
+        dropins = props.get("DropInPaths", "").split()
+        result["reported_dropins"] = len(dropins)
+        result["other_or_untrusted_dropins"] = len(dropins)
+        for rawpath in dropins[:16]:
+            path = Path(rawpath)
+            if (path.parent != dropin_dir or path.suffix != ".conf"
+                    or ".." in path.parts):
+                continue
+            try:
+                found = counts(path)
+            except (OSError, ValueError):
+                continue
+            if found is None:
+                continue
+            result["trusted_v2_dropins"] += 1
+            result["other_or_untrusted_dropins"] -= 1
+            result["dropin_exec_condition_count"] += found[0]
+            result["dropin_unit_condition_count"] += found[1]
+        result["observation"] = "V2_UNIT_CONTROL_METADATA_READ"
+except (OSError, ValueError, subprocess.TimeoutExpired):
+    result["observation"] = "V2_UNIT_CONTROL_UNAVAILABLE"
+print(json.dumps(result, sort_keys=True))
+PY
+  echo "M10_BTC_WS_GUARD_ORIGIN_READONLY_COMPLETED"
+)
+```
+
+**Interpretation:** positive counts can identify whether additional `ExecCondition` or `Condition*` directives occur in the V2 installed base file or its user-owned drop-ins. They **cannot prove why the command returned 1**, or whether the condition was intentionally installed as an owner safety stop. Any missing/untrusted file, external drop-in, unparseable directive or ambiguous reset means **UNVERIFIED**. Never restart, remove or bypass the guard based on a count alone.
+
 ## Single read-only proof, no service mutation
 
 This command prints **sanitized booleans/statuses only**. It reads one fixed allowlisted V2 user-unit via `systemctl --user show` and one V2 owner status JSON via `O_NOFOLLOW` bounded read. No journal, service source file, environment values, command/argv, private API, other repos, restart, credential, or trading request is output. Even if an ExecCondition value contains arguments, the script returns only **presence and numeric status codes**, never the command.
