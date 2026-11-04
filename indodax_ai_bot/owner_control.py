@@ -359,7 +359,16 @@ class OwnerDecisionLedger:
                            reason='MODE_CHANGED', decision_epoch=?
                        WHERE state='PENDING'""", (now_epoch,)
                 ).rowcount
-                db.execute("UPDATE m05_config SET mode=? WHERE singleton=1", (mode,))
+                # A MANUAL BUY/SELL preview cannot survive a MANUAL↔AUTO
+                # round trip as a stale owner action. No order was sent.
+                db.execute(
+                    "UPDATE m05_manual_trade_previews "
+                    "SET owner_choice='REJECT',decided_epoch=? "
+                    "WHERE owner_choice IS NULL",
+                    (now_epoch,),
+                )
+                db.execute(
+                    "UPDATE m05_config SET mode=? WHERE singleton=1", (mode,))
                 db.execute(
                     """INSERT INTO m05_audit
                        (event_epoch,owner_user_id,event,detail) VALUES (?,?,?,?)""",
