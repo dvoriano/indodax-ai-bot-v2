@@ -107,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--health", action="store_true")
     group.add_argument("--m11-release-risk-offline-once", action="store_true",
                        help="M11-04 V2 risk ceiling/kill-switch review only; no account IO, GO, trade or service update")
+    group.add_argument("--m11-risk-halt-shadow-offline-once", action="store_true",
+                       help="Original CLI→orchestrator→SAME DecisionJournal M11 halt review on preexisting private /tmp fixture, READ ONLY, never LIVE")
     group.add_argument("--m09-paper-offline-once", action="store_true",
                        help="Original journal PAPER-only BUY/SELL/SUMMARY simulation; no exchange orders or real profit")
     group.add_argument("--m09-recovery-shadow-once", action="store_true",
@@ -253,6 +255,23 @@ def main(argv: list[str] | None = None) -> int:
             result = review_m11_release_risk_offline(settings=settings)
             print(json.dumps(result, sort_keys=True, separators=(",", ":")))
             return 0  # Offline report completed, NOT M11 release approval.
+        if args.m11_risk_halt_shadow_offline_once:
+            settings.require_m01_safety()
+            # An exclusively synthetic owner/time probe. Never accept the
+            # process owner UID, runtime DB, private balances or real PnL.
+            try:
+                shadow_journal = DecisionJournal.open_m11_offline_fixture_readonly(
+                    args.db)
+                report = DailyScalpingOrchestrator(
+                    settings, shadow_journal,
+                ).review_m11_offline_shadow_safety_once(
+                    owner_user_id=1, observed_epoch=1793781000,
+                )
+            except (sqlite3.Error, ValueError, OSError):
+                raise ConfigurationError(
+                    "M11_SHADOW_READONLY_FIXTURE_UNVERIFIED") from None
+            print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+            return 0  # Synthetic SHADOW report only. Never LIVE release.
         if args.scheduled_public_scanner_once:
             # Owner's user-systemd opt-in must be explicit and current.
             # Block before creating any decision or owner ledger, and BEFORE
