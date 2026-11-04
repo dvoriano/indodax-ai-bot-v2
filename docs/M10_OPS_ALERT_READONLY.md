@@ -55,7 +55,7 @@ This is not the real installed M05 service, actual Bot API network, or
 Telegram delivery proof. No source-only code is automatically deployed.
 `/ops` is owner-requested and read-only, not an automatic push alert.
 
-### One owner VPS V2-only targeted offline source verification (NOT yet run)
+### Owner VPS V2-only targeted offline source verification (COMPLETED 4 Nov 2026)
 
 ```bash
 (
@@ -96,12 +96,7 @@ Telegram delivery proof. No source-only code is automatically deployed.
 )
 ```
 
-This uses only Python fixtures, temporary isolated owner-ledger SQLite,
-and **fake** Bot API transport, not installed M05 bot credentials,
-Telegram network or the collector. No original VPS runtime change,
-M03 timer start, paid AI, private GET or order. Once the scoped test is
-reported by owner, mark the M10-06 relevant VPS column based on evidence;
-do NOT misrepresent it as real owner alert delivery or 24h proof.
+**OWNER VPS EXECUTION OBSERVED, do not repeat:** owner fetched exact original V2 detached `5cbd4c5e67f272fa898939d3fa77e10ee059ba61`, printed `M10_OWNER_OPS_ORIGINAL_SOURCE_SHA=5cbd4c5e67f272fa898939d3fa77e10ee059ba61`, ran this single unittest module and received **`Ran 10 tests in 0.145s` / `OK`**, followed by `M10_OWNER_OPS_ORIGINAL_OFFLINE_TEST_PASS`. All ten were original offline owner command and Telegram fake transport tests, with no installed M05 service mutation, Bot API network, paid AI, private exchange calls, outside-V2 guard script or order. Original V2 scoped VPS checkout test evidence is now accepted; M10-06 checkout ✅. **Not** original active M05 runtime deployment, real Bot API send, automatic alert delivery, or continuous 24h acceptance. BTC WS service remains un-restarted and M03 timer remains disabled. Future operational deployment requires distinct explicit owner authorization and a V2-only rollback-safe release review, not more repetition of this test.
 
 ## Owner VPS, ONE pinned source, READ ONLY
 
