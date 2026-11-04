@@ -533,6 +533,7 @@ class OwnerDecisionLedger:
             and row[5:8] == (
                 str(draft.price), str(draft.quantity), digest)
             and type(row[8]) is int and type(row[9]) is int
+            and type(row[13]) is int
             and row[8] <= row[13] < row[9]
             and row[13] <= observed_epoch < row[9]
             and row[10] == "SENT"
