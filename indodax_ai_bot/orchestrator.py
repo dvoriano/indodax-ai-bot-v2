@@ -747,9 +747,10 @@ class DailyScalpingOrchestrator:
             account_fingerprint=account_fingerprint,
             draft=draft,now_epoch=now_epoch,
         )
-        if (result.get("execution_allowed") is not False
+        if result.get("accepted") is True and (
+                result.get("execution_allowed") is not False
                 or result.get("order_sent") is not False
-                if result.get("accepted") is True else False):
+                or result.get("owner_order_execution_authorized") is not False):
             raise ValueError("M07_MANUAL_PREVIEW_UNEXPECTED_AUTHORITY")
         return result
 
