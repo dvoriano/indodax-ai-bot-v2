@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from indodax_ai_bot.owner_control import OwnerDecisionLedger
 from indodax_ai_bot.telegram_owner import OfflineTelegramOwnerInterface
+from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller
 from indodax_ai_bot.m10_ops_health_readonly import format_v2_ops_owner_message
 
 OWNER = 19281731
@@ -143,6 +144,83 @@ class OriginalM05V2OpsOwner(unittest.TestCase):
                 txt = format_v2_ops_owner_message(report)
                 self.assertIn("STATUS_UNVERIFIED", txt)
                 self.assertNotIn("PRIVATE_SECRET", txt)
+
+    def test_original_m05_poller_to_owner_ops_readonly_synthetic_api(self):
+        calls = []
+        def transport(method, payload, timeout):
+            calls.append((method, dict(payload)))
+            if method == "getUpdates":
+                updates = [{
+                    "update_id": 101,
+                    "message": {
+                        "from": {"id": OWNER},
+                        "chat": {"id": OWNER, "type": "private"},
+                        "date": NOW, "text": "/ops",
+                    },
+                }] if payload["offset"] <= 101 else []
+                return {"ok": True, "result": updates}
+            if method == "sendMessage":
+                return {"ok": True, "result": {
+                    "message_id": 202,
+                    "chat": {"id": OWNER, "type": "private"},
+                }}
+            raise AssertionError("UNKNOWN_METHOD_MUST_NOT_BE_CALLED")
+
+        api = TelegramBotApiClient(
+            token="99998888777:" + ("T" * 38),
+            transport=transport, allow_network=False,
+        )
+        poller = TelegramOwnerPoller(
+            api=api, ledger=self.ledger, clock=lambda: NOW,
+            expected_bot_id=99998888777,
+        )
+        with patch("indodax_ai_bot.m10_ops_health_readonly.assess_v2_operations_readonly",
+                   return_value=snapshot()) as assess:
+            report = poller.poll_once()
+            second = poller.poll_once()
+        assess.assert_called_once_with(now_epoch=NOW)
+        self.assertEqual([method for method, _ in calls],
+                         ["getUpdates", "sendMessage", "getUpdates"])
+        send = calls[1][1]
+        self.assertEqual(send["chat_id"], OWNER)
+        self.assertIn("BATCH_REJECTED", send["text"])
+        self.assertIn("4/10", send["text"])
+        self.assertNotIn("SECRET_SHOULD_NOT_ECHO", str(send))
+        self.assertIn("Trading OFF", send["text"])
+        self.assertEqual(report["handled"], 1)
+        self.assertEqual(second["handled"], 0)
+        self.assertEqual(report["next_offset"], 102)
+        self.assertFalse(report["execution_allowed"])
+        self.assertIsNone(report["final_decision"])
+
+    def test_original_m05_poller_nonowner_never_runs_v2_ops_probe(self):
+        calls = []
+        def transport(method, payload, timeout):
+            calls.append(method)
+            if method != "getUpdates":
+                raise AssertionError("NONOWNER_NO_REPLY")
+            return {"ok": True, "result": [{
+                "update_id": 102,
+                "message": {
+                    "from": {"id": OWNER + 5},
+                    "chat": {"id": OWNER + 5, "type": "private"},
+                    "date": NOW, "text": "/ops",
+                },
+            }]}
+        api = TelegramBotApiClient(
+            token="99998888777:" + ("T" * 38),
+            transport=transport, allow_network=False,
+        )
+        with patch("indodax_ai_bot.m10_ops_health_readonly.assess_v2_operations_readonly",
+                   side_effect=AssertionError("PROBE_DENIED")) as assess:
+            report = TelegramOwnerPoller(
+                api=api, ledger=self.ledger, clock=lambda: NOW,
+                expected_bot_id=99998888777,
+            ).poll_once()
+        assess.assert_not_called()
+        self.assertEqual(calls, ["getUpdates"])
+        self.assertEqual(report["handled"], 1)
+        self.assertFalse(report["execution_allowed"])
 
     def test_owner_command_case_normalized_without_replay_side_effect(self):
         with patch("indodax_ai_bot.m10_ops_health_readonly.assess_v2_operations_readonly",
