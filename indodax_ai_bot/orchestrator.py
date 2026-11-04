@@ -726,6 +726,48 @@ class DailyScalpingOrchestrator:
             now_epoch=now_epoch,
         )
 
+    def review_m07_original_bot_origin_local_once(
+            self, *, action: str, account_uid: int,
+            account_fingerprint: str, draft: M07OrderDraft,
+            observed_epoch: int) -> dict:
+        """Original M07 adapter → SAME V2 journal, no real order issuer.
+
+        PREPARE/UNCERTAIN only mutate local synthetic commitment rows.
+        REVIEW uses an independent read-only handle to the same original
+        journal. No provider/owner/G1 injection may promote local evidence.
+        """
+        self.settings.require_m01_safety()
+        if action not in ("PREPARE","UNCERTAIN","REVIEW") or type(action) is not str:
+            raise ValueError("M07_ORIGIN_ACTION_INVALID")
+        adapter = OfficialV2OrderAdapter.contract_status()
+        if (adapter.get("network_allowed") is not False
+                or adapter.get("execution_allowed") is not False
+                or self._ai_role_caller is not None
+                or self._source_verifier is not None
+                or self._owner_control is not None):
+            raise ValueError("M07_ORIGIN_HARDLOCK_OR_AUTHORITY_INVALID")
+        kwargs = {
+            "account_uid": account_uid,
+            "account_fingerprint": account_fingerprint,
+            "draft": draft, "observed_epoch": observed_epoch,
+        }
+        if action == "PREPARE":
+            result = self.journal.prepare_m07_order_origin_commitment_offline(
+                **kwargs)
+        elif action == "UNCERTAIN":
+            result = self.journal.mark_m07_order_origin_uncertain_offline(
+                **kwargs)
+        else:
+            result = self.journal.review_m07_order_origin_handoff_readonly(
+                **kwargs)
+        if (result.get("execution_allowed") is not False
+                or result.get("order_sent") is not False
+                or result.get("live_trading_authorized") is not False
+                or result.get("bot_exchange_submit_receipt_verified") is True
+                or result.get("m08_position_manager_admission") is True):
+            raise ValueError("M07_ORIGIN_MUST_NEVER_GRANT_AUTHORITY")
+        return result
+
     def reserve_m07_offline_intent_once(self, *,
             intent_id: str, draft: M07OrderDraft,
             observed_epoch: int) -> dict:
