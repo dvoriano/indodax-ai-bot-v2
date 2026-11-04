@@ -160,6 +160,32 @@ class OriginalV2M03M05RuntimeEvidenceTests(unittest.TestCase):
         self.assertEqual(report["exchange_gets_or_orders_sent"],0)
         self.assertEqual(report["telegram_api_calls_sent"],0)
 
+    def test_clean_metadata_has_no_nonlive_blockers_but_no_go(self):
+        report = self.inspect()
+        self.assertEqual(report["nonlive_canary_blocker_codes"], [])
+        self.assertFalse(report["scanner_canary_start_authorized"])
+        self.assertFalse(report["live_trading_authorized"])
+
+    def test_unverified_egress_and_stale_btc_emit_specific_blockers(self):
+        os.utime(self.ws, (NOW - 7200, NOW - 7200))
+        report = self.inspect(egress_validator=lambda p: 0)
+        codes = report["nonlive_canary_blocker_codes"]
+        self.assertIn("M03_EGRESS_POLICY_UNVERIFIED", codes)
+        self.assertIn("BTC_WS_FILE_NOT_RECENT", codes)
+        self.assertNotIn("M05_TELEGRAM_TIMER_NOT_VERIFIED_ACTIVE", codes)
+        self.assertFalse(report["ready_for_nonlive_scanner_canary"])
+
+    def test_bad_template_and_owner_permissions_expose_independent_blockers(self):
+        source = self.deploy / "indodax-v2-m03-mainpath.service"
+        source.write_text(source.read_text().replace(
+            "indodax-ai-bot-v2/.venv",
+            "indodax-ai-bot-v2-m03-runtime/.venv"))
+        self.token.chmod(0o644)
+        codes = self.inspect()["nonlive_canary_blocker_codes"]
+        self.assertIn("M03_NONLIVE_SOURCE_TEMPLATE_UNVERIFIED", codes)
+        self.assertIn("M05_TOKEN_FILE_PERMISSIONS_UNVERIFIED", codes)
+        self.assertFalse(self.inspect()["scanner_canary_start_authorized"])
+
     def test_owner_ledger_counts_only_without_secrets(self):
         report = self.inspect()
         owner = report["m05_owner"]
