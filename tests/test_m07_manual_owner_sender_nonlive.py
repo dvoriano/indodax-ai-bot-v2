@@ -41,12 +41,26 @@ def draft(side="BUY", client="m07manualsender01", symbol="INJIDR",
     )
 
 
-def fake_response(d, *, status="NEW", qty="0", order_id=1234, **changes):
+def fake_response(d, *, qty="0", order_id=1234, **changes):
+    # Official POST /api/v2/order has NO status field. This is a
+    # CREATE acceptance-shaped mock only, NEVER a fill-status receipt.
     return dict({
         "symbol":d.symbol, "clientOrderId":d.client_order_id,
-        "side":d.side,"type":d.order_type,
-        "orderId":order_id,"status":status,"executedQty":qty,
+        "side":d.side, "type":d.order_type,
+        "orderId":order_id, "price":format(d.price,"f"),
+        "origQty":format(d.quantity,"f"),
+        "executedQty":qty,
+        "fullOrderId":d.symbol.lower()+"-limit-"+str(order_id),
     },**changes)
+
+
+def fake_get_response(d, *, status="NEW", qty="0", order_id=1234,
+                      **changes):
+    # GET /api/v2/order additionally returns status and order time.
+    result=fake_response(d,qty=qty,order_id=order_id)
+    result.update({"status":status,"time":1700000000000})
+    result.update(changes)
+    return result
 
 
 class OriginalManualSenderNonliveTests(unittest.TestCase):
@@ -247,12 +261,12 @@ class OriginalManualSenderNonliveTests(unittest.TestCase):
         self.assertIsNone(r["sender_simulation"]["real_exchange_order_id"])
         self.assertEqual(self.counts()["settled"],0)
 
-    def test_fake_post_filled_cannot_mint_owned_position(self):
+    def test_fake_get_filled_cannot_mint_owned_position(self):
         preview,d=self.prepare_owner()
         r=self.stage(
-            preview,d,mock_result=fake_response(
+            preview,d,mock_result=fake_get_response(
                 d,status="FILLED",qty="4"),
-            mock_result_provided=True,
+            mock_result_provided=True,mock_transport_method="GET",
         )
         self.deny(r)
         self.assertFalse(r["sender_simulation"]["bot_owned_lot_verified"])
@@ -260,12 +274,12 @@ class OriginalManualSenderNonliveTests(unittest.TestCase):
         self.assertEqual(self.counts()["orders"],0)
         self.assertEqual(self.counts()["settled"],0)
 
-    def test_fake_partial_cannot_claim_partial_fill(self):
+    def test_fake_get_partial_cannot_claim_partial_fill(self):
         preview,d=self.prepare_owner()
         r=self.stage(
-            preview,d,mock_result=fake_response(
+            preview,d,mock_result=fake_get_response(
                 d,status="PARTIALLY_FILLED",qty="1.5"),
-            mock_result_provided=True,
+            mock_result_provided=True,mock_transport_method="GET",
         )
         self.assertEqual(r["sender_simulation"]["status"],
                          "OFFLINE_MOCK_RESPONSE_HOLD_NO_ISSUER")
@@ -326,15 +340,42 @@ class OriginalManualSenderNonliveTests(unittest.TestCase):
         self.assertTrue(next_result["sender_simulation"]["replay"])
         self.assertEqual(self.counts()["sender"],1)
 
-    def test_mock_id_side_qty_status_and_extra_field_refused(self):
+    def test_official_post_acceptance_has_no_status_and_never_proves_fill(self):
+        d=draft()
+        posted=fake_response(d,qty="4")
+        self.assertNotIn("status",posted)
+        inspected=OfficialV2OrderAdapter.inspect_nonlive_post_result_shape(
+            draft=d,response=posted,submitted_at_ms=self.now*1000,
+        )
+        self.assertEqual(inspected["response_endpoint_method"],"POST")
+        self.assertEqual(inspected["mock_status"],
+                         "POST_ACK_WITHOUT_ORDER_STATUS")
+        self.assertEqual(inspected["mock_cumulative_qty"],"4")
+        self.assertFalse(inspected["real_post_response_authenticated"])
+        self.assertFalse(inspected["execution_allowed"])
+
+    def test_get_response_status_is_distinct_from_post_acceptance(self):
+        d=draft()
+        read=fake_get_response(d,status="CANCELLED",qty="1")
+        inspected=OfficialV2OrderAdapter.inspect_nonlive_get_order_status_shape(
+            draft=d,response=read,observed_at_ms=self.now*1000,
+        )
+        self.assertEqual(inspected["response_endpoint_method"],"GET")
+        self.assertEqual(inspected["mock_status"],"CANCELLED")
+        self.assertFalse(inspected["real_post_response_authenticated"])
+        self.assertFalse(inspected["execution_allowed"])
+
+    def test_official_post_wrong_identity_qty_schema_and_status_field_refused(self):
         d=draft()
         bad=[
             fake_response(d,clientOrderId="foreign"),
             fake_response(d,side="SELL"),
-            fake_response(d,status="PARTIALLY_FILLED",qty="0"),
-            fake_response(d,status="FILLED",qty="1"),
-            fake_response(d,status="NEW",qty="1"),
-            fake_response(d,status="NOT_REAL"),
+            fake_response(d,price="24000"),
+            fake_response(d,origQty="3"),
+            fake_response(d,qty="5"),
+            fake_response(d,qty="-1"),
+            fake_response(d,status="NEW"),
+            fake_response(d,fullOrderId="bad space order"),
             dict(fake_response(d),fee="99999"),
         ]
         for mock in bad:
@@ -344,6 +385,26 @@ class OriginalManualSenderNonliveTests(unittest.TestCase):
                     OfficialV2OrderAdapter.inspect_nonlive_post_result_shape(
                         draft=d,response=mock,
                         submitted_at_ms=self.now*1000,
+                    )
+
+    def test_official_get_wrong_status_partial_qty_future_time_refused(self):
+        d=draft()
+        bad=[
+            fake_get_response(d,status="PARTIALLY_FILLED",qty="0"),
+            fake_get_response(d,status="FILLED",qty="1"),
+            fake_get_response(d,status="NEW",qty="1"),
+            fake_get_response(d,status="NOT_REAL"),
+            fake_get_response(d,status="CANCELED"),
+            fake_get_response(d,time=self.now*1000+1000),
+            fake_get_response(d,qty="5"),
+        ]
+        for mock in bad:
+            with self.subTest(mock=mock):
+                with self.assertRaisesRegex(
+                    ValueError,"M07_SENDER_MOCK_RESULT"):
+                    OfficialV2OrderAdapter.inspect_nonlive_get_order_status_shape(
+                        draft=d,response=mock,
+                        observed_at_ms=self.now*1000,
                     )
 
     def test_manual_sell_without_verified_v2_owned_lot_rejected(self):
@@ -394,6 +455,33 @@ class OriginalManualSenderNonliveTests(unittest.TestCase):
             results=list(pool.map(one,range(5)))
         self.assertEqual(sum(r["replay"] is False for r in results),1)
         self.assertEqual(self.counts()["sender"],1)
+
+    def test_get_shape_does_not_turn_after_post_mock_into_real_fill(self):
+        preview,d=self.prepare_owner()
+        post=self.stage(
+            preview,d,mock_result=fake_response(d),
+            mock_result_provided=True,
+        )
+        self.deny(post)
+        # A second simulated GET response with matching orderId is still
+        # untrusted; it cannot release the original mock hold or mint a lot.
+        with self.assertRaisesRegex(
+            DecisionConflictError,"ALREADY_TERMINAL_HOLD"):
+            self.stage(
+                preview,d,
+                mock_result=fake_get_response(d,status="FILLED",qty="4"),
+                mock_result_provided=True,mock_transport_method="GET",
+            )
+        self.assertEqual(self.counts()["settled"],0)
+
+    def test_invalid_fake_transport_method_refused(self):
+        preview,d=self.prepare_owner()
+        with self.assertRaisesRegex(ValueError,"MOCK_ENDPOINT_METHOD_DENIED"):
+            self.stage(
+                preview,d,mock_result=fake_response(d),
+                mock_result_provided=True,mock_transport_method="DELETE",
+            )
+        self.assertEqual(self.counts()["orders"],0)
 
     def test_original_trade_http_methods_remain_hardlocked(self):
         adapter=OfficialV2OrderAdapter()
