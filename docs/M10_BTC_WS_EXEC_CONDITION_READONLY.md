@@ -286,6 +286,168 @@ file, external helper or complex shell expression remains **UNVERIFIED**.
 Owner approval is required before any service change. M03 timer and
 trading LIVE remain OFF.
 
+## Owner static guard text hints (4 November 2026)
+
+Owner ran the bounded `M10_BTC_WS_GUARD_STATIC_READONLY_COMPLETED` probe:
+
+- Exactly one trusted `ExecCondition` rule in the known V2 BTC WS drop-in, as previously established.
+- `guard_mentions_v2_home=true`, `guard_calls_external_script_hint=true`, `guard_has_shell_wrapper_hint=false`.
+- Inline guard command text does **not** mention `public_ws_btc.status.json`, `public_ws_btc.sqlite3`, `restart_only_after_clean_batch` or `REJECT`.
+- `guard_exact_intent_verified=false`, `exec_condition_exit1_root_cause_verified=false`, `service_restart_authorized=false`, `guard_bypass_authorized=false`.
+
+This is **only a lexical hint**: it suggests the drop-in delegates to a separate script, but it has NOT verified that script's contents, behavior, side effects, or why the command returned code 1. Do not assume the guard ignores the batch status just because the `ExecCondition=` line itself does not mention it.
+
+### Next single V2-owned helper static inspection, no execution
+
+This command reads only the **one observed owner V2 user-unit drop-in** and at most **one directly referenced .sh/.py helper** when that helper is physically within `~/indodax-ai-bot-v2`, is a regular file owned by the user, and is not a symlink. Any ambiguous/directly unparseable or out-of-V2 command fails closed. Output consists of fixed booleans, not raw command arguments, file paths, helper source, secrets, or arbitrary text. `systemctl --user show` itself is read-only. No helper is executed.
+
+```bash
+(
+  set -euo pipefail
+  ROOT="$HOME/indodax-ai-bot-v2"
+  "$ROOT/.venv/bin/python" -B - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import stat
+import subprocess
+
+home = Path.home()
+root = home / "indodax-ai-bot-v2"
+unit = "indodax-v2-public-ws-btc.service"
+userdir = home / ".config" / "systemd" / "user"
+result = {
+    "scope": "ONE_V2_WS_GUARD_AND_ONE_V2_HELPER_STATIC",
+    "status": "UNVERIFIED",
+    "guard_exactly_one": False,
+    "helper_in_v2_tree": False,
+    "helper_regular_owned_nosymlink": False,
+    "helper_type": "UNKNOWN",
+    "helper_sha256_prefix": None,
+    "helper_mentions_ws_status": None,
+    "helper_mentions_clean_batch": None,
+    "helper_mentions_reject": None,
+    "helper_mentions_ws_database": None,
+    "helper_mentions_cooldown": None,
+    "helper_mentions_manual_stop": None,
+    "helper_mentions_exiting_nonzero": None,
+    "helper_has_v2_service_mutation_words": None,
+    "helper_exact_intent_verified": False,
+    "exec_condition_exit1_root_cause_verified": False,
+    "service_restart_authorized": False,
+    "guard_bypass_authorized": False,
+}
+
+def owned_file(path, max_bytes):
+    # Validate ALL existing path components; never follow symlink to another tree.
+    for part in (path, *path.parents):
+        if part == home.parent:
+            break
+        st = part.lstat()
+        if stat.S_ISLNK(st.st_mode):
+            raise ValueError("SYMLINK")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode)
+                or st.st_uid != os.geteuid()
+                or st.st_mode & 0o022
+                or not 1 <= st.st_size <= max_bytes):
+            raise ValueError("UNTRUSTED_FILE")
+        return os.read(fd, max_bytes + 1)
+    finally:
+        os.close(fd)
+
+try:
+    args = ["/usr/bin/systemctl", "--user", "--no-pager", "show",
+            "-p", "FragmentPath", "-p", "DropInPaths", unit]
+    p = subprocess.run(args, capture_output=True, text=True,
+                       timeout=8, check=False)
+    if p.returncode or len(p.stdout) > 16384:
+        raise ValueError("SYSTEMD_UNAVAILABLE")
+    props = {}
+    for line in p.stdout.splitlines():
+        key, sep, val = line.partition("=")
+        if sep and key in ("FragmentPath", "DropInPaths") and key not in props:
+            props[key] = val
+    paths = props.get("DropInPaths", "").split()
+    if (props.get("FragmentPath") != str(userdir / unit)
+            or len(paths) != 1):
+        raise ValueError("NOT_ONE_V2_DROPIN")
+    dropin = Path(paths[0])
+    if (dropin.parent != userdir / (unit + ".d")
+            or dropin.suffix != ".conf" or ".." in dropin.parts):
+        raise ValueError("OUTSIDE_V2_USER_UNIT")
+    source = owned_file(dropin, 32768).decode("utf-8")
+    service = False
+    entries = []
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            service = line == "[Service]"
+        elif service:
+            m = re.fullmatch(r"ExecCondition\s*=\s*(.*)", line)
+            if m:
+                entries.append(m.group(1))
+    if len(entries) != 1 or not entries[0]:
+        raise ValueError("NOT_ONE_DIRECT_RULE")
+    result["guard_exactly_one"] = True
+
+    # Parse command as DATA, never execute. No shell expressions accepted.
+    tokens = shlex.split(entries[0])
+    if not tokens or any(t in (";", "&&", "||", "|", ">", "<")
+                         for t in tokens):
+        raise ValueError("AMBIGUOUS_GUARD")
+    paths = []
+    for token in tokens:
+        if token.startswith("%h/"):
+            token = str(home) + token[2:]
+        if token.endswith((".sh", ".py")) and token.startswith("/"):
+            candidate = Path(token)
+            if candidate.is_relative_to(root) and candidate != root:
+                paths.append(candidate)
+    if len(paths) != 1:
+        raise ValueError("HELPER_NOT_SINGLE_V2_FILE")
+    helper = paths[0]
+    result["helper_in_v2_tree"] = True
+    code = owned_file(helper, 131072)
+    result["helper_regular_owned_nosymlink"] = True
+    result["helper_type"] = "PYTHON" if helper.suffix == ".py" else "SHELL"
+    result["helper_sha256_prefix"] = hashlib.sha256(code).hexdigest()[:12]
+    text = code.decode("utf-8")
+    lowered = text.lower()
+    result.update({
+        "helper_mentions_ws_status": "public_ws_btc.status.json" in text,
+        "helper_mentions_clean_batch": "restart_only_after_clean_batch" in text,
+        "helper_mentions_reject": "REJECT" in text,
+        "helper_mentions_ws_database": "public_ws_btc.sqlite3" in text,
+        "helper_mentions_cooldown": any(x in lowered for x in
+            ("cooldown", "retry_after", "backoff")),
+        "helper_mentions_manual_stop": any(x in lowered for x in
+            ("manual_stop", "safety_stop", "watchdog", "stop.flag")),
+        "helper_mentions_exiting_nonzero": any(x in text for x in
+            ("exit 1", "exit(1)", "sys.exit(1)", "return 1")),
+        "helper_has_v2_service_mutation_words": any(x in lowered for x in
+            ("systemctl start", "systemctl restart", "systemctl enable",
+             "systemctl stop", "systemctl disable")),
+    })
+    result["status"] = "V2_HELPER_TEXT_HINTS_ONLY"
+except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired):
+    result["status"] = "V2_HELPER_STATIC_UNAVAILABLE_OR_AMBIGUOUS"
+
+print(json.dumps(result, sort_keys=True))
+PY
+  echo "M10_BTC_WS_V2_HELPER_STATIC_READONLY_COMPLETED"
+)
+```
+
+This is **not** a behavioral safety audit; comments or dead code can produce the same booleans as a real guard, and a helper can call additional scripts. If the helper is outside the V2 tree or cannot be parsed unambiguously, do **not** follow it or request its contents. Leave M10-06 `☐`, timer disabled, and all trade paths OFF.
+
 ## Single read-only proof, no service mutation
 
 This command prints **sanitized booleans/statuses only**. It reads one fixed allowlisted V2 user-unit via `systemctl --user show` and one V2 owner status JSON via `O_NOFOLLOW` bounded read. No journal, service source file, environment values, command/argv, private API, other repos, restart, credential, or trading request is output. Even if an ExecCondition value contains arguments, the script returns only **presence and numeric status codes**, never the command.
