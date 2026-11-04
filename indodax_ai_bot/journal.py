@@ -705,6 +705,7 @@ class DecisionJournal:
             "status": "OFFLINE_UNCERTAIN_HOLD_NO_RETRY",
             "replay": replay,
             "exchange_submit_attempt_verified": False,
+            "bot_exchange_submit_receipt_verified": False,
             "exchange_order_state_authenticated": False,
             "local_hold_permanent_without_verified_future_issuer": True,
             "retry_authorized": False, "release_authorized": False,
