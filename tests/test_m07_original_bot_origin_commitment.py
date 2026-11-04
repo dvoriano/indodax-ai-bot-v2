@@ -68,12 +68,13 @@ class OriginalM07OriginCommitmentTests(unittest.TestCase):
             "INDODAX_EXECUTION_MODE": "DRY_RUN",
         }
 
-    def cli(self, payload=None, *, path=None, db=None, env=None, argv=None):
+    def cli(self, payload=None, *, path=None, db=None, env=None,
+            argv=None, rewrite=True):
         if payload is None:
             payload = scenario()
         if path is None:
             path = self.file
-        if path == self.file:
+        if path == self.file and rewrite:
             self.file.write_text(json.dumps(payload))
             self.file.chmod(0o600)
         if argv is None:
@@ -405,7 +406,7 @@ class OriginalM07OriginCommitmentTests(unittest.TestCase):
     def test_insecure_file_db_parent_and_wal_sidecar_denied(self):
         self.file.write_text(json.dumps(scenario()))
         self.file.chmod(0o644)
-        self.denied(path=self.file)
+        self.denied(path=self.file, rewrite=False)
         self.file.chmod(0o600)
         self.db.chmod(0o644)
         self.denied()
