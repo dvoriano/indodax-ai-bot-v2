@@ -288,20 +288,20 @@ trading LIVE remain OFF.
 
 ## Owner static guard text hints (4 November 2026)
 
-Owner ran the bounded \`M10_BTC_WS_GUARD_STATIC_READONLY_COMPLETED\` probe:
+Owner ran the bounded `M10_BTC_WS_GUARD_STATIC_READONLY_COMPLETED` probe:
 
-- Exactly one trusted \`ExecCondition\` rule in the known V2 BTC WS drop-in, as previously established.
-- \`guard_mentions_v2_home=true\`, \`guard_calls_external_script_hint=true\`, \`guard_has_shell_wrapper_hint=false\`.
-- Inline guard command text does **not** mention \`public_ws_btc.status.json\`, \`public_ws_btc.sqlite3\`, \`restart_only_after_clean_batch\` or \`REJECT\`.
-- \`guard_exact_intent_verified=false\`, \`exec_condition_exit1_root_cause_verified=false\`, \`service_restart_authorized=false\`, \`guard_bypass_authorized=false\`.
+- Exactly one trusted `ExecCondition` rule in the known V2 BTC WS drop-in, as previously established.
+- `guard_mentions_v2_home=true`, `guard_calls_external_script_hint=true`, `guard_has_shell_wrapper_hint=false`.
+- Inline guard command text does **not** mention `public_ws_btc.status.json`, `public_ws_btc.sqlite3`, `restart_only_after_clean_batch` or `REJECT`.
+- `guard_exact_intent_verified=false`, `exec_condition_exit1_root_cause_verified=false`, `service_restart_authorized=false`, `guard_bypass_authorized=false`.
 
-This is **only a lexical hint**: it suggests the drop-in delegates to a separate script, but it has NOT verified that script's contents, behavior, side effects, or why the command returned code 1. Do not assume the guard ignores the batch status just because the \`ExecCondition=\` line itself does not mention it.
+This is **only a lexical hint**: it suggests the drop-in delegates to a separate script, but it has NOT verified that script's contents, behavior, side effects, or why the command returned code 1. Do not assume the guard ignores the batch status just because the `ExecCondition=` line itself does not mention it.
 
 ### Next single V2-owned helper static inspection, no execution
 
-This command reads only the **one observed owner V2 user-unit drop-in** and at most **one directly referenced .sh/.py helper** when that helper is physically within \`~/indodax-ai-bot-v2\`, is a regular file owned by the user, and is not a symlink. Any ambiguous/directly unparseable or out-of-V2 command fails closed. Output consists of fixed booleans, not raw command arguments, file paths, helper source, secrets, or arbitrary text. \`systemctl --user show\` itself is read-only. No helper is executed.
+This command reads only the **one observed owner V2 user-unit drop-in** and at most **one directly referenced .sh/.py helper** when that helper is physically within `~/indodax-ai-bot-v2`, is a regular file owned by the user, and is not a symlink. Any ambiguous/directly unparseable or out-of-V2 command fails closed. Output consists of fixed booleans, not raw command arguments, file paths, helper source, secrets, or arbitrary text. `systemctl --user show` itself is read-only. No helper is executed.
 
-\`\`\`bash
+```bash
 (
   set -euo pipefail
   ROOT="$HOME/indodax-ai-bot-v2"
@@ -437,17 +437,16 @@ try:
              "systemctl stop", "systemctl disable")),
     })
     result["status"] = "V2_HELPER_TEXT_HINTS_ONLY"
-except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired,
-        shlex.TokenizeError if hasattr(shlex, "TokenizeError") else ValueError):
+except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired):
     result["status"] = "V2_HELPER_STATIC_UNAVAILABLE_OR_AMBIGUOUS"
 
 print(json.dumps(result, sort_keys=True))
 PY
   echo "M10_BTC_WS_V2_HELPER_STATIC_READONLY_COMPLETED"
 )
-\`\`\`
+```
 
-This is **not** a behavioral safety audit; comments or dead code can produce the same booleans as a real guard, and a helper can call additional scripts. If the helper is outside the V2 tree or cannot be parsed unambiguously, do **not** follow it or request its contents. Leave M10-06 \`☐\`, timer disabled, and all trade paths OFF.
+This is **not** a behavioral safety audit; comments or dead code can produce the same booleans as a real guard, and a helper can call additional scripts. If the helper is outside the V2 tree or cannot be parsed unambiguously, do **not** follow it or request its contents. Leave M10-06 `☐`, timer disabled, and all trade paths OFF.
 
 ## Single read-only proof, no service mutation
 
