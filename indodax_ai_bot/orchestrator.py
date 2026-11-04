@@ -1206,7 +1206,8 @@ class DailyScalpingOrchestrator:
         }
 
     def run_m09_original_paper_cycle_offline_once(self, *,
-            action: str, details: dict) -> dict:
+            action: str, details: dict,
+            include_m11_risk_halt_readonly_reference: bool = False) -> dict:
         """M09-04: original V2 journal only, never exchange execution.
 
         Details are user-entered hypothetical PAPER quantities, prices
@@ -1218,6 +1219,25 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         if type(details) is not dict or type(action) is not str:
             raise ValueError("M09_PAPER_SCENARIO_INVALID")
+        if type(include_m11_risk_halt_readonly_reference) is not bool:
+            raise ValueError("M09_PAPER_RISK_REFERENCE_FLAG_INVALID")
+        if include_m11_risk_halt_readonly_reference:
+            # This extra view is explicitly SUMMARY-only and only when no
+            # owner/provider/verifier is connected. Never an M05 Final or
+            # an executable M07/M11 Risk gate.
+            if action != "SUMMARY":
+                raise ValueError("M09_PAPER_RISK_REFERENCE_SUMMARY_ONLY")
+            if (self._ai_role_caller is not None
+                    or self._source_verifier is not None
+                    or self._owner_control is not None
+                    or self._m03_owner_fee_snapshot is not None):
+                raise ValueError("M09_PAPER_RISK_REFERENCE_EXTERNAL_SOURCE_DENIED")
+            # Same original SQLite file, no second ledger: both connections
+            # use the original DecisionJournal class, M11 opened query_only.
+            m11_readonly = DecisionJournal.open_m11_offline_fixture_readonly(
+                self.journal._db_path)
+            if m11_readonly._db_path != self.journal._db_path:
+                raise ValueError("M09_PAPER_RISK_REFERENCE_NOT_SAME_JOURNAL")
         if action == "BUY":
             result=self.journal.record_m09_paper_buy_offline(**details)
         elif action == "SELL":
@@ -1232,7 +1252,7 @@ class DailyScalpingOrchestrator:
                 or result["execution_allowed"] is not False
                 or result["real_exchange_realized_pnl_idr"] is not None):
             raise ValueError("M09_PAPER_EXCHANGE_REALITY_CROSSING")
-        return {
+        report = {
             "stage":"M09_ORIGINAL_PAPER_ACCOUNTING_OFFLINE",
             "action":action,"paper":result,
             "m08_original_settlement_source":actual["status"],
@@ -1244,6 +1264,31 @@ class DailyScalpingOrchestrator:
             "order_sent":False,
             "execution_allowed":False,
         }
+        if include_m11_risk_halt_readonly_reference:
+            # DO NOT pass PAPER net PnL, PAPER capital or SELL timestamps
+            # into M11 exposure/loss. There is no exchange/owner receipt.
+            # A fixed synthetic identity/time is ONLY an untrusted fixture
+            # lookup, never authentication of a human owner.
+            shadow = DailyScalpingOrchestrator(
+                self.settings, m11_readonly,
+            ).review_m11_offline_shadow_safety_once(
+                owner_user_id=1, observed_epoch=1793781000,
+            )
+            if (shadow["status"] != "REJECT_SHADOW_OFFLINE_ONLY"
+                    or shadow["risk_halt_review"]["realized_pnl_settlement_verified"] is not False
+                    or shadow["risk_halt_review"]["scenario_daily_loss_below_limit"] is not None
+                    or shadow["owner_final_decision"] is not None
+                    or shadow["m11_live_release_authorized"] is not False):
+                raise ValueError("M09_PAPER_RISK_REFERENCE_AUTHORITY_DENIED")
+            report.update({
+                "m11_risk_halt_readonly_reference": shadow,
+                "m11_risk_reference_owner_identity": "FIXTURE_ONLY_UNAUTHENTICATED",
+                "m11_risk_reference_real_account_loss_status":
+                    "UNKNOWN_NO_EXCHANGE_SETTLED_IDR_EVIDENCE",
+                "m11_paper_pnl_used_as_realized_loss": False,
+                "m11_live_release_authorized": False,
+            })
+        return report
 
     def run_m09_original_recovery_shadow_once(self, trace_id: str, *,
             account_fingerprint: str, symbol: str,

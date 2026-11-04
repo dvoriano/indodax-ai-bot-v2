@@ -210,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="M08-07 event identity in original /tmp DecisionJournal; cannot inject settlement evidence")
     parser.add_argument("--m09-paper-file", default=None,
                         help="Absolute /tmp 0600 exact-schema PAPER-only scenario; not exchange fill or settlement")
+    parser.add_argument("--m09-paper-risk-halt-reference", action="store_true",
+                        help="Opt-in M09 PAPER SUMMARY only: same existing private /tmp M11 fixture SQLite read-only risk-halt reference; never real account PnL/GO")
     parser.add_argument("--m09-recovery-file", default=None,
                         help="Absolute /tmp 0600 JSON with M09 recovery identities only, not settlement facts")
     parser.add_argument("--m08-sell-preflight-file", default=None,
@@ -305,6 +307,18 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M09_PAPER_ISOLATED_TMP_FILES_REQUIRED")
         elif args.m09_paper_file is not None:
             raise ConfigurationError("M09_PAPER_FILE_ONLY_FOR_OFFLINE_SIMULATION")
+        if args.m09_paper_risk_halt_reference:
+            if not args.m09_paper_offline_once:
+                raise ConfigurationError("M09_PAPER_RISK_REFERENCE_SUMMARY_ONLY")
+            # Block BEFORE the standard DecisionJournal constructor. The
+            # selected file must already exist under a private /tmp folder
+            # with the M11 offline fixture name and owner-only permissions.
+            # It is THE SAME SQLite file for M09 PAPER and M11 halt tables.
+            try:
+                DecisionJournal.open_m11_offline_fixture_readonly(args.db)
+            except (ValueError, OSError, sqlite3.Error):
+                raise ConfigurationError(
+                    "M09_PAPER_RISK_REFERENCE_PRIVATE_FIXTURE_REQUIRED") from None
         if args.m09_recovery_shadow_once:
             settings.require_m01_safety()
             if (type(args.db) is not str
@@ -910,6 +924,8 @@ def main(argv: list[str] | None = None) -> int:
                         typed[k]=v
                 result=app.run_m09_original_paper_cycle_offline_once(
                     action=action,details=typed,
+                    include_m11_risk_halt_readonly_reference=(
+                        args.m09_paper_risk_halt_reference),
                 )
             except (M06ScopeDenied,OSError,ValueError,TypeError,
                     ArithmeticError,DecisionConflictError,
