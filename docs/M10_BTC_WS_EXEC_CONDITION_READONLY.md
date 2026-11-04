@@ -448,6 +448,158 @@ PY
 
 This is **not** a behavioral safety audit; comments or dead code can produce the same booleans as a real guard, and a helper can call additional scripts. If the helper is outside the V2 tree or cannot be parsed unambiguously, do **not** follow it or request its contents. Leave M10-06 `☐`, timer disabled, and all trade paths OFF.
 
+## Owner helper static lookup stopped safely (4 November 2026)
+
+The owner ran the bounded V2 helper lookup and received
+`M10_BTC_WS_V2_HELPER_STATIC_READONLY_COMPLETED` with
+`status=V2_HELPER_STATIC_UNAVAILABLE_OR_AMBIGUOUS`,
+`guard_exactly_one=true`, `helper_in_v2_tree=false`,
+`helper_regular_owned_nosymlink=false`, `helper_type=UNKNOWN`,
+`helper_sha256_prefix=null`, all helper-content hints `null`, and
+`service_restart_authorized=false`.
+
+**Interpretation:** that lookup deliberately conflates multiple
+fail-closed reasons. `helper_in_v2_tree=false` is **not independent
+evidence of a script outside V2**. The command might be represented with
+a different systemd expansion or lexical form, name multiple scripts,
+or contain no standalone supported `.sh/.py` token. No helper content
+was read or executed. Keep the guard intact.
+
+### One last syntax-shape probe of the original V2 drop-in
+
+Use the following **only to classify text format**, not to read or run
+a helper. It opens solely the known V2 owner's one BTC WS user-unit
+drop-in, validated as a regular owner-controlled file. It prints
+**fixed enums and booleans only**, never the source text, command, path,
+owner environment, file names, or any other service. A lexical
+`V2_ABSOLUTE_SCRIPT_TOKEN` means a textual path is *under* V2:
+**symlink resolution, file ownership/existence and helper behavior remain
+unverified**.
+
+```bash
+(
+  set -euo pipefail
+  "$HOME/indodax-ai-bot-v2/.venv/bin/python" -B - <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import stat
+import subprocess
+
+home = Path.home()
+root = home / "indodax-ai-bot-v2"
+unit = "indodax-v2-public-ws-btc.service"
+user_units = home / ".config" / "systemd" / "user"
+report = {
+    "scope": "ONE_V2_BTC_WS_EXEC_CONDITION_TOKEN_SHAPE",
+    "status": "UNKNOWN",
+    "exec_condition_rule_count": None,
+    "helper_script_token_count": None,
+    "helper_token_shape": "UNVERIFIED",
+    "helper_contents_read": False,
+    "helper_executed": False,
+    "service_restart_authorized": False,
+    "guard_bypass_authorized": False,
+    "exec_condition_exit1_root_cause_verified": False,
+}
+try:
+    proc = subprocess.run(
+        ["/usr/bin/systemctl", "--user", "--no-pager", "show",
+         "-p", "FragmentPath", "-p", "DropInPaths", unit],
+        capture_output=True, text=True, check=False, timeout=8,
+    )
+    if proc.returncode != 0 or len(proc.stdout) > 16384:
+        raise ValueError("UNAVAILABLE")
+    props = {}
+    for line in proc.stdout.splitlines():
+        k, eq, value = line.partition("=")
+        if eq and k in ("FragmentPath", "DropInPaths") and k not in props:
+            props[k] = value
+    paths = props.get("DropInPaths", "").split()
+    if (props.get("FragmentPath") != str(user_units / unit)
+            or len(paths) != 1):
+        raise ValueError("UNSCOPED_UNIT")
+    dropin = Path(paths[0])
+    if (dropin.parent != user_units / (unit + ".d")
+            or dropin.suffix != ".conf"
+            or ".." in dropin.parts):
+        raise ValueError("UNSCOPED_DROPIN")
+    fd = os.open(dropin, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_mode & 0o022
+                or not 1 <= info.st_size <= 32768):
+            raise ValueError("UNTRUSTED_DROPIN")
+        raw = os.read(fd, 32769).decode("utf-8")
+    finally:
+        os.close(fd)
+    active = False
+    rules = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            active = line == "[Service]"
+        elif active:
+            match = re.fullmatch(r"ExecCondition\s*=\s*(.*)", line)
+            if match:
+                rules.append(match.group(1))
+    report["exec_condition_rule_count"] = len(rules)
+    if len(rules) != 1 or not rules[0]:
+        report["helper_token_shape"] = "RULE_COUNT_UNSUPPORTED"
+    else:
+        tokens = shlex.split(rules[0])
+        if not tokens or any(
+            x in ("-c", ";", "&&", "||", "|", ">", "<")
+            for x in tokens
+        ):
+            report["helper_token_shape"] = "EMBEDDED_COMMAND_UNVERIFIED"
+        else:
+            recognized = []
+            for token in tokens:
+                if token.startswith("%h/"):
+                    token = str(home) + token[2:]
+                if token.endswith((".sh", ".py")):
+                    recognized.append(token)
+            report["helper_script_token_count"] = len(recognized)
+            if len(recognized) == 0:
+                report["helper_token_shape"] = (
+                    "EMBEDDED_OR_NONSTANDARD_SCRIPT"
+                    if ".sh" in rules[0] or ".py" in rules[0]
+                    else "NO_SH_PY_SCRIPT_TOKEN"
+                )
+            elif len(recognized) > 1:
+                report["helper_token_shape"] = "MULTIPLE_SCRIPT_TOKENS"
+            else:
+                token = recognized[0]
+                candidate = Path(token)
+                if not candidate.is_absolute() or ".." in candidate.parts:
+                    shape = "RELATIVE_OR_UNRESOLVED_SCRIPT_TOKEN"
+                elif candidate.is_relative_to(root):
+                    shape = "V2_ABSOLUTE_SCRIPT_TOKEN"
+                else:
+                    shape = "EXPLICIT_NONV2_ABSOLUTE_SCRIPT_TOKEN"
+                report["helper_token_shape"] = shape
+        report["status"] = "V2_DROPIN_TOKEN_SHAPE_ONLY"
+except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired):
+    report["status"] = "V2_DROPIN_TOKEN_SHAPE_UNAVAILABLE"
+
+print(json.dumps(report, sort_keys=True))
+PY
+  echo "M10_BTC_WS_GUARD_TOKEN_SHAPE_READONLY_COMPLETED"
+)
+```
+
+If the token is non-V2 or syntactically ambiguous, **stop** and keep
+`UNKNOWN`: do not open foreign paths, infer intended behavior,
+remove the guard or restart the service. This probe never establishes
+a reliable reason for exit code 1 or 24/7 operational acceptance.
+
 ## Single read-only proof, no service mutation
 
 This command prints **sanitized booleans/statuses only**. It reads one fixed allowlisted V2 user-unit via `systemctl --user show` and one V2 owner status JSON via `O_NOFOLLOW` bounded read. No journal, service source file, environment values, command/argv, private API, other repos, restart, credential, or trading request is output. Even if an ExecCondition value contains arguments, the script returns only **presence and numeric status codes**, never the command.
