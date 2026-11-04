@@ -25,13 +25,13 @@ from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 
 EPOCH = 1793781000
 BUY = {
-    "action": "BUY", "paper_id": "m11_ref_paper_001",
+    "action": "BUY", "paper_id": "paper_m11_ref_001",
     "symbol": "XRPIDR", "buy_qty": "4", "buy_price_idr": "25000",
     "buy_all_in_fee_idr": "200", "buy_epoch": 1793694000,
 }
 SELL = {
-    "action": "SELL", "paper_id": "m11_ref_paper_001",
-    "paper_exit_id": "m11_ref_exit_001", "sell_qty": "4",
+    "action": "SELL", "paper_id": "paper_m11_ref_001",
+    "paper_exit_id": "pexit_m11_ref_001", "sell_qty": "4",
     "sell_price_idr": "28000", "sell_all_in_fee_idr": "500",
     "incremental_slippage_idr": "100", "sell_epoch": 1793695800,
 }
@@ -209,8 +209,9 @@ class M11M09OriginalPaperRiskReferenceTests(unittest.TestCase):
         self.assertIn("M09_PAPER_RISK_REFERENCE_PRIVATE_FIXTURE_REQUIRED", err)
 
     def test_optin_rejects_symlink_and_sidecar(self):
-        fake = self.parent / "m11_offline_fixture_link.sqlite3"
-        fake.symlink_to(self.db)
+        alias_dir = self.parent / "alias"
+        alias_dir.symlink_to(self.parent, target_is_directory=True)
+        fake = alias_dir / "m11_offline_fixture.sqlite3"
         rc, out, err = self.cli(reference=True, db=fake)
         self.assertEqual((rc, out), (2, ""))
         self.assertIn("M09_PAPER_RISK_REFERENCE_PRIVATE_FIXTURE_REQUIRED", err)
