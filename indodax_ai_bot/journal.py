@@ -1007,7 +1007,8 @@ class DecisionJournal:
                 or result.get("retry_authorized") is not False
                 or result.get("source_status") not in (
                     "OFFLINE_TIMEOUT_UNKNOWN_NO_RETRY",
-                    "OFFLINE_FAKE_POST_RESULT_NOT_AUTHENTICATED")):
+                    "OFFLINE_FAKE_POST_RESULT_NOT_AUTHENTICATED",
+                    "OFFLINE_FAKE_GET_STATUS_NOT_AUTHENTICATED")):
             raise DecisionConflictError("M07_MANUAL_SENDER_MOCK_SOURCE_INVALID")
         expected = hashlib.sha256(json.dumps(
             draft.parameters(), separators=(",", ":"), ensure_ascii=True,
