@@ -196,8 +196,11 @@ def dedicated_owner_poll_once(
         outbound = _send_one_queued_market_advisory(
             api=api, ledger=ledger,
         )
-        manual_preview = _send_one_manual_trade_preview(
-            api=api, ledger=ledger,
+        manual_preview = (
+            {"delivery": "DEFERRED_ONE_OWNER_CARD_PER_TICK",
+             "messages_sent": 0}
+            if outbound["messages_sent"] != 0
+            else _send_one_manual_trade_preview(api=api, ledger=ledger)
         )
     # The poll summary is not an owner trade proposal. Each individual
     # callback is durably recorded in the owner ledger; batch has no Final.
