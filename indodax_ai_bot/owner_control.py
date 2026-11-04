@@ -475,6 +475,88 @@ class OwnerDecisionLedger:
             "order_sent": False, "execution_allowed": False,
         }
 
+    def inspect_manual_trade_press_for_sender_nonlive(
+            self, *, preview_id: str, owner_user_id: int,
+            account_fingerprint: str, draft, observed_epoch: int) -> dict:
+        """Read existing M05 owner-button card, no execution authorization.
+
+        Same original M05 owner ledger. A Telegram click is not a signed
+        M07 POST receipt, spendable balance, account authentication or real
+        owner Final. This read cannot mint such facts.
+        """
+        from .m07_order_adapter import M07OrderDraft
+        import json
+        if (type(preview_id) is not str
+                or PROPOSAL_ID.fullmatch(preview_id) is None
+                or type(owner_user_id) is not int
+                or owner_user_id != self.owner_user_id
+                or type(account_fingerprint) is not str
+                or DIGEST.fullmatch(account_fingerprint) is None
+                or type(draft) is not M07OrderDraft
+                or draft.order_type != "LIMIT"
+                or draft.side not in ("BUY", "SELL")
+                or type(observed_epoch) is not int
+                or observed_epoch <= 0):
+            return _blocked("M05_MANUAL_SENDER_IDENTITY_INVALID")
+        try:
+            encoded = json.dumps(
+                draft.parameters(), separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("ascii")
+            digest = sha256(encoded).hexdigest()
+        except (ValueError, TypeError):
+            return _blocked("M05_MANUAL_SENDER_DRAFT_INVALID")
+        with self._tx() as db:
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            row = db.execute(
+                "SELECT owner_user_id,account_fingerprint,client_order_id,"
+                "symbol,side,price_idr,quantity_base,draft_sha256,"
+                "created_epoch,expires_epoch,send_state,sent_message_id,"
+                "owner_choice,decided_epoch,execution_allowed "
+                "FROM m05_manual_trade_previews WHERE preview_id=?",
+                (preview_id,),
+            ).fetchone()
+            audit = db.execute(
+                "SELECT COUNT(*) FROM m05_audit WHERE proposal_id=? "
+                "AND owner_user_id=? AND event=? AND detail='NO_ORDER_NO_FINAL'",
+                (preview_id, owner_user_id,
+                 "MANUAL_PREVIEW_" + draft.side),
+            ).fetchone()[0]
+        matched = (
+            mode == "MANUAL"
+            and row is not None
+            and row[:5] == (
+                owner_user_id, account_fingerprint,
+                draft.client_order_id, draft.symbol, draft.side)
+            and row[5:8] == (
+                str(draft.price), str(draft.quantity), digest)
+            and type(row[8]) is int and type(row[9]) is int
+            and type(row[13]) is int
+            and row[8] <= row[13] < row[9]
+            and row[13] <= observed_epoch < row[9]
+            and row[10] == "SENT"
+            and type(row[11]) is int and row[11] > 0
+            and row[12] == draft.side
+            and row[14] == 0
+            and audit == 1
+        )
+        return {
+            "stage": "M05_EXISTING_MANUAL_OWNER_PRESS_SOURCE_REVIEW",
+            "status": (
+                "M05_MANUAL_CLICK_RECORDED_PREVIEW_ONLY"
+                if matched else "M05_MANUAL_PRESS_NOT_SOURCE_BOUND"),
+            "preview_id": preview_id if matched else None,
+            "draft_sha256": digest if matched else None,
+            "owner_button_recorded": bool(matched),
+            "owner_final_execution_authenticated": False,
+            "telegram_https_origin_independently_attested_here": False,
+            "account_spendable_idr_verified": False,
+            "bot_owned_sellable_quantity_verified": False,
+            "order_sent": False, "execution_allowed": False,
+        }
+
     def claim_manual_trade_preview_delivery(
             self, *, now_epoch: int) -> dict[str, Any] | None:
         """One original M05 queue, no uncertain send retry."""

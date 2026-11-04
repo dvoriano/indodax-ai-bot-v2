@@ -135,6 +135,37 @@ class DecisionJournal:
                         CHECK(execution_allowed=0)
                 )"""
             )
+            # M07 MANUAL sender boundary. A Telegram preview press and a
+            # MOCK TAPI POST result are never source-attested order issuer
+            # evidence. Hold all staged client IDs across restart; NO
+            # trade-specific proof, release, ownership or settlement exists.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_manual_sender_nonlive (
+                    client_order_id TEXT PRIMARY KEY,
+                    preview_id TEXT NOT NULL UNIQUE,
+                    owner_user_id INTEGER NOT NULL,
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),
+                    draft_sha256 TEXT NOT NULL,
+                    created_epoch INTEGER NOT NULL,
+                    last_epoch INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN
+                        ('OFFLINE_CLICK_BOUND_NO_SUBMIT',
+                         'OFFLINE_UNKNOWN_HOLD_NO_RETRY',
+                         'OFFLINE_MOCK_RESPONSE_HOLD_NO_ISSUER')),
+                    mock_response_sha256 TEXT,
+                    mock_status TEXT,
+                    source TEXT NOT NULL CHECK(
+                        source='M05_PREVIEW_NO_EXECUTION_AUTHORITY'),
+                    execution_allowed INTEGER NOT NULL
+                        CHECK(execution_allowed=0)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_m07_manual_hold "
+                "ON m07_manual_sender_nonlive(symbol,state)"
+            )
             # M07 P1: local pre-submit commitment on the SAME original V2
             # DecisionJournal. PREPARED/UNCERTAIN are strictly synthetic,
             # never exchange-submitted order provenance, capital reserve,
@@ -611,6 +642,11 @@ class DecisionJournal:
                 ).fetchone() is not None:
                     raise DecisionConflictError("M07_ORIGIN_SYNTHETIC_ID_COLLISION")
                 if con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' LIMIT 1"
+                ).fetchone() is not None:
+                    raise DecisionConflictError("M07_MANUAL_GLOBAL_UNKNOWN_HOLD")
+                if con.execute(
                     "SELECT 1 FROM m07_prepared_origin_no_submit "
                     "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1"
                 ).fetchone() is not None:
@@ -620,13 +656,16 @@ class DecisionJournal:
                     "WHERE state='OFFLINE_UNKNOWN_HOLD' LIMIT 1"
                 ).fetchone() is not None:
                     raise DecisionConflictError("M07_ORIGIN_M07_UNKNOWN_BLOCKS_BUY")
-                if con.execute(
+                if (con.execute(
                     "SELECT 1 FROM m07_prepared_origin_no_submit "
                     "WHERE symbol=? LIMIT 1", (draft.symbol,),
                 ).fetchone() is not None or con.execute(
                     "SELECT 1 FROM m07_offline_order_intents "
                     "WHERE symbol=? LIMIT 1", (draft.symbol,),
-                ).fetchone() is not None:
+                ).fetchone() is not None or con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE symbol=? LIMIT 1", (draft.symbol,),
+                ).fetchone() is not None):
                     raise DecisionConflictError("M07_ORIGIN_PAIR_UNRESOLVED")
                 origin_count = con.execute(
                     "SELECT COUNT(*) FROM m07_prepared_origin_no_submit"
@@ -634,7 +673,10 @@ class DecisionJournal:
                 synthetic_count = con.execute(
                     "SELECT COUNT(*) FROM m07_offline_order_intents"
                 ).fetchone()[0]
-                if origin_count + synthetic_count >= 2:
+                manual_count = con.execute(
+                    "SELECT COUNT(*) FROM m07_manual_sender_nonlive"
+                ).fetchone()[0]
+                if origin_count + synthetic_count + manual_count >= 2:
                     raise DecisionConflictError("M07_ORIGIN_MAX_TWO_LOCAL_HOLDS")
                 con.execute(
                     "INSERT INTO m07_prepared_origin_no_submit "
@@ -816,6 +858,213 @@ class DecisionJournal:
             "live_trading_authorized": False,
         }
 
+    def record_m07_manual_sender_nonlive_once(
+            self, *, preview_id: str, owner_user_id: int,
+            account_fingerprint: str, draft: M07OrderDraft,
+            owner_review: dict, recorded_epoch: int) -> dict:
+        """Atomic MANUAL button-bound no-submit hold on SAME V2 journal.
+
+        SOURCE is existing M05 PREVIEW only: a click can prepare a future
+        manual send, but never grant live authority, fill or ownership.
+        All holds are durable and cannot be released by mock outcomes.
+        """
+        if getattr(self, "_m11_readonly_fixture", False):
+            raise DecisionConflictError("M07_MANUAL_SENDER_WRITABLE_REQUIRED")
+        if (type(preview_id) is not str
+                or re.fullmatch(r"[0-9a-f]{24}", preview_id) is None
+                or type(owner_user_id) is not int or owner_user_id <= 0
+                or type(account_fingerprint) is not str
+                or re.fullmatch(r"[a-f0-9]{64}", account_fingerprint) is None
+                or type(draft) is not M07OrderDraft
+                or draft.order_type != "LIMIT"
+                or type(recorded_epoch) is not int
+                or not 1 <= recorded_epoch <= 9999999999):
+            raise DecisionConflictError("M07_MANUAL_SENDER_SCOPE_INVALID")
+        params = draft.parameters()
+        req = hashlib.sha256(json.dumps(
+            params, separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
+        if (type(owner_review) is not dict
+                or owner_review.get("status") !=
+                    "M05_MANUAL_CLICK_RECORDED_PREVIEW_ONLY"
+                or owner_review.get("owner_button_recorded") is not True
+                or owner_review.get("draft_sha256") != req
+                or owner_review.get("preview_id") != preview_id
+                or owner_review.get("execution_allowed") is not False
+                or owner_review.get("owner_final_execution_authenticated") is not False):
+            raise DecisionConflictError("M07_MANUAL_OWNER_PREVIEW_UNVERIFIED")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT preview_id,owner_user_id,account_fingerprint,"
+                "symbol,side,draft_sha256,created_epoch,state "
+                "FROM m07_manual_sender_nonlive WHERE client_order_id=?",
+                (draft.client_order_id,),
+            ).fetchone()
+            if row is not None:
+                if (row[:6] != (
+                        preview_id,owner_user_id,account_fingerprint,
+                        draft.symbol,draft.side,req)
+                        or recorded_epoch < row[6]):
+                    raise DecisionConflictError("M07_MANUAL_SENDER_REPLAY_CONFLICT")
+                state,replayed = row[7],True
+            else:
+                if con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE preview_id=? LIMIT 1",
+                    (preview_id,),
+                ).fetchone():
+                    raise DecisionConflictError("M07_MANUAL_SENDER_PREVIEW_REUSED")
+                if con.execute(
+                    "SELECT 1 FROM m07_offline_order_intents "
+                    "WHERE client_order_id=? LIMIT 1",
+                    (draft.client_order_id,),
+                ).fetchone() or con.execute(
+                    "SELECT 1 FROM m07_prepared_origin_no_submit "
+                    "WHERE client_order_id=? LIMIT 1",
+                    (draft.client_order_id,),
+                ).fetchone():
+                    raise DecisionConflictError("M07_MANUAL_SENDER_CLIENT_ID_COLLISION")
+                if (con.execute(
+                    "SELECT 1 FROM m07_offline_order_intents "
+                    "WHERE state='OFFLINE_UNKNOWN_HOLD' LIMIT 1",
+                ).fetchone() or con.execute(
+                    "SELECT 1 FROM m07_prepared_origin_no_submit "
+                    "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1",
+                ).fetchone() or con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' LIMIT 1",
+                ).fetchone()):
+                    raise DecisionConflictError("M07_MANUAL_SENDER_GLOBAL_UNKNOWN_HOLD")
+                if (con.execute(
+                    "SELECT 1 FROM m07_offline_order_intents WHERE symbol=? LIMIT 1",
+                    (draft.symbol,),
+                ).fetchone() or con.execute(
+                    "SELECT 1 FROM m07_prepared_origin_no_submit "
+                    "WHERE symbol=? LIMIT 1",
+                    (draft.symbol,),
+                ).fetchone() or con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE symbol=? LIMIT 1",
+                    (draft.symbol,),
+                ).fetchone()):
+                    raise DecisionConflictError("M07_MANUAL_SENDER_PAIR_HOLD")
+                n = con.execute(
+                    "SELECT (SELECT COUNT(*) FROM m07_offline_order_intents)"
+                    "+(SELECT COUNT(*) FROM m07_prepared_origin_no_submit)"
+                    "+(SELECT COUNT(*) FROM m07_manual_sender_nonlive)"
+                ).fetchone()[0]
+                if n >= 2:
+                    raise DecisionConflictError("M07_MANUAL_SENDER_MAX_TWO")
+                # SELL can be inspected as a clicked preview but must NOT
+                # create even a pending SELL-origin hold absent owned lots.
+                if draft.side == "SELL":
+                    raise DecisionConflictError(
+                        "M07_MANUAL_SELL_REQUIRES_VERIFIED_BOT_OWNED_LOT")
+                con.execute(
+                    "INSERT INTO m07_manual_sender_nonlive "
+                    "(client_order_id,preview_id,owner_user_id,"
+                    "account_fingerprint,symbol,side,draft_sha256,"
+                    "created_epoch,last_epoch,state,source,execution_allowed)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,"
+                    "'OFFLINE_CLICK_BOUND_NO_SUBMIT',"
+                    "'M05_PREVIEW_NO_EXECUTION_AUTHORITY',0)",
+                    (draft.client_order_id,preview_id,owner_user_id,
+                     account_fingerprint,draft.symbol,draft.side,req,
+                     recorded_epoch,recorded_epoch),
+                )
+                state,replayed = "OFFLINE_CLICK_BOUND_NO_SUBMIT",False
+        return {
+            "stage": "M07_ORIGINAL_MANUAL_SENDER_NONLIVE_HANDOFF",
+            "status": state, "replay": replayed,
+            "draft_sha256": req,
+            "manual_owner_preview_id_bound": preview_id,
+            "manual_owner_telegram_press_recorded": True,
+            "owner_final_execution_authenticated": False,
+            "post_order_issuer_verified": False,
+            "authenticated_sellable_lot_verified": False,
+            "retry_authorized": False,
+            "order_sent": False, "execution_allowed": False,
+        }
+
+    def observe_m07_manual_sender_mock_result_once(
+            self, *, client_order_id: str, preview_id: str,
+            draft: M07OrderDraft, result: dict,
+            observed_epoch: int) -> dict:
+        """Persist mock result hash; NEVER promote to actual order state."""
+        if getattr(self, "_m11_readonly_fixture", False):
+            raise DecisionConflictError("M07_MANUAL_SENDER_READONLY")
+        if (type(client_order_id) is not str
+                or client_order_id != draft.client_order_id
+                or type(preview_id) is not str
+                or re.fullmatch(r"[0-9a-f]{24}", preview_id) is None
+                or type(observed_epoch) is not int or observed_epoch <= 0
+                or type(result) is not dict
+                or result.get("draft_sha256") is None
+                or result.get("real_post_response_authenticated") is not False
+                or result.get("order_sent") is not False
+                or result.get("execution_allowed") is not False
+                or result.get("retry_authorized") is not False
+                or result.get("source_status") not in (
+                    "OFFLINE_TIMEOUT_UNKNOWN_NO_RETRY",
+                    "OFFLINE_FAKE_POST_RESULT_NOT_AUTHENTICATED")):
+            raise DecisionConflictError("M07_MANUAL_SENDER_MOCK_SOURCE_INVALID")
+        expected = hashlib.sha256(json.dumps(
+            draft.parameters(), separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
+        if result.get("draft_sha256") != expected:
+            raise DecisionConflictError("M07_MANUAL_SENDER_MOCK_DRAFT_MISMATCH")
+        status = ("OFFLINE_UNKNOWN_HOLD_NO_RETRY"
+                  if result["source_status"] == "OFFLINE_TIMEOUT_UNKNOWN_NO_RETRY"
+                  else "OFFLINE_MOCK_RESPONSE_HOLD_NO_ISSUER")
+        fingerprint = result.get("mock_response_sha256")
+        if (fingerprint is not None and (
+                type(fingerprint) is not str
+                or re.fullmatch(r"[a-f0-9]{64}", fingerprint) is None)
+                or (status == "OFFLINE_UNKNOWN_HOLD_NO_RETRY"
+                    and fingerprint is not None)
+                or (status != "OFFLINE_UNKNOWN_HOLD_NO_RETRY"
+                    and fingerprint is None)):
+            raise DecisionConflictError("M07_MANUAL_SENDER_MOCK_DIGEST_INVALID")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT preview_id,draft_sha256,created_epoch,last_epoch,"
+                "state,mock_response_sha256 FROM m07_manual_sender_nonlive "
+                "WHERE client_order_id=?", (client_order_id,),
+            ).fetchone()
+            if row is None:
+                raise DecisionConflictError("M07_MANUAL_SENDER_UNSTAGED")
+            if (row[:2] != (preview_id,expected)
+                    or observed_epoch < row[2]
+                    or observed_epoch < row[3]):
+                raise DecisionConflictError("M07_MANUAL_SENDER_MOCK_REPLAY_CONFLICT")
+            if row[4] == "OFFLINE_CLICK_BOUND_NO_SUBMIT":
+                con.execute(
+                    "UPDATE m07_manual_sender_nonlive "
+                    "SET state=?,last_epoch=?,mock_response_sha256=?,"
+                    "mock_status=? WHERE client_order_id=? AND "
+                    "state='OFFLINE_CLICK_BOUND_NO_SUBMIT'",
+                    (status,observed_epoch,fingerprint,
+                     result.get("mock_status"),client_order_id),
+                )
+                replay=False
+            elif row[4] == status and row[5] == fingerprint:
+                replay=True
+            else:
+                raise DecisionConflictError("M07_MANUAL_SENDER_ALREADY_TERMINAL_HOLD")
+        return {
+            "stage": "M07_ORIGINAL_MANUAL_SENDER_MOCK_RESULT",
+            "status": status, "replay": replay,
+            "sender_response_synthetic_only": True,
+            "bot_owned_lot_verified": False,
+            "exchange_response_authenticated": False,
+            "real_exchange_order_id": None,
+            "retry_authorized": False,
+            "m08_settlement_issuer_allowed": False,
+            "order_sent": False, "execution_allowed": False,
+        }
+
     def reserve_m07_offline_order_intent(
         self, *, intent_id: str, draft: M07OrderDraft,
         recorded_epoch: int,
@@ -876,6 +1125,11 @@ class DecisionJournal:
             if used is not None:
                 raise DecisionConflictError("M07_CLIENT_ID_ALREADY_RESERVED")
             if con.execute(
+                "SELECT 1 FROM m07_manual_sender_nonlive "
+                "WHERE state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' LIMIT 1"
+            ).fetchone() is not None:
+                raise DecisionConflictError("M07_MANUAL_GLOBAL_UNKNOWN_HOLD")
+            if con.execute(
                 "SELECT 1 FROM m07_prepared_origin_no_submit "
                 "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1"
             ).fetchone() is not None:
@@ -887,6 +1141,11 @@ class DecisionJournal:
                 # No proof which exchange commitment consumed IDR.
                 raise DecisionConflictError("M07_UNKNOWN_BLOCKS_ALL_NEW_BUYS")
             if con.execute(
+                "SELECT 1 FROM m07_manual_sender_nonlive "
+                "WHERE client_order_id=? LIMIT 1", (draft.client_order_id,)
+            ).fetchone() is not None:
+                raise DecisionConflictError("M07_MANUAL_CLIENT_ID_IN_USE")
+            if con.execute(
                 "SELECT 1 FROM m07_prepared_origin_no_submit "
                 "WHERE client_order_id=? LIMIT 1", (draft.client_order_id,)
             ).fetchone() is not None:
@@ -897,6 +1156,9 @@ class DecisionJournal:
             ).fetchone() is not None or con.execute(
                 "SELECT 1 FROM m07_prepared_origin_no_submit "
                 "WHERE symbol=? LIMIT 1", (draft.symbol,),
+            ).fetchone() is not None or con.execute(
+                "SELECT 1 FROM m07_manual_sender_nonlive "
+                "WHERE symbol=? LIMIT 1", (draft.symbol,),
             ).fetchone() is not None):
                 raise DecisionConflictError("M07_UNRESOLVED_PAIR_INTENT")
             count = con.execute(
@@ -905,7 +1167,10 @@ class DecisionJournal:
             other = con.execute(
                 "SELECT COUNT(*) FROM m07_prepared_origin_no_submit"
             ).fetchone()[0]
-            if count + other >= 2:
+            manual = con.execute(
+                "SELECT COUNT(*) FROM m07_manual_sender_nonlive"
+            ).fetchone()[0]
+            if count + other + manual >= 2:
                 raise DecisionConflictError("M07_MAX_TWO_UNRESOLVED_INTENTS")
             con.execute(
                 "INSERT INTO m07_offline_order_intents "
@@ -2405,6 +2670,11 @@ class DecisionJournal:
                 "state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' THEN 1 ELSE 0 END),0)"
                 " FROM m07_prepared_origin_no_submit"
             ).fetchone()
+            manual_total, manual_unknown = con.execute(
+                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN "
+                "state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' THEN 1 ELSE 0 END),0)"
+                " FROM m07_manual_sender_nonlive"
+            ).fetchone()
             correlated, partial, terminal, still_unknown = con.execute(
                 "SELECT COUNT(*),"
                 "COALESCE(SUM(CASE WHEN r.order_status='PARTIALLY_FILLED' "
@@ -2430,7 +2700,11 @@ class DecisionJournal:
             "offline_unknown_holds": unknown,
             "additional_buy_reservations_blocked": (
                 unknown > 0 or local_uncertain > 0
-                or total + local_total >= 2),
+                or manual_unknown > 0
+                or total + local_total + manual_total >= 2),
+            "manual_sender_nonlive_holds": manual_total,
+            "manual_sender_nonlive_unknown_holds": manual_unknown,
+            "manual_sender_no_order_issuer": True,
             "local_origin_prepared_no_submit_count": local_total,
             "local_origin_uncertain_no_retry_count": local_uncertain,
             "local_origin_does_not_prove_order_issuer": True,

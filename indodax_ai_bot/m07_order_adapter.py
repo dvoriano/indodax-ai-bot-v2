@@ -229,6 +229,89 @@ class OfficialV2OrderAdapter:
             timestamp_ms=timestamp_ms, recv_window_ms=recv_window_ms,
         )
 
+    @staticmethod
+    def inspect_nonlive_post_result_shape(
+            *, draft: M07OrderDraft,
+            response: dict | None,
+            submitted_at_ms: int) -> dict:
+        """Syntactic future TAPI V2 POST result parser, never an issuer.
+
+        No HTTP transport is called. Mock response fields, even when
+        perfectly matched, are not proof this V2 submitted or filled an
+        order. Timeout/ambiguous output MUST NOT cause automatic retry.
+        """
+        import json
+        from decimal import InvalidOperation
+        if (type(draft) is not M07OrderDraft
+                or type(submitted_at_ms) is not int
+                or not 1_000_000_000_000 <= submitted_at_ms <= 9_999_999_999_999):
+            raise ValueError("M07_SENDER_SHAPE_INPUT_INVALID")
+        params = draft.parameters()
+        request_sha = sha256(json.dumps(
+            params, separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
+        if response is None:
+            return {
+                "source_status": "OFFLINE_TIMEOUT_UNKNOWN_NO_RETRY",
+                "draft_sha256": request_sha,
+                "mock_response_sha256": None,
+                "mock_status": None,
+                "mock_cumulative_qty": None,
+                "mock_exchange_order_id": None,
+                "mock_response_shape_matched": False,
+                "real_post_response_authenticated": False,
+                "retry_authorized": False,
+                "order_sent": False, "execution_allowed": False,
+            }
+        required = {
+            "symbol", "clientOrderId", "side", "type",
+            "orderId", "status", "executedQty",
+        }
+        if (type(response) is not dict or set(response) != required
+                or response.get("symbol") != draft.symbol
+                or response.get("clientOrderId") != draft.client_order_id
+                or response.get("side") != draft.side
+                or response.get("type") != draft.order_type
+                or type(response.get("orderId")) is not int
+                or not 1 <= response["orderId"] <= 10**18
+                or type(response.get("executedQty")) is not str
+                or not 1 <= len(response["executedQty"]) <= 45
+                or response.get("status") not in (
+                    "NEW", "PARTIALLY_FILLED", "FILLED",
+                    "CANCELED", "REJECTED")):
+            raise ValueError("M07_SENDER_MOCK_RESULT_IDENTITY_INVALID")
+        try:
+            executed = Decimal(response["executedQty"])
+            limit = (draft.quantity if draft.quantity is not None
+                     else Decimal(0))
+            valid = (executed.is_finite() and limit.is_finite()
+                     and 0 <= executed <= limit
+                     and (response["status"] != "NEW" or executed == 0)
+                     and (response["status"] != "REJECTED" or executed == 0)
+                     and (response["status"] != "PARTIALLY_FILLED"
+                          or 0 < executed < limit)
+                     and (response["status"] != "FILLED" or executed == limit))
+        except (TypeError, ValueError, InvalidOperation):
+            valid = False
+        if not valid:
+            raise ValueError("M07_SENDER_MOCK_RESULT_FILL_INVALID")
+        digest = sha256(json.dumps(
+            response, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False,
+        ).encode("ascii")).hexdigest()
+        return {
+            "source_status": "OFFLINE_FAKE_POST_RESULT_NOT_AUTHENTICATED",
+            "draft_sha256": request_sha,
+            "mock_response_sha256": digest,
+            "mock_status": response["status"],
+            "mock_cumulative_qty": str(executed),
+            "mock_exchange_order_id": response["orderId"],
+            "mock_response_shape_matched": True,
+            "real_post_response_authenticated": False,
+            "retry_authorized": False,
+            "order_sent": False, "execution_allowed": False,
+        }
+
     def create_order(self, *args, **kwargs) -> None:
         raise M07Hardlocked("M07_LIVE_CREATE_HARDLOCKED")
 
