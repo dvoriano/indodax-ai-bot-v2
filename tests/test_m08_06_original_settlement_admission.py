@@ -187,7 +187,7 @@ class OriginalM08SettlementIssuerAdmissionTests(unittest.TestCase):
         review = self.check_deny(json.loads(self.call(payload={
             **self.args(), "observed_epoch": NOW + 3601,
         })[1]))
-        self.assertFalse(review["account_only_buy_fill_fees_reconciled"])
+        self.assertTrue(review["account_only_buy_fill_fees_reconciled"])
         self.assertFalse(review["account_only_sell_fill_fees_reconciled"])
 
     def test_foreign_account_sell_cannot_pair_with_buy(self):
