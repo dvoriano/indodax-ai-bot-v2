@@ -24,7 +24,9 @@ that ALL apparently passing scenarios remain never-authorized.
 The original CLI is tested for rejection of GO env before constructing
 a journal/orchestrator, making a network request or ordering.
 
-## Owner VPS, one scoped original source test (NOT yet executed)
+## Owner VPS, scoped original source test (COMPLETED, 4 November 2026)
+
+**OWNER PASS ACCEPTED; command below is historical reference, do NOT rerun:** owner verified exact original V2 detached source `17f0ffdd5a87b48430b0ee75a189c4874a02d731`, then `python -B -m unittest -v tests.test_m11_04_release_risk_original_cli`: **12/12 tests OK (0.010 seconds)**, marker `M11_04_OWNER_VPS_OFFLINE_SCOPED_PASS`. No live settings, account/Telegram/provider network, deployed service, source main checkout changes, or order. This does not prove installed kill switch, owner-approved real risk budgets or LIVE readiness. M11-04 and M11 acceptance remain open.
 
 Do **not** run `git pull` on the current main checkout to prove a
 specific historical SHA; it advances main and may make an exact-SHA
@@ -84,8 +86,8 @@ No actual Telegram, Indodax, private/public REST, AI, BTC WS collector,
 outside-V2 script, or order execution is permitted. No systemd
 commands or deployed service changes are invoked.
 
-The marker and exactly 12 passing targeted tests on a pinned commit
-would prove scoped owner VPS checkout evidence, **not** real limit
+The marker and **12 passing targeted tests were observed on VPS**
+and prove only scoped owner VPS checkout evidence, **not** real limit
 configuration, owner GO, independent G1 provenance, spendable
 account/fee, installed kill switch, LIVE failover, real SELL, settled
 IDR, or 24/7 alerting.
