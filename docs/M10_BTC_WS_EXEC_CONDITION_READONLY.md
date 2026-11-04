@@ -600,6 +600,55 @@ If the token is non-V2 or syntactically ambiguous, **stop** and keep
 remove the guard or restart the service. This probe never establishes
 a reliable reason for exit code 1 or 24/7 operational acceptance.
 
+## Final scope stop: one explicit non-V2 script token (4 November 2026)
+
+Owner ran the **one V2 user-unit drop-in only** textual token-shape probe,
+marker `M10_BTC_WS_GUARD_TOKEN_SHAPE_READONLY_COMPLETED`, returning:
+
+```json
+{
+  "scope": "ONE_V2_BTC_WS_GUARD",
+  "status": "TOKEN_SHAPE_ONLY",
+  "guard_rule_count": 1,
+  "script_token_count": 1,
+  "script_token_shape": "EXPLICIT_NONV2_SCRIPT_TOKEN",
+  "helper_contents_read": false,
+  "helper_executed": false,
+  "service_restart_authorized": false,
+  "guard_bypass_authorized": false
+}
+```
+
+**Strict interpretation:** the `ExecCondition` line contains one
+syntactically absolute `.sh` or `.py` token that is **not lexically
+under** `~/indodax-ai-bot-v2`. This does not establish whether that file
+exists, what it does, whether it belongs to V1/Hermes/another project, or
+whether systemd's actual `ExecCondition` process resolves to the same
+target. We have **not** followed the token, opened or executed any helper,
+or shown its path.
+
+The original `guard_mentions_v2_home=true` hint in the earlier drop-in
+lexical probe is not contradictory: the line can mention V2 **and**
+reference a non-V2 script token. The earlier fail-closed
+`V2_HELPER_STATIC_UNAVAILABLE_OR_AMBIGUOUS` was appropriate and remains
+valid; this newer, narrower lexical evidence explains that **a supported
+V2-owned absolute helper token was not present**, not why exit 1 occurred.
+
+**STOP GATE:** by the owner's strict V2+GitHub-only rule, do not follow,
+read, execute, copy, modify, migrate, rename or delete that non-V2
+token target or its project/service. Do not replace or bypass the
+installed drop-in, restart or enable the BTC public WS collector, or
+turn on any trading or M03 timer. Do not repeat these probes as a way to
+circumvent the boundary. To change the installed guard would require
+a separate, explicit, scoped owner-approved plan and new evidence;
+this task has no such authorization.
+
+Historical successful M10-01 bounded-pilot evidence stays accepted.
+M10-06 operational 24/7 acceptance remains **☐**. M10-05 all-peer
+egress-IP proof remains **☐**, and M10 remains **4/7**. Any further
+work must be original V2/GitHub-only and **independent** of this
+guard; no external script inspection is a prerequisite.
+
 ## Single read-only proof, no service mutation
 
 This command prints **sanitized booleans/statuses only**. It reads one fixed allowlisted V2 user-unit via `systemctl --user show` and one V2 owner status JSON via `O_NOFOLLOW` bounded read. No journal, service source file, environment values, command/argv, private API, other repos, restart, credential, or trading request is output. Even if an ExecCondition value contains arguments, the script returns only **presence and numeric status codes**, never the command.
