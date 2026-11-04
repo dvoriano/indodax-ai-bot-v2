@@ -754,6 +754,72 @@ class DailyScalpingOrchestrator:
             raise ValueError("M07_MANUAL_PREVIEW_UNEXPECTED_AUTHORITY")
         return result
 
+    def review_m07_manual_owner_sender_nonlive_once(
+            self, *, owner_user_id: int, preview_id: str,
+            account_fingerprint: str, draft: M07OrderDraft,
+            now_epoch: int, mock_result: dict | None = None,
+            mock_result_provided: bool = False) -> dict:
+        """M05 original owner click → M07 original journal → fake-only POST.
+
+        An optional mock result can validate future POST parsing and
+        UNKNOWN replay without network. No true order/Final/lot issuer.
+        """
+        self.settings.require_m01_safety()
+        if self._owner_control is None:
+            raise ValueError("M07_MANUAL_SENDER_OWNER_REQUIRED")
+        if (self._ai_role_caller is not None
+                or self._source_verifier is not None
+                or OfficialV2OrderAdapter.contract_status().get(
+                    "network_allowed") is not False):
+            raise ValueError("M07_MANUAL_SENDER_NETWORK_MUST_BE_HARDLOCKED")
+        button = self._owner_control.inspect_manual_trade_press_for_sender_nonlive(
+            preview_id=preview_id,owner_user_id=owner_user_id,
+            account_fingerprint=account_fingerprint,draft=draft,
+            observed_epoch=now_epoch,
+        )
+        if (button.get("owner_button_recorded") is not True
+                or button.get("execution_allowed") is not False
+                or button.get("owner_final_execution_authenticated") is not False):
+            return {
+                "status": "M07_MANUAL_OWNER_CLICK_NOT_ELIGIBLE",
+                "source_status": button.get("status"),
+                "order_sent": False, "execution_allowed": False,
+                "live_trading_authorized": False,
+            }
+        staged = self.journal.record_m07_manual_sender_nonlive_once(
+            preview_id=preview_id,owner_user_id=owner_user_id,
+            account_fingerprint=account_fingerprint,draft=draft,
+            owner_review=button,recorded_epoch=now_epoch,
+        )
+        if mock_result_provided:
+            fake = OfficialV2OrderAdapter.inspect_nonlive_post_result_shape(
+                draft=draft,response=mock_result,
+                submitted_at_ms=now_epoch*1000,
+            )
+            observed = self.journal.observe_m07_manual_sender_mock_result_once(
+                client_order_id=draft.client_order_id,
+                preview_id=preview_id,draft=draft,
+                result=fake,observed_epoch=now_epoch,
+            )
+            return {
+                "stage": "M07_MANUAL_BUTTON_BOUND_FUTURE_SENDER_OFFLINE",
+                "staged": staged,
+                "sender_simulation": observed,
+                "owner_final_decision": None,
+                "real_sender_issuer_verified": False,
+                "order_sent": False, "execution_allowed": False,
+                "live_trading_authorized": False,
+            }
+        return {
+            "stage": "M07_MANUAL_BUTTON_BOUND_FUTURE_SENDER_OFFLINE",
+            "staged": staged,
+            "sender_simulation": None,
+            "owner_final_decision": None,
+            "real_sender_issuer_verified": False,
+            "order_sent": False, "execution_allowed": False,
+            "live_trading_authorized": False,
+        }
+
     def review_m07_original_bot_origin_local_once(
             self, *, action: str, account_uid: int,
             account_fingerprint: str, draft: M07OrderDraft,
