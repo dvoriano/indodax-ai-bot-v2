@@ -213,6 +213,24 @@ class TelegramOwnerPoller:
         # REJECT. This is a consent-only shadow: execution remains OFF.
         if result.get("execution_allowed") is not False:
             raise TelegramTransportError("M05_TELEGRAM_OWNER_GATE_CHANGED")
+        if result.get("manual_trade_preview") is True:
+            # The only owner action here is a one-time preview press,
+            # never a BUY/SELL authorization, real Final or actual order.
+            if (result.get("accepted") is not True
+                    or result.get("owner_decision") not in
+                       ("BUY", "SELL", "REJECT")
+                    or result.get("final_decision") is not None
+                    or result.get("execution_allowed") is not False
+                    or result.get("actual_trade_click_authorized") is not False
+                    or result.get("order_sent") is not False):
+                raise TelegramTransportError(
+                    "M05_MANUAL_PREVIEW_AUTHORITY_CHANGED")
+            label = result["owner_decision"]
+            return (
+                "OWNER_MANUAL_PREVIEW_" + label + "_RECORDED",
+                "answerCallbackQuery",
+                "Tombol " + label + " dicatat sebagai UJI. Tidak ada order.",
+            )
         choice = result.get("owner_decision")
         if result.get("accepted") is True:
             if choice not in ("PASS", "REJECT") or result.get("final_decision") != choice:
@@ -341,6 +359,9 @@ class TelegramOwnerPoller:
                     "OWNER_CALLBACK_PASS_RECORDED",
                     "OWNER_CALLBACK_REJECT_RECORDED",
                     "OWNER_CALLBACK_STALE_UI_NOTICE",
+                    "OWNER_MANUAL_PREVIEW_BUY_RECORDED",
+                    "OWNER_MANUAL_PREVIEW_SELL_RECORDED",
+                    "OWNER_MANUAL_PREVIEW_REJECT_RECORDED",
                 ):
                     failures = []
                     try:

@@ -154,6 +154,12 @@ class OfflineTelegramOwnerInterface:
                         data: str, now_epoch: int,
                         chat_type: str = "private",
                         telegram_message_id: int | None = None) -> dict[str, Any]:
+        if isinstance(data, str) and data.startswith("m5t:"):
+            return self.ledger.apply_manual_trade_preview_callback(
+                user_id=user_id, chat_id=chat_id, callback_data=data,
+                now_epoch=now_epoch, chat_type=chat_type,
+                telegram_message_id=telegram_message_id,
+            )
         return self.ledger.apply_callback(
             user_id=user_id, chat_id=chat_id, callback_data=data,
             now_epoch=now_epoch, chat_type=chat_type,
