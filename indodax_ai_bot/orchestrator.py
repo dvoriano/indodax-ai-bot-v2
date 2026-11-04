@@ -758,7 +758,8 @@ class DailyScalpingOrchestrator:
             self, *, owner_user_id: int, preview_id: str,
             account_fingerprint: str, draft: M07OrderDraft,
             now_epoch: int, mock_result: dict | None = None,
-            mock_result_provided: bool = False) -> dict:
+            mock_result_provided: bool = False,
+            mock_transport_method: str = "POST") -> dict:
         """M05 original owner click → M07 original journal → fake-only POST.
 
         An optional mock result can validate future POST parsing and
@@ -792,10 +793,18 @@ class DailyScalpingOrchestrator:
             owner_review=button,recorded_epoch=now_epoch,
         )
         if mock_result_provided:
-            fake = OfficialV2OrderAdapter.inspect_nonlive_post_result_shape(
-                draft=draft,response=mock_result,
-                submitted_at_ms=now_epoch*1000,
-            )
+            if mock_transport_method == "POST":
+                fake = OfficialV2OrderAdapter.inspect_nonlive_post_result_shape(
+                    draft=draft,response=mock_result,
+                    submitted_at_ms=now_epoch*1000,
+                )
+            elif mock_transport_method == "GET":
+                fake = OfficialV2OrderAdapter.inspect_nonlive_get_order_status_shape(
+                    draft=draft,response=mock_result,
+                    observed_at_ms=now_epoch*1000,
+                )
+            else:
+                raise ValueError("M07_MANUAL_MOCK_ENDPOINT_METHOD_DENIED")
             observed = self.journal.observe_m07_manual_sender_mock_result_once(
                 client_order_id=draft.client_order_id,
                 preview_id=preview_id,draft=draft,
