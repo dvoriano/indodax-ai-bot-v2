@@ -78,6 +78,25 @@ class OfflineTelegramOwnerInterface:
                     + ". Tidak ada order. Trading OFF."
                 ),
             }
+        # M10-06: ORIGINAL owner-only M05 read-only operations view.
+        # Authenticated owner/private-chat gate above MUST run before this.
+        # Never enqueue/send a notification, call paid AI or issue a trade.
+        if command == "/ops" and len(parts) == 1:
+            from .m10_ops_health_readonly import (
+                assess_v2_operations_readonly, format_v2_ops_owner_message,
+            )
+            try:
+                review = assess_v2_operations_readonly(now_epoch=now_epoch)
+                reply = format_v2_ops_owner_message(review)
+            except (OSError, TypeError, ValueError):
+                reply = (
+                    "M10-06 V2 operasional READ-ONLY. STATUS_UNVERIFIED. "
+                    "Tidak ada GO. Trading OFF."
+                )
+            return {
+                **_blocked("M10_OPS_OWNER_READONLY_NO_EXECUTION"),
+                "text": reply,
+            }
         # Original M05 SQLite review records are genuine local evidence,
         # never exchange trade/fill evidence. Read the SAME owner ledger.
         if command in ("/market", "/history") and len(parts) == 1:

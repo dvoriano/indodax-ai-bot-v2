@@ -193,6 +193,81 @@ def assess_v2_operations_readonly(
     }
 
 
+
+# Fixed status labels only. Never expose raw network exception, path or
+# untrusted report key/value to the owner's Telegram reply.
+_M05_OPS_ALERT_LABELS = {
+    "BTC_WS_BATCH_INCOMPLETE_OR_INCONSISTENT": "BATCH_INCOMPLETE",
+    "BTC_WS_BATCH_REJECTED": "BATCH_REJECTED",
+    "BTC_WS_BATCH_STALE": "BATCH_STALE",
+    "BTC_WS_BATCH_FUTURE_CLOCK": "BATCH_CLOCK_INVALID",
+    "BTC_WS_BATCH_STATUS_UNAVAILABLE": "BATCH_UNAVAILABLE",
+    "BTC_WS_BATCH_FIELDS_UNTRUSTED": "BATCH_UNTRUSTED",
+    "BTC_WS_REJECT_RESTART_FLAG_CONFLICT": "RESTART_FLAG_CONFLICT",
+    "BTC_WS_UNIT_NOT_ACTIVE": "WS_UNIT_INACTIVE",
+    "BTC_WS_UNIT_STATUS_UNVERIFIED": "WS_UNIT_UNVERIFIED",
+    "M05_TIMER_NOT_ACTIVE": "M05_TIMER_INACTIVE",
+    "M05_TIMER_STATUS_UNVERIFIED": "M05_TIMER_UNVERIFIED",
+    "M03_TIMER_NOT_CONFIRMED_DISABLED": "M03_TIMER_REVIEW",
+    "M03_TIMER_STATUS_UNVERIFIED": "M03_TIMER_UNVERIFIED",
+}
+
+
+def format_v2_ops_owner_message(report: dict | None) -> str:
+    """Owner-only M05 preview, never a sent/delivered alert or trading consent.
+
+    All text is fixed or derived from strictly bounded integer/session data.
+    Untrusted strings in the original sidecar/units are never echoed.
+    """
+    prefix = "M10-06 V2 operasional READ-ONLY (snapshot, bukan heartbeat 24 jam)."
+    if (not isinstance(report, dict)
+            or report.get("status") != "V2_OPERATIONS_READONLY_OBSERVATION"
+            or report.get("scope") != "ONE_V2_ORIGINAL_WS_SIDECAR_AND_FIXED_USER_UNITS"):
+        return prefix + "\nSTATUS_UNVERIFIED. Tidak ada GO. Trading OFF."
+
+    alerts = report.get("alert_codes")
+    if not isinstance(alerts, list) or len(alerts) > 32:
+        return prefix + "\nALERT_DATA_UNVERIFIED. Tidak ada GO. Trading OFF."
+    labels = []
+    for item in alerts:
+        if type(item) is not str or item not in _M05_OPS_ALERT_LABELS:
+            return prefix + "\nALERT_DATA_UNVERIFIED. Tidak ada GO. Trading OFF."
+        label = _M05_OPS_ALERT_LABELS[item]
+        if label not in labels:
+            labels.append(label)
+    labels.sort()
+
+    state = ("AKTIF (metadata saja)"
+             if report.get("btc_ws_unit_active_metadata_observed") is True
+             else "TIDAK AKTIF/UNVERIFIED")
+    timer = ("DISABLED (metadata saja)"
+             if report.get("m03_timer_disabled_metadata_observed") is True
+             else "TIDAK TERVERIFIKASI DISABLED")
+    original = report.get("btc_ws_last_batch")
+    original = original if isinstance(original, dict) else {}
+    status = original.get("last_batch_status")
+    if status not in ("REJECT", "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"):
+        status = "UNKNOWN"
+    count = original.get("completed_safe_sessions")
+    requested = original.get("requested_sessions")
+    if (type(count) is not int or type(requested) is not int
+            or not 0 <= count <= requested <= 10):
+        sessions = "UNKNOWN"
+    else:
+        sessions = str(count) + "/" + str(requested)
+    warnings = ", ".join(labels) if labels else "TIDAK TERDETEKSI (snapshot saja)"
+    message = (
+        prefix + "\nBTC WS: " + state + "; batch terakhir: " + status +
+        "; sesi aman: " + sessions + "." +
+        "\nM03 timer: " + timer + "." +
+        "\nPeringatan: " + warnings + "." +
+        "\nPeringatan belum terbukti terkirim otomatis; restart/GO tidak diizinkan. Trading OFF."
+    )
+    return message if len(message) <= 900 else (
+        prefix + "\nALERT_DATA_UNVERIFIED. Tidak ada GO. Trading OFF."
+    )
+
+
 def main() -> int:
     print(json.dumps(assess_v2_operations_readonly(),
                      sort_keys=True, separators=(",", ":")))
