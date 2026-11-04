@@ -642,6 +642,11 @@ class DecisionJournal:
                 ).fetchone() is not None:
                     raise DecisionConflictError("M07_ORIGIN_SYNTHETIC_ID_COLLISION")
                 if con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' LIMIT 1"
+                ).fetchone() is not None:
+                    raise DecisionConflictError("M07_MANUAL_GLOBAL_UNKNOWN_HOLD")
+                if con.execute(
                     "SELECT 1 FROM m07_prepared_origin_no_submit "
                     "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1"
                 ).fetchone() is not None:
@@ -651,13 +656,16 @@ class DecisionJournal:
                     "WHERE state='OFFLINE_UNKNOWN_HOLD' LIMIT 1"
                 ).fetchone() is not None:
                     raise DecisionConflictError("M07_ORIGIN_M07_UNKNOWN_BLOCKS_BUY")
-                if con.execute(
+                if (con.execute(
                     "SELECT 1 FROM m07_prepared_origin_no_submit "
                     "WHERE symbol=? LIMIT 1", (draft.symbol,),
                 ).fetchone() is not None or con.execute(
                     "SELECT 1 FROM m07_offline_order_intents "
                     "WHERE symbol=? LIMIT 1", (draft.symbol,),
-                ).fetchone() is not None:
+                ).fetchone() is not None or con.execute(
+                    "SELECT 1 FROM m07_manual_sender_nonlive "
+                    "WHERE symbol=? LIMIT 1", (draft.symbol,),
+                ).fetchone() is not None):
                     raise DecisionConflictError("M07_ORIGIN_PAIR_UNRESOLVED")
                 origin_count = con.execute(
                     "SELECT COUNT(*) FROM m07_prepared_origin_no_submit"
@@ -665,7 +673,10 @@ class DecisionJournal:
                 synthetic_count = con.execute(
                     "SELECT COUNT(*) FROM m07_offline_order_intents"
                 ).fetchone()[0]
-                if origin_count + synthetic_count >= 2:
+                manual_count = con.execute(
+                    "SELECT COUNT(*) FROM m07_manual_sender_nonlive"
+                ).fetchone()[0]
+                if origin_count + synthetic_count + manual_count >= 2:
                     raise DecisionConflictError("M07_ORIGIN_MAX_TWO_LOCAL_HOLDS")
                 con.execute(
                     "INSERT INTO m07_prepared_origin_no_submit "
@@ -1114,6 +1125,11 @@ class DecisionJournal:
             if used is not None:
                 raise DecisionConflictError("M07_CLIENT_ID_ALREADY_RESERVED")
             if con.execute(
+                "SELECT 1 FROM m07_manual_sender_nonlive "
+                "WHERE state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' LIMIT 1"
+            ).fetchone() is not None:
+                raise DecisionConflictError("M07_MANUAL_GLOBAL_UNKNOWN_HOLD")
+            if con.execute(
                 "SELECT 1 FROM m07_prepared_origin_no_submit "
                 "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1"
             ).fetchone() is not None:
@@ -1125,6 +1141,11 @@ class DecisionJournal:
                 # No proof which exchange commitment consumed IDR.
                 raise DecisionConflictError("M07_UNKNOWN_BLOCKS_ALL_NEW_BUYS")
             if con.execute(
+                "SELECT 1 FROM m07_manual_sender_nonlive "
+                "WHERE client_order_id=? LIMIT 1", (draft.client_order_id,)
+            ).fetchone() is not None:
+                raise DecisionConflictError("M07_MANUAL_CLIENT_ID_IN_USE")
+            if con.execute(
                 "SELECT 1 FROM m07_prepared_origin_no_submit "
                 "WHERE client_order_id=? LIMIT 1", (draft.client_order_id,)
             ).fetchone() is not None:
@@ -1135,6 +1156,9 @@ class DecisionJournal:
             ).fetchone() is not None or con.execute(
                 "SELECT 1 FROM m07_prepared_origin_no_submit "
                 "WHERE symbol=? LIMIT 1", (draft.symbol,),
+            ).fetchone() is not None or con.execute(
+                "SELECT 1 FROM m07_manual_sender_nonlive "
+                "WHERE symbol=? LIMIT 1", (draft.symbol,),
             ).fetchone() is not None):
                 raise DecisionConflictError("M07_UNRESOLVED_PAIR_INTENT")
             count = con.execute(
@@ -1143,7 +1167,10 @@ class DecisionJournal:
             other = con.execute(
                 "SELECT COUNT(*) FROM m07_prepared_origin_no_submit"
             ).fetchone()[0]
-            if count + other >= 2:
+            manual = con.execute(
+                "SELECT COUNT(*) FROM m07_manual_sender_nonlive"
+            ).fetchone()[0]
+            if count + other + manual >= 2:
                 raise DecisionConflictError("M07_MAX_TWO_UNRESOLVED_INTENTS")
             con.execute(
                 "INSERT INTO m07_offline_order_intents "
@@ -2643,6 +2670,11 @@ class DecisionJournal:
                 "state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' THEN 1 ELSE 0 END),0)"
                 " FROM m07_prepared_origin_no_submit"
             ).fetchone()
+            manual_total, manual_unknown = con.execute(
+                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN "
+                "state='OFFLINE_UNKNOWN_HOLD_NO_RETRY' THEN 1 ELSE 0 END),0)"
+                " FROM m07_manual_sender_nonlive"
+            ).fetchone()
             correlated, partial, terminal, still_unknown = con.execute(
                 "SELECT COUNT(*),"
                 "COALESCE(SUM(CASE WHEN r.order_status='PARTIALLY_FILLED' "
@@ -2668,7 +2700,11 @@ class DecisionJournal:
             "offline_unknown_holds": unknown,
             "additional_buy_reservations_blocked": (
                 unknown > 0 or local_uncertain > 0
-                or total + local_total >= 2),
+                or manual_unknown > 0
+                or total + local_total + manual_total >= 2),
+            "manual_sender_nonlive_holds": manual_total,
+            "manual_sender_nonlive_unknown_holds": manual_unknown,
+            "manual_sender_no_order_issuer": True,
             "local_origin_prepared_no_submit_count": local_total,
             "local_origin_uncertain_no_retry_count": local_uncertain,
             "local_origin_does_not_prove_order_issuer": True,
