@@ -1698,7 +1698,8 @@ class DecisionJournal:
                         or type(fills[8]) is not int
                         or not 1_000_000_000_000 <= order[5] <= max_ms
                         or not 1_000_000_000_000 <= fills[8] <= max_ms
-                        or max_ms - max(order[5],fills[8]) > 3600 * 1000):
+                        or (side == "SELL" and
+                            max_ms - max(order[5], fills[8]) > 3600 * 1000)):
                     reasons.append(f"M08_{side}_RECEIPT_FRESHNESS_UNVERIFIED")
                     return None
                 return qty, net, fills[7]
