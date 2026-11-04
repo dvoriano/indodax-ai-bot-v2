@@ -37,6 +37,7 @@ from .telegram_dedicated_inbound import (
     LEGACY_CAIPITI_BOT_ID, dedicated_owner_poll_once,
 )
 from .public_ws_health import public_ws_health
+from .m11_04_release_risk_offline import review_m11_release_risk_offline
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
 
@@ -104,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m11-release-risk-offline-once", action="store_true",
+                       help="M11-04 V2 risk ceiling/kill-switch review only; no account IO, GO, trade or service update")
     group.add_argument("--m09-paper-offline-once", action="store_true",
                        help="Original journal PAPER-only BUY/SELL/SUMMARY simulation; no exchange orders or real profit")
     group.add_argument("--m09-recovery-shadow-once", action="store_true",
@@ -245,6 +248,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m11_release_risk_offline_once:
+            settings.require_m01_safety()
+            result = review_m11_release_risk_offline(settings=settings)
+            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+            return 0  # Offline report completed, NOT M11 release approval.
         if args.scheduled_public_scanner_once:
             # Owner's user-systemd opt-in must be explicit and current.
             # Block before creating any decision or owner ledger, and BEFORE
