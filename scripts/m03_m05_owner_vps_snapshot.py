@@ -246,9 +246,35 @@ def collect_original_v2_runtime_snapshot(
         and m05["v2_user_fragment_path_matches"] is True
         and m05["unit_needs_daemon_reload"] == "no"
     )
+    # Deterministic blockers are observations, never authorization to start
+    # a scanner, enable trading, or bypass independent source admission.
+    blockers = []
+    if not source_consistent:
+        blockers.append("M03_NONLIVE_SOURCE_TEMPLATE_UNVERIFIED")
+    if not ws_present:
+        blockers.append("BTC_WS_DATABASE_MISSING")
+    if batch_alerts:
+        blockers.append("BTC_WS_BATCH_NOT_FRESH_AND_CLEAN")
+    if ws_file_age is None or ws_file_age > 3600:
+        blockers.append("BTC_WS_FILE_NOT_RECENT")
+    if egress["status"] != "OWNER_POLICY_CURRENT_DECLARED_ONLY":
+        blockers.append("M03_EGRESS_POLICY_UNVERIFIED")
+    if not telegram_metadata_active:
+        blockers.append("M05_TELEGRAM_TIMER_NOT_VERIFIED_ACTIVE")
+    if not owner["owner_service_env_permissions_ok"]:
+        blockers.append("M05_OWNER_ENV_PERMISSIONS_UNVERIFIED")
+    if not owner["owner_db_permissions_ok"]:
+        blockers.append("M05_OWNER_DB_PERMISSIONS_UNVERIFIED")
+    if not owner["telegram_token_file_permissions_ok"]:
+        blockers.append("M05_TOKEN_FILE_PERMISSIONS_UNVERIFIED")
+    if not owner["owner_ledger_source_identity_verified"]:
+        blockers.append("M05_OWNER_LEDGER_IDENTITY_UNVERIFIED")
+    if sha is None:
+        blockers.append("V2_SOURCE_HEAD_UNVERIFIED")
     return {
         "scope": "SINGLE_CANONICAL_V2_OWNER_VPS_READONLY_SNAPSHOT",
         "status": "OBSERVED_NOT_DEPLOYED_NOT_GO",
+        "nonlive_canary_blocker_codes": blockers,
         "observed_epoch": current,
         "original_v2_git_head_sha": sha,
         "source_sha_is_running_process_attestation": False,
