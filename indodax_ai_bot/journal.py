@@ -135,6 +135,35 @@ class DecisionJournal:
                         CHECK(execution_allowed=0)
                 )"""
             )
+            # M07 P1: local pre-submit commitment on the SAME original V2
+            # DecisionJournal. PREPARED/UNCERTAIN are strictly synthetic,
+            # never exchange-submitted order provenance, capital reserve,
+            # ownership, live permission or a separately issued order event.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m07_prepared_origin_no_submit (
+                    client_order_id TEXT PRIMARY KEY,
+                    account_uid INTEGER NOT NULL,
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL CHECK(side='BUY'),
+                    order_type TEXT NOT NULL CHECK(order_type='LIMIT'),
+                    price_idr TEXT NOT NULL,
+                    quantity_base TEXT NOT NULL,
+                    request_sha256 TEXT NOT NULL,
+                    created_epoch INTEGER NOT NULL,
+                    last_epoch INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN
+                        ('OFFLINE_PREPARED_NO_SUBMIT',
+                         'OFFLINE_UNCERTAIN_HOLD_NO_RETRY')),
+                    provenance TEXT NOT NULL CHECK(
+                        provenance='LOCAL_DRAFT_NO_EXCHANGE_SUBMIT'),
+                    execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
+                )"""
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_m07_origin_local_hold "
+                "ON m07_prepared_origin_no_submit(symbol,state)"
+            )
             # M07-01/03: original V2 journal owns one durable OFFLINE-only
             # order-intent reservation namespace. This table is NOT a
             # signed exchange execution log or authenticated ownership.
@@ -518,6 +547,274 @@ class DecisionJournal:
         finally:
             con.close()
 
+    @staticmethod
+    def _m07_origin_local_params(
+            *, account_uid: int, account_fingerprint: str,
+            draft: M07OrderDraft, observed_epoch: int) -> tuple:
+        """Canonical local BUY draft identity, not authentication of owner."""
+        if (type(account_uid) is not int or not 1 <= account_uid <= 9999999999
+                or type(account_fingerprint) is not str
+                or re.fullmatch(r"[a-f0-9]{64}", account_fingerprint) is None
+                or type(draft) is not M07OrderDraft
+                or draft.side != "BUY" or draft.order_type != "LIMIT"
+                or type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999):
+            raise DecisionConflictError("M07_ORIGIN_LOCAL_SCOPE_INVALID")
+        params = draft.parameters()  # Original OfficialV2OrderAdapter contract.
+        digest = hashlib.sha256(json.dumps(
+            params, separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
+        return (
+            draft.client_order_id, account_uid, account_fingerprint,
+            draft.symbol, draft.side, draft.order_type,
+            format(draft.price, "f"), format(draft.quantity, "f"), digest,
+        )
+
+    def prepare_m07_order_origin_commitment_offline(
+            self, *, account_uid: int, account_fingerprint: str,
+            draft: M07OrderDraft, observed_epoch: int) -> dict:
+        """One durable, idempotent pre-SEND draft on original journal only.
+
+        We cannot prove a bot-submitted order without a separately
+        authenticated, durable sender-side exchange receipt. Local drafts,
+        client IDs and View Only orders must NEVER mint one. Permanent
+        unresolved/uncertain holds are conservative, not spendable budget.
+        """
+        if getattr(self, "_m11_readonly_fixture", False):
+            raise DecisionConflictError("M07_ORIGIN_WRITABLE_LOCAL_SCOPE_REQUIRED")
+        item = self._m07_origin_local_params(
+            account_uid=account_uid, account_fingerprint=account_fingerprint,
+            draft=draft, observed_epoch=observed_epoch,
+        )
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            old = con.execute(
+                "SELECT account_uid,account_fingerprint,symbol,side,"
+                "order_type,price_idr,quantity_base,request_sha256,"
+                "created_epoch,state,provenance,execution_allowed "
+                "FROM m07_prepared_origin_no_submit WHERE client_order_id=?",
+                (draft.client_order_id,),
+            ).fetchone()
+            if old is not None:
+                expected = (*item[1:], old[8], old[9],
+                            "LOCAL_DRAFT_NO_EXCHANGE_SUBMIT", 0)
+                if old != expected or observed_epoch < old[8]:
+                    raise DecisionConflictError("M07_ORIGIN_IMMUTABLE_REPLAY_CONFLICT")
+                status, replay = old[9], True
+            else:
+                # A local synthetic M07 intent uses the same global client
+                # identity namespace. It cannot be promoted into bot origin.
+                if con.execute(
+                    "SELECT 1 FROM m07_offline_order_intents "
+                    "WHERE client_order_id=? LIMIT 1",
+                    (draft.client_order_id,),
+                ).fetchone() is not None:
+                    raise DecisionConflictError("M07_ORIGIN_SYNTHETIC_ID_COLLISION")
+                if con.execute(
+                    "SELECT 1 FROM m07_prepared_origin_no_submit "
+                    "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1"
+                ).fetchone() is not None:
+                    raise DecisionConflictError("M07_ORIGIN_UNCERTAIN_BLOCKS_BUY")
+                if con.execute(
+                    "SELECT 1 FROM m07_offline_order_intents "
+                    "WHERE state='OFFLINE_UNKNOWN_HOLD' LIMIT 1"
+                ).fetchone() is not None:
+                    raise DecisionConflictError("M07_ORIGIN_M07_UNKNOWN_BLOCKS_BUY")
+                if con.execute(
+                    "SELECT 1 FROM m07_prepared_origin_no_submit "
+                    "WHERE symbol=? LIMIT 1", (draft.symbol,),
+                ).fetchone() is not None or con.execute(
+                    "SELECT 1 FROM m07_offline_order_intents "
+                    "WHERE symbol=? LIMIT 1", (draft.symbol,),
+                ).fetchone() is not None:
+                    raise DecisionConflictError("M07_ORIGIN_PAIR_UNRESOLVED")
+                origin_count = con.execute(
+                    "SELECT COUNT(*) FROM m07_prepared_origin_no_submit"
+                ).fetchone()[0]
+                synthetic_count = con.execute(
+                    "SELECT COUNT(*) FROM m07_offline_order_intents"
+                ).fetchone()[0]
+                if origin_count + synthetic_count >= 2:
+                    raise DecisionConflictError("M07_ORIGIN_MAX_TWO_LOCAL_HOLDS")
+                con.execute(
+                    "INSERT INTO m07_prepared_origin_no_submit "
+                    "(client_order_id,account_uid,account_fingerprint,"
+                    "symbol,side,order_type,price_idr,quantity_base,"
+                    "request_sha256,created_epoch,last_epoch,state,"
+                    "provenance,execution_allowed) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,"
+                    "'OFFLINE_PREPARED_NO_SUBMIT',"
+                    "'LOCAL_DRAFT_NO_EXCHANGE_SUBMIT',0)",
+                    (*item, observed_epoch, observed_epoch),
+                )
+                status, replay = "OFFLINE_PREPARED_NO_SUBMIT", False
+        return {
+            "stage": "M07_ORIGINAL_DURABLE_LOCAL_ORIGIN_COMMITMENT",
+            "status": status, "replay": replay,
+            "request_draft_sha256": item[8],
+            "local_draft_immutable": True,
+            "account_uid_authenticated": False,
+            "owner_order_final_authenticated": False,
+            "bot_exchange_submit_receipt_verified": False,
+            "exchange_order_state_unknown_not_retryable": True,
+            "bot_owned_quantity_verified": False,
+            "m08_position_admitted": False,
+            "created_order_intent_for_execution": False,
+            "order_sent": False, "execution_allowed": False,
+            "live_trading_authorized": False,
+        }
+
+    def mark_m07_order_origin_uncertain_offline(
+            self, *, account_uid: int, account_fingerprint: str,
+            draft: M07OrderDraft, observed_epoch: int) -> dict:
+        """Synthetic lost-result/UNKNOWN hold. Cannot release or retry."""
+        item = self._m07_origin_local_params(
+            account_uid=account_uid, account_fingerprint=account_fingerprint,
+            draft=draft, observed_epoch=observed_epoch,
+        )
+        if getattr(self, "_m11_readonly_fixture", False):
+            raise DecisionConflictError("M07_ORIGIN_WRITABLE_LOCAL_SCOPE_REQUIRED")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT account_uid,account_fingerprint,symbol,side,"
+                "order_type,price_idr,quantity_base,request_sha256,"
+                "created_epoch,last_epoch,state "
+                "FROM m07_prepared_origin_no_submit WHERE client_order_id=?",
+                (draft.client_order_id,),
+            ).fetchone()
+            if row is None:
+                raise DecisionConflictError("M07_ORIGIN_NOT_PREPARED")
+            if (row[:8] != item[1:] or observed_epoch < row[8]
+                    or observed_epoch < row[9]):
+                raise DecisionConflictError("M07_ORIGIN_UNKNOWN_REPLAY_CONFLICT")
+            if row[10] == "OFFLINE_PREPARED_NO_SUBMIT":
+                con.execute(
+                    "UPDATE m07_prepared_origin_no_submit "
+                    "SET state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY',last_epoch=? "
+                    "WHERE client_order_id=? AND state='OFFLINE_PREPARED_NO_SUBMIT'",
+                    (observed_epoch, draft.client_order_id),
+                )
+                replay = False
+            elif row[10] == "OFFLINE_UNCERTAIN_HOLD_NO_RETRY":
+                replay = True
+            else:
+                raise DecisionConflictError("M07_ORIGIN_CORRUPT_STATE")
+        return {
+            "stage": "M07_ORIGINAL_DURABLE_LOCAL_ORIGIN_COMMITMENT",
+            "status": "OFFLINE_UNCERTAIN_HOLD_NO_RETRY",
+            "replay": replay,
+            "exchange_submit_attempt_verified": False,
+            "exchange_order_state_authenticated": False,
+            "local_hold_permanent_without_verified_future_issuer": True,
+            "retry_authorized": False, "release_authorized": False,
+            "bot_owned_quantity_verified": False,
+            "m08_position_admitted": False,
+            "order_sent": False, "execution_allowed": False,
+            "live_trading_authorized": False,
+        }
+
+    def review_m07_order_origin_handoff_readonly(
+            self, *, account_uid: int, account_fingerprint: str,
+            draft: M07OrderDraft, observed_epoch: int) -> dict:
+        """SAME journal, atomic read-only correlation, no source promotion.
+
+        Even a FILLED account-only View Only receipt matching every field
+        cannot prove THIS V2 instance sent the BUY; no owner/issuer Final,
+        bot-owned lot, executable SELL or M08-06 wallet event is minted.
+        """
+        if not getattr(self, "_m11_readonly_fixture", False):
+            raise DecisionConflictError("M07_ORIGIN_REVIEW_READONLY_REQUIRED")
+        item = self._m07_origin_local_params(
+            account_uid=account_uid, account_fingerprint=account_fingerprint,
+            draft=draft, observed_epoch=observed_epoch,
+        )
+        state = None
+        order_correlated = fill_correlated = False
+        with self._connect() as con:
+            con.execute("BEGIN")
+            row = con.execute(
+                "SELECT account_uid,account_fingerprint,symbol,side,"
+                "order_type,price_idr,quantity_base,request_sha256,"
+                "created_epoch,state,provenance,execution_allowed "
+                "FROM m07_prepared_origin_no_submit WHERE client_order_id=?",
+                (draft.client_order_id,),
+            ).fetchone()
+            if row is not None:
+                expected = (*item[1:], row[8], row[9],
+                            "LOCAL_DRAFT_NO_EXCHANGE_SUBMIT", 0)
+                if (row != expected or observed_epoch < row[8]):
+                    raise DecisionConflictError("M07_ORIGIN_REVIEW_IDENTITY_CONFLICT")
+                state = row[9]
+                order = con.execute(
+                    "SELECT full_order_id,side,order_type,original_qty,"
+                    "executed_qty,status,provenance FROM "
+                    "m07_exchange_readonly_orders WHERE "
+                    "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                    (account_fingerprint, draft.symbol,
+                     draft.client_order_id),
+                ).fetchone()
+                if order is not None:
+                    try:
+                        order_correlated = (
+                            order[1:3] == ("BUY","LIMIT")
+                            and order[5] == "FILLED"
+                            and order[6] == "INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER"
+                            and Decimal(order[3]) == draft.quantity
+                            and Decimal(order[4]) == draft.quantity
+                        )
+                    except (ArithmeticError, ValueError, TypeError):
+                        order_correlated = False
+                    if order_correlated:
+                        fills = con.execute(
+                            "SELECT full_order_id,side,qty_base,fill_digest,"
+                            "provenance FROM "
+                            "m07_exchange_readonly_fill_summaries WHERE "
+                            "account_fingerprint=? AND symbol=? "
+                            "AND client_order_id=?",
+                            (account_fingerprint,draft.symbol,
+                             draft.client_order_id),
+                        ).fetchone()
+                        if fills is not None:
+                            try:
+                                fill_correlated = (
+                                    fills[0:2] == (order[0],"BUY")
+                                    and Decimal(fills[2]) == draft.quantity
+                                    and type(fills[3]) is str
+                                    and re.fullmatch(r"[a-f0-9]{64}",
+                                                     fills[3]) is not None
+                                    and fills[4] ==
+                                        "INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"
+                                )
+                            except (ArithmeticError, ValueError, TypeError):
+                                fill_correlated = False
+            total, uncertain = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN "
+                "state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' THEN 1 ELSE 0 END),0)"
+                " FROM m07_prepared_origin_no_submit"
+            ).fetchone()
+        return {
+            "stage": "M07_ORIGINAL_ORDER_ORIGIN_READONLY_HANDOFF",
+            "status": "M07_ORIGIN_BLOCKED_NO_AUTHENTICATED_SUBMIT_ISSUER",
+            "origin_local_state": state,
+            "original_local_draft_present": state is not None,
+            "account_only_buy_order_correlated_not_owned": order_correlated,
+            "account_only_buy_fill_correlated_not_owned": fill_correlated,
+            "origin_local_holds_observed": total,
+            "origin_uncertain_holds_observed": uncertain,
+            "account_uid_authenticated": False,
+            "bot_exchange_submit_receipt_verified": False,
+            "verified_bot_owned_lots": False,
+            "verified_bot_owned_base_qty": None,
+            "m08_position_manager_admission": False,
+            "m08_06_settlement_issuer_allowed": False,
+            "m07_sell_quantity_authorized": None,
+            "retry_authorized": False, "release_authorized": False,
+            "owner_final_decision": None,
+            "order_sent": False, "execution_allowed": False,
+            "live_trading_authorized": False,
+        }
+
     def reserve_m07_offline_order_intent(
         self, *, intent_id: str, draft: M07OrderDraft,
         recorded_epoch: int,
@@ -578,20 +875,36 @@ class DecisionJournal:
             if used is not None:
                 raise DecisionConflictError("M07_CLIENT_ID_ALREADY_RESERVED")
             if con.execute(
+                "SELECT 1 FROM m07_prepared_origin_no_submit "
+                "WHERE state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' LIMIT 1"
+            ).fetchone() is not None:
+                raise DecisionConflictError("M07_ORIGIN_UNCERTAIN_BLOCKS_BUY")
+            if con.execute(
                 "SELECT 1 FROM m07_offline_order_intents "
                 "WHERE state='OFFLINE_UNKNOWN_HOLD' LIMIT 1"
             ).fetchone() is not None:
                 # No proof which exchange commitment consumed IDR.
                 raise DecisionConflictError("M07_UNKNOWN_BLOCKS_ALL_NEW_BUYS")
             if con.execute(
-                "SELECT 1 FROM m07_offline_order_intents "
-                "WHERE symbol=? LIMIT 1", (draft.symbol,)
+                "SELECT 1 FROM m07_prepared_origin_no_submit "
+                "WHERE client_order_id=? LIMIT 1", (draft.client_order_id,)
             ).fetchone() is not None:
+                raise DecisionConflictError("M07_ORIGIN_CLIENT_ID_IN_USE")
+            if (con.execute(
+                "SELECT 1 FROM m07_offline_order_intents "
+                "WHERE symbol=? LIMIT 1", (draft.symbol,),
+            ).fetchone() is not None or con.execute(
+                "SELECT 1 FROM m07_prepared_origin_no_submit "
+                "WHERE symbol=? LIMIT 1", (draft.symbol,),
+            ).fetchone() is not None):
                 raise DecisionConflictError("M07_UNRESOLVED_PAIR_INTENT")
             count = con.execute(
                 "SELECT COUNT(*) FROM m07_offline_order_intents"
             ).fetchone()[0]
-            if count >= 2:
+            other = con.execute(
+                "SELECT COUNT(*) FROM m07_prepared_origin_no_submit"
+            ).fetchone()[0]
+            if count + other >= 2:
                 raise DecisionConflictError("M07_MAX_TWO_UNRESOLVED_INTENTS")
             con.execute(
                 "INSERT INTO m07_offline_order_intents "
@@ -2086,6 +2399,11 @@ class DecisionJournal:
                 "CASE WHEN state='OFFLINE_UNKNOWN_HOLD' THEN 1 ELSE 0 END"
                 "),0) FROM m07_offline_order_intents"
             ).fetchone()
+            local_total, local_uncertain = con.execute(
+                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN "
+                "state='OFFLINE_UNCERTAIN_HOLD_NO_RETRY' THEN 1 ELSE 0 END),0)"
+                " FROM m07_prepared_origin_no_submit"
+            ).fetchone()
             correlated, partial, terminal, still_unknown = con.execute(
                 "SELECT COUNT(*),"
                 "COALESCE(SUM(CASE WHEN r.order_status='PARTIALLY_FILLED' "
@@ -2109,7 +2427,12 @@ class DecisionJournal:
             "viewonly_recovery_does_not_release_or_retry": True,
             "unresolved_simulated_intents": total,
             "offline_unknown_holds": unknown,
-            "additional_buy_reservations_blocked": unknown > 0 or total >= 2,
+            "additional_buy_reservations_blocked": (
+                unknown > 0 or local_uncertain > 0
+                or total + local_total >= 2),
+            "local_origin_prepared_no_submit_count": local_total,
+            "local_origin_uncertain_no_retry_count": local_uncertain,
+            "local_origin_does_not_prove_order_issuer": True,
             "exchange_order_state_authenticated": False,
             "owner_spendable_balance_verified": False,
             "order_sent": False,

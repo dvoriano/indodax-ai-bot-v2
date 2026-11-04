@@ -123,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="One original M08-07 settled-IDR source gate to same public scanner; isolated /tmp journal only, no BUY")
     group.add_argument("--m08-sell-preflight-offline-once", action="store_true",
                        help="Original M08-05 tier+protective+ownership SELL REVIEW in isolated /tmp V2 SQLite only; no network, orders, ownership or LIVE")
+    group.add_argument("--m07-origin-commitment-offline-once", action="store_true",
+                       help="Original M07 local draft PREPARE/UNCERTAIN/REVIEW, same existing private synthetic /tmp V2 journal; no exchange issuer/order")
     group.add_argument("--m07-offline-intent-once", action="store_true",
                        help="EXPLICIT synthetic-only BUY reservation in original M07 journal; NO network, real position, or trade")
     group.add_argument("--m07-offline-unknown-once", action="store_true",
@@ -221,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Absolute 0600 JSON scenario in /tmp for original M08 offline non-executing SELL review only")
     parser.add_argument("--m08-settlement-admission-file", default=None,
                         help="Owner-private 0600 exact-schema /tmp JSON for future M08-06 issuer review only; never a verified wallet/issuer")
+    parser.add_argument("--m07-origin-commitment-file", default=None,
+                        help="0600 exact-schema local draft file in same private /tmp directory as original V2 journal; no keys, fills or GO")
     parser.add_argument("--m07-intent-id", default=None,
                         help="Synthetic-only immutable client order ID, required for M07 offline journal simulation")
     parser.add_argument("--m07-main-sizing-file", default=None,
@@ -261,6 +265,61 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m07_origin_commitment_file is not None and not args.m07_origin_commitment_offline_once:
+            raise ConfigurationError("M07_ORIGIN_FILE_REQUIRES_OFFLINE_ACTION")
+        if args.m07_origin_commitment_offline_once:
+            settings.require_m01_safety()
+            try:
+                original_readonly = DecisionJournal.open_m11_offline_fixture_readonly(
+                    args.db)
+                path = Path(args.m07_origin_commitment_file)
+                if (not path.is_absolute() or path.is_symlink()
+                        or path.parent != original_readonly._db_path.parent
+                        or not path.is_file() or path.stat().st_size > 4096):
+                    raise ValueError("M07_ORIGIN_FIXTURE_NOT_PRIVATE")
+                data = _owner_private_file(str(path))
+                required = {
+                    "action","account_uid","account_fingerprint",
+                    "symbol","client_order_id","price_idr",
+                    "quantity_base","observed_epoch",
+                }
+                if (type(data) is not dict or set(data) != required
+                        or any(type(data[k]) is not str for k in required
+                               - {"account_uid","observed_epoch"})
+                        or type(data["account_uid"]) is not int
+                        or type(data["observed_epoch"]) is not int):
+                    raise ValueError("M07_ORIGIN_FIXTURE_SCHEMA_INVALID")
+                draft = M07OrderDraft(
+                    symbol=data["symbol"],side="BUY",order_type="LIMIT",
+                    client_order_id=data["client_order_id"],
+                    price=Decimal(data["price_idr"]),
+                    quantity=Decimal(data["quantity_base"]),
+                )
+                action = data["action"]
+                # PREPARE or UNCERTAIN writes ONLY a LOCAL, explicit
+                # nonexecuting pre-submit commitment to the SAME original
+                # isolated V2 journal. REVIEW opens it read-only.
+                journal = (
+                    original_readonly if action == "REVIEW"
+                    else DecisionJournal(original_readonly._db_path)
+                )
+                result = DailyScalpingOrchestrator(
+                    settings, journal,
+                ).review_m07_original_bot_origin_local_once(
+                    action=action, account_uid=data["account_uid"],
+                    account_fingerprint=data["account_fingerprint"],
+                    draft=draft, observed_epoch=data["observed_epoch"],
+                )
+            except (ValueError, TypeError, OSError, sqlite3.Error,
+                    DecisionConflictError, InvalidOperation, M06ScopeDenied):
+                raise ConfigurationError(
+                    "M07_ORIGIN_OFFLINE_SCOPE_OR_SOURCE_UNVERIFIED") from None
+            print(json.dumps({
+                "m07_local_origin_commitment": result,
+                "final_decision": None, "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
         if args.m08_settlement_admission_file is not None and not args.m08_settlement_admission_offline_once:
             raise ConfigurationError("M08_SETTLEMENT_FIXTURE_ONLY_FOR_OFFLINE_ADMISSION")
         if args.m08_settlement_admission_offline_once:
