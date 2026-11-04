@@ -57,8 +57,10 @@ def fake_response(d, *, qty="0", order_id=1234, **changes):
 def fake_get_response(d, *, status="NEW", qty="0", order_id=1234,
                       **changes):
     # GET /api/v2/order additionally returns status and order time.
-    return dict(fake_response(d,qty=qty,order_id=order_id),
-                status=status,time=1700000000000,**changes)
+    result=fake_response(d,qty=qty,order_id=order_id)
+    result.update({"status":status,"time":1700000000000})
+    result.update(changes)
+    return result
 
 
 class OriginalManualSenderNonliveTests(unittest.TestCase):
