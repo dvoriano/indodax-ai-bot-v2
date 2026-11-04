@@ -196,6 +196,25 @@ class OriginalV2M03M05RuntimeEvidenceTests(unittest.TestCase):
         self.assertFalse(report["scanner_canary_start_authorized"])
         self.assertFalse(report["live_trading_authorized"])
 
+    def test_inactive_m05_timer_cannot_be_called_canary_ready(self):
+        def inactive(unit):
+            row = self.fake_show(unit)
+            if "m05-telegram.timer" in unit:
+                return row.replace("ActiveState=active", "ActiveState=inactive").replace(
+                    "UnitFileState=enabled", "UnitFileState=disabled")
+            return row
+        report = self.inspect(unit_reader=inactive)
+        self.assertFalse(report["m05_telegram_timer_active_metadata_only"])
+        self.assertFalse(report["ready_for_nonlive_scanner_canary"])
+        self.assertFalse(report["scanner_canary_start_authorized"])
+
+    def test_stale_btc_file_metadata_rejects_canary_prerequisite(self):
+        os.utime(self.ws, (NOW-7200, NOW-7200))
+        report = self.inspect()
+        self.assertFalse(report["ready_for_nonlive_scanner_canary"])
+        self.assertEqual(
+            report["btc_ws_database_file_age_seconds_metadata_only"], 7200)
+
     def test_egress_unknown_cannot_report_canary_ready(self):
         report=self.inspect(egress_validator=lambda p: 0)
         self.assertFalse(report["ready_for_nonlive_scanner_canary"])
@@ -237,6 +256,7 @@ class OriginalV2M03M05RuntimeEvidenceTests(unittest.TestCase):
         report=self.inspect()
         self.assertIn("BTC_WS_BATCH_STALE",report["btc_ws_alert_codes"])
         self.assertFalse(report["scanner_recommendations_actually_delivered_verified"])
+        self.assertFalse(report["ready_for_nonlive_scanner_canary"])
 
     def test_owner_db_wal_present_refuses_stale_counts(self):
         wal=Path(str(self.db)+"-wal")

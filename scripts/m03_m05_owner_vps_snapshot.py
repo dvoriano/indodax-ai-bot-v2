@@ -277,7 +277,10 @@ def collect_original_v2_runtime_snapshot(
         "live_trading_authorized": False,
         "ready_for_nonlive_scanner_canary": (
             source_consistent and ws_present and sha is not None
+            and telegram_metadata_active and not batch_alerts
+            and ws_file_age is not None and ws_file_age <= 3600
             and egress["status"] == "OWNER_POLICY_CURRENT_DECLARED_ONLY"
+            and owner["owner_service_env_permissions_ok"]
             and owner["owner_db_permissions_ok"]
             and owner["telegram_token_file_permissions_ok"]
             and owner["owner_ledger_source_identity_verified"]
