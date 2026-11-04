@@ -26,6 +26,12 @@ _SAFE_STREAM_STATUSES = frozenset(("DISCONNECTED", "CONTIGUOUS_OBSERVED", "BASEL
 def _read_v2_ws_supervisor_status(path: Path) -> dict[str, Any] | None:
     """One fixed original V2 status JSON, owner-only regular no-follow file."""
     try:
+        # Reject symlinked V2/runtime directories as well as the final file.
+        # A default CLI read must not escape the V2 checkout indirectly.
+        for directory in (path.parent, path.parent.parent):
+            mode = os.lstat(directory).st_mode
+            if not stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
+                return None
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             st = os.fstat(fd)
@@ -67,8 +73,8 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
     failure_code = document.get("collector_failure_code")
     stream = document.get("stream_status")
 
-    if (status not in _SAFE_BATCH_STATUSES
-            or type(status) is not str
+    if (type(status) is not str
+            or status not in _SAFE_BATCH_STATUSES
             or type(requested) is not int or not 2 <= requested <= 10
             or type(attempted) is not int or not 0 <= attempted <= requested
             or type(completed) is not int or not 0 <= completed <= attempted
@@ -76,7 +82,7 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
             or type(restart) is not bool
             or (failure_code is not None and
                 (type(failure_code) is not str or not 1 <= len(failure_code) <= 96))
-            or stream not in _SAFE_STREAM_STATUSES or type(stream) is not str):
+            or type(stream) is not str or stream not in _SAFE_STREAM_STATUSES):
         return result, ["BTC_WS_BATCH_FIELDS_UNTRUSTED"]
 
     age = now_epoch - epoch
