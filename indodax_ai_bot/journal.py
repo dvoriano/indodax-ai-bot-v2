@@ -1587,6 +1587,183 @@ class DecisionJournal:
             "spendable_idr_for_buy_verified": False,
         }
 
+    def review_m08_sell_settlement_issuer_admission_offline(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str, sell_client_order_id: str,
+            observed_epoch: int) -> dict:
+        """M08-06 future issuer admission evidence, NEVER an issuer.
+
+        Read ONLY the SAME original V2 journal's account-observed BUY/SELL
+        order and myTrades fee receipts. Account GETs and clientOrderID
+        matching do NOT independently attest V2-owned order creation.
+        No verified account wallet delta, canonical issuer, FILLED bot-owned
+        position, settled IDR, M11 risk release, or actual net PnL exists.
+        This method cannot insert a settlement event or any order intent.
+        """
+        if not getattr(self, "_m11_readonly_fixture", False):
+            raise DecisionConflictError("M08_SETTLEMENT_READONLY_JOURNAL_REQUIRED")
+        if (type(account_fingerprint) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", account_fingerprint) is None
+                or type(symbol) is not str
+                or re.fullmatch(r"[A-Z0-9]{2,20}IDR", symbol) is None
+                or symbol[:-3] in ("FLOKI", "PEPE", "USDT", "USDC")
+                or type(source_buy_client_order_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                source_buy_client_order_id) is None
+                or type(sell_client_order_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                sell_client_order_id) is None
+                or source_buy_client_order_id == sell_client_order_id
+                or type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999):
+            raise DecisionConflictError("M08_SETTLEMENT_IDENTITY_INVALID")
+
+        reasons = [
+            "M08_BOT_OWNED_ORDER_ORIGIN_NOT_ATTESTED",
+            "M08_WALLET_FREE_LOCKED_IDR_DELTA_NOT_RECONCILED",
+            "M08_SETTLED_WIB_REALIZED_PNL_ISSUER_MISSING",
+            "M08_ACCOUNT_WIDE_ORDER_AND_PEER_COVERAGE_UNVERIFIED",
+        ]
+        buy_ok = sell_ok = quantity_ok = False
+        buy_cost = sell_net = pnl_reference = None
+        sell_fill_digest = None
+        pending = unknown = 0
+
+        with self._connect() as con:
+            con.execute("BEGIN")
+            events_before = con.execute(
+                "SELECT COUNT(*) FROM m08_position_settled_idr_events"
+            ).fetchone()[0]
+            claims_before = con.execute(
+                "SELECT COUNT(*) FROM m08_post_sell_discovery_claims"
+            ).fetchone()[0]
+            unknown, pending = con.execute(
+                "SELECT COALESCE(SUM(CASE WHEN state='OFFLINE_UNKNOWN_HOLD' "
+                "THEN 1 ELSE 0 END),0),COUNT(*) "
+                "FROM m07_offline_order_intents"
+            ).fetchone()
+            active_sells = con.execute(
+                "SELECT COUNT(*) FROM m07_exchange_readonly_orders "
+                "WHERE account_fingerprint=? AND symbol=? AND side='SELL' "
+                "AND status IN ('NEW','PARTIALLY_FILLED')",
+                (account_fingerprint, symbol),
+            ).fetchone()[0]
+            def get(side, client_id):
+                order = con.execute(
+                    "SELECT full_order_id,side,status,original_qty,"
+                    "executed_qty,observed_ms,provenance FROM "
+                    "m07_exchange_readonly_orders WHERE "
+                    "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                    (account_fingerprint, symbol, client_id),
+                ).fetchone()
+                fills = con.execute(
+                    "SELECT full_order_id,side,qty_base,gross_quote_idr,"
+                    "commission_including_tax_idr,net_quote_idr,fill_count,"
+                    "fill_digest,verified_at_ms,provenance FROM "
+                    "m07_exchange_readonly_fill_summaries WHERE "
+                    "account_fingerprint=? AND symbol=? AND client_order_id=?",
+                    (account_fingerprint, symbol, client_id),
+                ).fetchone()
+                if order is None or fills is None:
+                    reasons.append(f"M08_{side}_ORDER_OR_FILLS_MISSING")
+                    return None
+                if (order[1:3] != (side, "FILLED")
+                        or fills[0:2] != (order[0], side)
+                        or order[6] != "INDODAX_TAPIV2_GET_ACCOUNT_AND_ORDER"
+                        or fills[9] != "INDODAX_TAPIV2_MYTRADES_ACCOUNT_ONLY"
+                        or type(fills[6]) is not int
+                        or not 1 <= fills[6] < 1000
+                        or type(fills[7]) is not str
+                        or re.fullmatch(r"[a-f0-9]{64}", fills[7]) is None):
+                    reasons.append(f"M08_{side}_ORDER_OR_FILL_IDENTITY_UNVERIFIED")
+                    return None
+                try:
+                    qty, gross, fee, net = (
+                        Decimal(fills[k]) for k in range(2, 6))
+                    original, executed = Decimal(order[3]), Decimal(order[4])
+                except (ValueError, TypeError, ArithmeticError):
+                    reasons.append(f"M08_{side}_FILL_AMOUNT_INVALID")
+                    return None
+                if (any(not v.is_finite() or abs(v) >= Decimal("1e28")
+                        for v in (qty, gross, fee, net, original, executed))
+                        or not (original == executed == qty > 0)
+                        or gross <= 0 or fee < 0 or fee > gross
+                        or net != (gross + fee if side == "BUY"
+                                   else gross - fee)
+                        or net <= 0):
+                    reasons.append(f"M08_{side}_FILL_QUANTITY_OR_FEE_CONFLICT")
+                    return None
+                max_ms = observed_epoch * 1000
+                if (type(order[5]) is not int
+                        or type(fills[8]) is not int
+                        or not 1_000_000_000_000 <= order[5] <= max_ms
+                        or not 1_000_000_000_000 <= fills[8] <= max_ms
+                        or (side == "SELL" and
+                            max_ms - max(order[5], fills[8]) > 3600 * 1000)):
+                    reasons.append(f"M08_{side}_RECEIPT_FRESHNESS_UNVERIFIED")
+                    return None
+                return qty, net, fills[7]
+
+            buy = get("BUY", source_buy_client_order_id)
+            sell = get("SELL", sell_client_order_id)
+            buy_ok = buy is not None
+            sell_ok = sell is not None
+            if buy is not None and sell is not None:
+                quantity_ok = (buy[0] == sell[0])
+                if not quantity_ok:
+                    reasons.append("M08_SELL_QTY_NOT_FULL_BUY_LOT")
+                else:
+                    buy_cost = format(buy[1], "f")
+                    sell_net = format(sell[1], "f")
+                    pnl_reference = format(sell[1] - buy[1], "f")
+                    sell_fill_digest = sell[2]
+            if pending or unknown:
+                reasons.append("M08_M07_UNRESOLVED_OR_UNKNOWN_INTENT")
+            if active_sells:
+                reasons.append("M08_ACTIVE_EXCHANGE_SELL_NOT_SETTLED")
+            # NEVER insert into m08_position_settled_idr_events. Existing
+            # rows may be synthetic from old offline tests and are NOT issuer
+            # evidence. The M08-07 handoff remains separately gated.
+            events_after = con.execute(
+                "SELECT COUNT(*) FROM m08_position_settled_idr_events"
+            ).fetchone()[0]
+            claims_after = con.execute(
+                "SELECT COUNT(*) FROM m08_post_sell_discovery_claims"
+            ).fetchone()[0]
+            if (events_after != events_before or claims_after != claims_before):
+                raise DecisionConflictError("M08_SETTLEMENT_READONLY_MUTATION")
+        return {
+            "stage": "M08_06_ORIGINAL_SELL_SETTLEMENT_ISSUER_ADMISSION_OFFLINE",
+            "status": "M08_06_BLOCK_UNVERIFIED_BOT_ORIGIN_AND_IDR_SETTLEMENT",
+            "reason_codes": sorted(set(reasons)),
+            "account_only_buy_fill_fees_reconciled": buy_ok,
+            "account_only_sell_fill_fees_reconciled": sell_ok,
+            "account_only_full_buy_qty_matched": quantity_ok,
+            "account_buy_cost_idr_reference": buy_cost,
+            "account_sell_net_idr_reference": sell_net,
+            "account_pnl_idr_reference_only_unverified": pnl_reference,
+            "sell_fill_digest_reference_present": sell_fill_digest is not None,
+            "m07_unresolved_intents_observed": pending,
+            "m07_unknown_holds_observed": unknown,
+            "account_open_sells_observed": active_sells,
+            "m08_settlement_event_rows_before": events_before,
+            "m08_settlement_event_rows_after": events_after,
+            "m08_post_sell_claim_rows_before": claims_before,
+            "m08_post_sell_claim_rows_after": claims_after,
+            "independent_v2_bot_order_origin_verified": False,
+            "verified_owned_position_available": False,
+            "all_account_open_orders_reconciled": False,
+            "wallet_settled_free_locked_idr_verified": False,
+            "realized_wib_net_idr_verified": False,
+            "canonical_m08_settlement_issuer_connected": False,
+            "settlement_event_issued": False,
+            "owner_final_decision": None,
+            "private_gets_performed": 0,
+            "order_sent": False,
+            "execution_allowed": False,
+            "live_trading_authorized": False,
+        }
+
     def review_m09_original_m08_position_and_idr_readonly(self) -> dict:
         """Original M08 journal posture for M09 PAPER/SHADOW, not a fill.
 

@@ -1652,6 +1652,33 @@ class DailyScalpingOrchestrator:
             "order_sent":False,"execution_allowed":False,
         }
 
+    def review_m08_original_sell_settlement_admission_offline_once(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str, sell_client_order_id: str,
+            observed_epoch: int) -> dict:
+        """Original V2 orchestrator → SAME original journal, read-only.
+
+        Account-only fee arithmetic can be inspected, but no synthetic or
+        View Only record is allowed to become a real settled-IDR issuer.
+        """
+        self.settings.require_m01_safety()
+        result = self.journal.review_m08_sell_settlement_issuer_admission_offline(
+            account_fingerprint=account_fingerprint, symbol=symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+            sell_client_order_id=sell_client_order_id,
+            observed_epoch=observed_epoch,
+        )
+        if (result["status"] !=
+                "M08_06_BLOCK_UNVERIFIED_BOT_ORIGIN_AND_IDR_SETTLEMENT"
+                or result["settlement_event_issued"] is not False
+                or result["canonical_m08_settlement_issuer_connected"] is not False
+                or result["realized_wib_net_idr_verified"] is not False
+                or result["owner_final_decision"] is not None
+                or result["execution_allowed"] is not False
+                or result["order_sent"] is not False):
+            raise ValueError("M08_SETTLEMENT_REVIEW_AUTHORITY_DENIED")
+        return result
+
     def run_m08_post_sell_rediscovery_once(self, *,
             settlement_event_id: str, scan_trace_id: str,
             observed_epoch: int,
