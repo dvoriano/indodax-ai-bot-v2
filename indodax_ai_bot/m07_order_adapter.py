@@ -230,21 +230,22 @@ class OfficialV2OrderAdapter:
         )
 
     @staticmethod
-    def inspect_nonlive_post_result_shape(
-            *, draft: M07OrderDraft,
-            response: dict | None,
-            submitted_at_ms: int) -> dict:
-        """Syntactic future TAPI V2 POST result parser, never an issuer.
+    def _inspect_nonlive_order_result_shape(
+            *, draft: M07OrderDraft, response: dict | None,
+            observed_at_ms: int, method: str) -> dict:
+        """Exact TAPI V2 CREATE vs GET response grammar, NO live issuer.
 
-        No HTTP transport is called. Mock response fields, even when
-        perfectly matched, are not proof this V2 submitted or filled an
-        order. Timeout/ambiguous output MUST NOT cause automatic retry.
+        Official POST /api/v2/order response has price, origQty,
+        executedQty, orderId and fullOrderId, but NO status field.
+        GET /api/v2/order is the separate operation that has status.
+        A fake POST accepted shape cannot establish fill/ownership.
         """
         import json
         from decimal import InvalidOperation
         if (type(draft) is not M07OrderDraft
-                or type(submitted_at_ms) is not int
-                or not 1_000_000_000_000 <= submitted_at_ms <= 9_999_999_999_999):
+                or type(observed_at_ms) is not int
+                or not 1_000_000_000_000 <= observed_at_ms <= 9_999_999_999_999
+                or method not in ("POST", "GET")):
             raise ValueError("M07_SENDER_SHAPE_INPUT_INVALID")
         params = draft.parameters()
         request_sha = sha256(json.dumps(
@@ -253,6 +254,7 @@ class OfficialV2OrderAdapter:
         if response is None:
             return {
                 "source_status": "OFFLINE_TIMEOUT_UNKNOWN_NO_RETRY",
+                "response_endpoint_method": method,
                 "draft_sha256": request_sha,
                 "mock_response_sha256": None,
                 "mock_status": None,
@@ -263,36 +265,59 @@ class OfficialV2OrderAdapter:
                 "retry_authorized": False,
                 "order_sent": False, "execution_allowed": False,
             }
-        required = {
-            "symbol", "clientOrderId", "side", "type",
-            "orderId", "status", "executedQty",
+        common = {
+            "symbol", "clientOrderId", "side", "type", "price",
+            "origQty", "executedQty", "orderId", "fullOrderId",
         }
-        if (type(response) is not dict or set(response) != required
+        required = common if method == "POST" else common | {"status", "time"}
+        optional = set() if method == "POST" else {"stopPrice"}
+        if (type(response) is not dict
+                or not required.issubset(response)
+                or not set(response).issubset(required | optional)
                 or response.get("symbol") != draft.symbol
                 or response.get("clientOrderId") != draft.client_order_id
                 or response.get("side") != draft.side
                 or response.get("type") != draft.order_type
                 or type(response.get("orderId")) is not int
                 or not 1 <= response["orderId"] <= 10**18
-                or type(response.get("executedQty")) is not str
-                or not 1 <= len(response["executedQty"]) <= 45
-                or response.get("status") not in (
-                    "NEW", "PARTIALLY_FILLED", "FILLED",
-                    "CANCELED", "REJECTED")):
+                or type(response.get("fullOrderId")) is not str
+                or not 1 <= len(response["fullOrderId"]) <= 100
+                or re.fullmatch(r"[A-Za-z0-9_-]+",
+                                response["fullOrderId"]) is None
+                or any(type(response.get(k)) is not str
+                       or not 1 <= len(response[k]) <= 45
+                       for k in ("price", "origQty", "executedQty"))):
             raise ValueError("M07_SENDER_MOCK_RESULT_IDENTITY_INVALID")
+        status = None
+        if method == "GET":
+            status = response["status"]
+            if (status not in (
+                    "NEW","PARTIALLY_FILLED","FILLED",
+                    "CANCELLED","REJECTED")
+                    or type(response["time"]) is not int
+                    or not 1_000_000_000_000 <= response["time"] <= observed_at_ms
+                    or ("stopPrice" in response and
+                        type(response["stopPrice"]) is not str)):
+                raise ValueError("M07_SENDER_MOCK_RESULT_STATUS_INVALID")
         try:
+            price = Decimal(response["price"])
+            orig = Decimal(response["origQty"])
             executed = Decimal(response["executedQty"])
-            limit = (draft.quantity if draft.quantity is not None
-                     else Decimal(0))
-            valid = (executed.is_finite() and limit.is_finite()
-                     and 0 <= executed <= limit
-                     and (response["status"] != "NEW" or executed == 0)
-                     and (response["status"] != "REJECTED" or executed == 0)
-                     and (response["status"] != "PARTIALLY_FILLED"
-                          or 0 < executed < limit)
-                     and (response["status"] != "FILLED" or executed == limit))
+            valid = (
+                draft.order_type == "LIMIT"
+                and draft.price is not None
+                and draft.quantity is not None
+                and all(x.is_finite() for x in (price,orig,executed))
+                and price == draft.price
+                and orig == draft.quantity
+                and 0 <= executed <= orig
+                and (method != "GET" or (
+                    (status not in ("NEW","REJECTED") or executed == 0)
+                    and (status != "PARTIALLY_FILLED" or 0 < executed < orig)
+                    and (status != "FILLED" or executed == orig)))
+            )
         except (TypeError, ValueError, InvalidOperation):
-            valid = False
+            valid=False
         if not valid:
             raise ValueError("M07_SENDER_MOCK_RESULT_FILL_INVALID")
         digest = sha256(json.dumps(
@@ -300,10 +325,16 @@ class OfficialV2OrderAdapter:
             ensure_ascii=True, allow_nan=False,
         ).encode("ascii")).hexdigest()
         return {
-            "source_status": "OFFLINE_FAKE_POST_RESULT_NOT_AUTHENTICATED",
+            "source_status": (
+                "OFFLINE_FAKE_POST_RESULT_NOT_AUTHENTICATED"
+                if method == "POST" else
+                "OFFLINE_FAKE_GET_STATUS_NOT_AUTHENTICATED"),
+            "response_endpoint_method": method,
             "draft_sha256": request_sha,
             "mock_response_sha256": digest,
-            "mock_status": response["status"],
+            "mock_status": (
+                "POST_ACK_WITHOUT_ORDER_STATUS" if method == "POST"
+                else status),
             "mock_cumulative_qty": str(executed),
             "mock_exchange_order_id": response["orderId"],
             "mock_response_shape_matched": True,
@@ -311,6 +342,26 @@ class OfficialV2OrderAdapter:
             "retry_authorized": False,
             "order_sent": False, "execution_allowed": False,
         }
+
+    @staticmethod
+    def inspect_nonlive_post_result_shape(
+            *, draft: M07OrderDraft,
+            response: dict | None,
+            submitted_at_ms: int) -> dict:
+        return OfficialV2OrderAdapter._inspect_nonlive_order_result_shape(
+            draft=draft,response=response,observed_at_ms=submitted_at_ms,
+            method="POST",
+        )
+
+    @staticmethod
+    def inspect_nonlive_get_order_status_shape(
+            *, draft: M07OrderDraft,
+            response: dict | None,
+            observed_at_ms: int) -> dict:
+        return OfficialV2OrderAdapter._inspect_nonlive_order_result_shape(
+            draft=draft,response=response,observed_at_ms=observed_at_ms,
+            method="GET",
+        )
 
     def create_order(self, *args, **kwargs) -> None:
         raise M07Hardlocked("M07_LIVE_CREATE_HARDLOCKED")
