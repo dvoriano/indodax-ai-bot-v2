@@ -1163,6 +1163,34 @@ class DailyScalpingOrchestrator:
             return dict(
                 matched_owner, status="M07_MANUAL_LASTMOMENT_DRAFT_CHANGED",
             )
+        # M08 uses the SAME ORIGINAL journal and the exact clicked M07
+        # clientOrderId. There is no bot-issued BUY order here, so even an
+        # account-only FILLED order with complete fee/cost basis must NOT
+        # mint a bot-owned lot or a SELL entitlement. Corrupted account
+        # evidence blocks even staging the NONLIVE receipt.
+        from .journal import DecisionConflictError
+        try:
+            m08 = self.review_m08_buy_position_admission_readonly(
+                account_fingerprint=account_fingerprint,
+                symbol=draft.symbol,
+                client_order_id=draft.client_order_id,
+            )
+        except DecisionConflictError:
+            return dict(
+                matched_owner, status="M07_MANUAL_LASTMOMENT_M08_SOURCE_CONFLICT",
+            )
+        if (m08.get("stage") !=
+                "M08_ORIGINAL_BUY_FILL_POSITION_ADMISSION_READONLY"
+                or m08.get("bot_owned_buy_fill_proven") is not False
+                or m08.get("position_manager_admission") is not False
+                or m08.get("verified_bot_owned_lots") != 0
+                or m08.get("sellable_bot_owned_base_qty") != "0"
+                or m08.get("order_sent") is not False
+                or m08.get("execution_allowed") is not False):
+            return dict(
+                matched_owner,
+                status="M07_MANUAL_LASTMOMENT_M08_OWNERSHIP_HARDLOCK",
+            )
         # The preflight observations are NOT signed Risk, G1 or spendable
         # attestations. Stage only a durable NONLIVE no-submit hold in the
         # EXISTING original DecisionJournal, never an exchange POST.
@@ -1185,6 +1213,15 @@ class DailyScalpingOrchestrator:
             client_order_id=draft.client_order_id,
             draft_sha256=hold["draft_sha256"],
             sender_status=hold["status"],
+            m08_original_buy_admission_checked=True,
+            m08_account_buy_source_status=m08["status"],
+            m08_account_fill_cost_basis_reference_only=(
+                m08["account_buy_fills_and_fees_reconciled"]
+            ),
+            m08_bot_owned_position_verified=False,
+            m08_verified_bot_owned_lots=0,
+            m08_sellable_bot_owned_base_qty="0",
+            m08_position_manager_admitted=False,
         )
 
     def review_m07_manual_owner_sender_nonlive_once(
