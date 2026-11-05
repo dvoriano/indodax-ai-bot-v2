@@ -152,13 +152,26 @@ def render_m05_trade_order_card(
                 )
             )
             summary.append("Tier ROI tercapai: " + highest_tier)
+            # Show both existing BUY qualification requirements separately.
+            # T1/T2/T3 being reached does not waive the nominal Rp floor.
+            # A protective SELL is still assessed by RISK separately.
+            nominal_met = pnl >= policy.min_net_profit_idr
+            percentage_met = roi >= policy.min_net_roi_percent
             summary.append(
-                "Syarat profit normal (min. " +
-                _idr(policy.min_net_profit_idr) + " DAN " +
-                _format_number(policy.min_net_roi_percent) +
-                "% netto): " +
-                ("TERPENUHI" if eligible_normal_profit
-                 else "BELUM TERPENUHI")
+                "Syarat RUPIAH: profit minimal "
+                + _idr(policy.min_net_profit_idr) + " NETTO: "
+                + ("LULUS" if nominal_met else "BELUM LULUS")
+            )
+            summary.append(
+                "Syarat PERSENTASE: ROI minimal "
+                + _format_number(policy.min_net_roi_percent)
+                + "% NETTO dari modal BUY: "
+                + ("LULUS" if percentage_met else "BELUM LULUS")
+            )
+            summary.append(
+                "Kedua syarat profit normal (RUPIAH DAN PERSENTASE): "
+                + ("TERPENUHI" if eligible_normal_profit
+                   else "BELUM TERPENUHI")
             )
             if not eligible_normal_profit:
                 summary.append(
