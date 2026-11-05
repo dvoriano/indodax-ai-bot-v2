@@ -117,25 +117,117 @@ def _owner_state(env: Path, home: Path) -> None:
 
 def _same_service_except_checkout(
     installed: str, canonical: str, home: Path,
-) -> str:
-    """Require exact original V2 service except its release source path."""
+) -> tuple[str, bytes]:
+    """Preserve installed V2 service byte-for-byte except two source paths.
+
+    The original M05 owner service can have extra VPS-only systemd hardening
+    and a distinct 3-second timer. Reject any different executable, missing
+    live-off settings, unsafe env replacement, or duplicate service commands,
+    but do NOT demand every original harmless directive match a fresh
+    template whose version may have changed since deployment.
+    """
     old_abs = str(home / _LEGACY)
     new_abs = str(home / _MAIN)
     old_rel, new_rel = "%h/" + _LEGACY, "%h/" + _MAIN
 
-    # An existing canonical unit is an idempotent no-op.
-    if installed in (canonical, canonical.replace("%h", str(home))):
-        return "ALREADY_CANONICAL"
-    if installed.count(_EXEC) != 1 or installed.count("ExecStart=") != 1:
-        raise M05CutoverDenied("M05_CUTOVER_UNKNOWN_EXEC")
-    if (_LEGACY not in installed
-            or ("WorkingDirectory=" + old_rel not in installed
-                and "WorkingDirectory=" + old_abs not in installed)):
+    def _canonicalize(value: str) -> str:
+        return value.replace(old_abs, new_abs).replace(old_rel, new_rel)
+
+    def _fields(src: str) -> dict[str, list[str]]:
+        fields: dict[str, list[str]] = {}
+        section = ""
+        for raw in src.splitlines():
+            line = raw.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line
+                continue
+            if section != "[Service]":
+                continue
+            key, sep, value = line.partition("=")
+            if not sep:
+                raise M05CutoverDenied("M05_CUTOVER_INVALID_SERVICE_LINE")
+            fields.setdefault(key.strip(), []).append(value.strip())
+        return fields
+
+    current, expected = _fields(installed), _fields(canonical)
+    for key in ("WorkingDirectory", "ExecStart", "EnvironmentFile", "Type"):
+        if len(current.get(key, [])) != 1 or len(expected.get(key, [])) != 1:
+            raise M05CutoverDenied("M05_CUTOVER_SERVICE_FIELD_NOT_UNIQUE")
+    if current["Type"] != ["oneshot"]:
+        raise M05CutoverDenied("M05_CUTOVER_UNEXPECTED_SERVICE_TYPE")
+    if len(current.get("ExecStartPre", [])) or len(current.get("ExecStartPost", [])):
+        raise M05CutoverDenied("M05_CUTOVER_ADDITIONAL_COMMANDS_UNREVIEWED")
+    if len(current.get("ExecCondition", [])) or len(current.get("ExecReload", [])):
+        raise M05CutoverDenied("M05_CUTOVER_ADDITIONAL_COMMANDS_UNREVIEWED")
+
+    expected_work = expected["WorkingDirectory"][0]
+    expected_exec = expected["ExecStart"][0]
+    for key, expected_value in (
+        ("ExecStart", expected_exec), ("WorkingDirectory", expected_work),
+        ("EnvironmentFile", expected["EnvironmentFile"][0]),
+    ):
+        observed = _canonicalize(current[key][0])
+        if observed not in (
+            expected_value,
+            expected_value.replace("%h", str(home)),
+        ):
+            raise M05CutoverDenied("M05_CUTOVER_ORIGINAL_EXEC_OR_ENV_DIFFERS")
+    # Prevent a legacy unit with multiple or contradictory trading settings
+    # from silently replacing one hardlock through a later Environment line.
+    critical = {
+        "INDODAX_TRADING_ENABLED": "NO",
+        "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+        "INDODAX_EXECUTION_MODE": "DRY_RUN",
+        "M05_TELEGRAM_TICK_GO": "YES",
+        "M05_TELEGRAM_NETWORK_GO": "YES",
+        "M05_TELEGRAM_DEDICATED_GO": "YES",
+    }
+    for key, value in critical.items():
+        matches = [
+            line for line in current.get("Environment", [])
+            if key + "=" in line
+        ]
+        if matches != [key + "=" + value]:
+            raise M05CutoverDenied("M05_CUTOVER_REQUIRED_HARDLOCK_MISSING")
+    if any(
+        line.startswith(("PYTHONPATH=", "PYTHONHOME=", "LD_PRELOAD="))
+        for line in current.get("Environment", [])
+    ):
+        raise M05CutoverDenied("M05_CUTOVER_EXTRA_CODE_LOADING_ENV")
+    if any(key.startswith("Exec") and key != "ExecStart" for key in current):
+        raise M05CutoverDenied("M05_CUTOVER_UNKNOWN_EXEC_DIRECTIVE")
+
+    work = current["WorkingDirectory"][0]
+    exec_line = current["ExecStart"][0]
+    is_old = _LEGACY in work and _LEGACY in exec_line
+    is_main = _MAIN in work and _MAIN in exec_line and _LEGACY not in work + exec_line
+    if not is_old and not is_main:
         raise M05CutoverDenied("M05_CUTOVER_RELEASE_SOURCE_NOT_CONFIRMED")
-    normalized = installed.replace(old_abs, new_abs).replace(old_rel, new_rel)
-    if normalized not in (canonical, canonical.replace("%h", str(home))):
-        raise M05CutoverDenied("M05_CUTOVER_UNREVIEWED_UNIT_DIFFERENCE")
-    return "LEGACY_RELEASE_SOURCE"
+
+    if is_main:
+        return "ALREADY_CANONICAL", installed.encode("utf-8")
+
+    # Edit ONLY these exact two lines and preserve all other service settings
+    # from the operator's functioning V2 release, including timeout/hardening.
+    section = ""
+    result: list[str] = []
+    changed = set()
+    for raw in installed.splitlines(keepends=True):
+        line = raw.rstrip("\r\n")
+        suffix = raw[len(line):]
+        if line.strip().startswith("[") and line.strip().endswith("]"):
+            section = line.strip()
+        if section == "[Service]":
+            for key in ("WorkingDirectory", "ExecStart"):
+                if line.startswith(key + "="):
+                    line = _canonicalize(line)
+                    changed.add(key)
+        result.append(line + suffix)
+    if changed != {"WorkingDirectory", "ExecStart"}:
+        raise M05CutoverDenied("M05_CUTOVER_SOURCE_LINE_REWRITE_FAILED")
+    return "LEGACY_RELEASE_SOURCE", "".join(result).encode("utf-8")
 
 
 def _atomic_replace(target: Path, data: bytes) -> None:
@@ -177,12 +269,11 @@ def switch_original_m05_source(
             raise M05CutoverDenied("M05_CUTOVER_UNIT_OWNERSHIP_UNVERIFIED")
         before = unit.read_bytes()
         installed = before.decode("utf-8")
-        desired = template.read_bytes()
-        canonical = desired.decode("utf-8")
+        canonical = template.read_text("utf-8")
     except (OSError, UnicodeError):
         raise M05CutoverDenied("M05_CUTOVER_SERVICE_TEXT_UNAVAILABLE") from None
 
-    source = _same_service_except_checkout(installed, canonical, home)
+    source, desired = _same_service_except_checkout(installed, canonical, home)
     def prop(which: str, field: str) -> str:
         return run("show", "-P", field, which)
     if (prop(SERVICE, "FragmentPath") != str(unit)
