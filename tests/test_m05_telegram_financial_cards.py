@@ -65,7 +65,7 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             self.assertIn("Total penjualan (estimasi): Rp98.000", card)
             self.assertIn("Modal beli dialokasikan: Rp90.000", card)
             self.assertIn("Estimasi untung bersih: Rp8.000", card)
-            self.assertIn("ROI netto estimasi: 8%", card)
+            self.assertIn("ROI netto estimasi: 8,89%", card)
             self.assertIn("Target SELL netto: T1 2% | T2 8% | T3 11%", card)
             self.assertIn("Tier ROI tercapai: T2", card)
             self.assertIn(
