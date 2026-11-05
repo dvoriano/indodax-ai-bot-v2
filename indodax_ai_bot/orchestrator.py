@@ -754,6 +754,144 @@ class DailyScalpingOrchestrator:
             raise ValueError("M07_MANUAL_PREVIEW_UNEXPECTED_AUTHORITY")
         return result
 
+    def queue_m07_same_source_main_buy_preview_nonlive(
+            self, *, user_id: int, chat_id: int,
+            account_fingerprint: str, client_order_id: str,
+            public_candidate: dict, account_snapshot: dict,
+            funding: dict, now_epoch: int,
+            owner_main_source_classified: bool = True,
+    ) -> dict:
+        """EXISTING M03/M06 -> M07 sizing -> EXISTING M05 private card.
+
+        This intentionally joins the previously disconnected original V2
+        source-bound reference sizing and owner Telegram PREVIEW. It never
+        accepts a rank-only candidate, guess of quantity/price from a
+        Telegram message, market BUY, or a live position as authority.
+
+        M03 PUBLIC and M06 View Only *references* do not prove G1, Risk,
+        per-account all-in fees, owner execution consent or spendable IDR.
+        The resulting M05 card explicitly remains SIMULASI/NO ORDER. A
+        future manually authorized release MUST recheck all live sources
+        and receive a separate authenticated order-specific Final.
+        """
+        self.settings.require_m01_safety()
+        if (self._owner_control is None
+                or type(now_epoch) is not int or now_epoch <= 0
+                or type(funding) is not dict
+                or set(funding) != {
+                    "requested_ticket_ceiling_idr",
+                    "new_floki_sell_rebuy_hold_idr",
+                    "new_pepe_sell_rebuy_hold_idr",
+                    "commitments_not_locked_idr",
+                    "max_spread_bps",
+                }):
+            raise ValueError("M07_MAIN_M05_REFERENCE_SCOPE_INVALID")
+        # Every monetary input must be explicit and typed. The original
+        # sizing function evaluates source freshness, account View Only
+        # permissions, open orders, pair rules, quote precision and funds.
+        if any(type(value) is not Decimal for value in funding.values()):
+            raise ValueError("M07_MAIN_M05_FUNDING_DECIMAL_REQUIRED")
+        sized = self.review_m07_owner_main_idr_sizing_offline(
+            public_candidate=public_candidate,
+            account_snapshot=account_snapshot,
+            owner_main_source_classified=owner_main_source_classified,
+            now_epoch=now_epoch,
+            **funding,
+        )
+        blocked = {
+            "stage": "M07_MAIN_SAME_SOURCE_M05_OWNER_PREVIEW_NONLIVE",
+            "status": "M07_MAIN_SOURCE_NOT_READY_FOR_OWNER_PREVIEW",
+            "sizing_status": sized.get("status"),
+            "owner_card_queued": False,
+            "g1_issuer_verified": False,
+            "ai_risk_verified": False,
+            "live_account_spendable_verified": False,
+            "owner_order_execution_authorized": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+        if sized.get("status") != "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY":
+            return blocked
+        # The size report can be constructed from untrusted local scenario
+        # mappings. Recheck all identity/precision/economic relations before
+        # copying it to the durable original M05 draft and Telegram card.
+        if (type(public_candidate) is not dict
+                or type(account_snapshot) is not dict
+                or type(client_order_id) is not str
+                or public_candidate.get("status") !=
+                    "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
+                or public_candidate.get("same_candidate_and_closed_minute") is not True
+                or public_candidate.get("public_fee_source_only") is not True
+                or public_candidate.get("per_account_fee_verified") is not False
+                or public_candidate.get("execution_allowed") is not False
+                or account_snapshot.get("execution_allowed") is not False
+                or sized.get("price_step_and_minimum_reference_met") is not True
+                or sized.get("spread_ceiling_reference_met") is not True
+                or sized.get("source_independent_g1_verified") is not False
+                or sized.get("owner_m05_order_final_verified") is not False
+                or sized.get("wallet_order_spendable_verified") is not False):
+            return dict(blocked, status="M07_MAIN_SOURCE_REFERENCE_IDENTITY_UNVERIFIED")
+        pair = public_candidate.get("candidate_pair")
+        if (type(pair) is not str or pair != public_candidate.get("observed_pair")
+                or not re.fullmatch(r"[a-z0-9]{2,20}_idr", pair)
+                or pair[:-4].upper() in ("FLOKI", "PEPE", "USDT", "USDC")
+                or account_snapshot.get("all_pair_open_orders_observed") != 0):
+            return dict(blocked, status="M07_MAIN_SOURCE_PAIR_OR_ACCOUNT_MISMATCH")
+        try:
+            price = Decimal(public_candidate["public_best_ask_idr_reference"])
+            qty = Decimal(sized["sized_qty_base_reference"])
+            quoted_cost = Decimal(sized["buy_max_cost_idr_reference"])
+            available = Decimal(sized["main_idr_pool_scenario"])
+            precision = Decimal(public_candidate["public_pair_rules_reference"]["price_precision"])
+            increment = Decimal(public_candidate["public_pair_rules_reference"]["quantity_increment"])
+            gross = price * qty
+            ticket_cap = funding["requested_ticket_ceiling_idr"]
+            if (not all(v.is_finite() for v in (
+                    price, qty, quoted_cost, available, precision, increment,
+                    gross, ticket_cap))
+                    or any(v <= 0 for v in (
+                        price, qty, quoted_cost, available, precision,
+                        increment, gross, ticket_cap))
+                    or gross > quoted_cost
+                    or quoted_cost > min(ticket_cap, available)
+                    or price % precision != 0
+                    or qty % increment != 0):
+                return dict(blocked, status="M07_MAIN_SOURCE_QUOTE_OR_BUDGET_INVALID")
+            draft = M07OrderDraft(
+                symbol=pair[:-4].upper() + "IDR",
+                side="BUY", order_type="LIMIT", client_order_id=client_order_id,
+                price=price, quantity=qty,
+            )
+            draft.parameters()
+        except (KeyError, ValueError, TypeError, InvalidOperation,
+                ArithmeticError):
+            return dict(blocked, status="M07_MAIN_SOURCE_QUOTE_OR_BUDGET_INVALID")
+        queued = self.queue_m07_owner_manual_telegram_preview_offline(
+            user_id=user_id, chat_id=chat_id,
+            account_fingerprint=account_fingerprint,
+            draft=draft, now_epoch=now_epoch,
+        )
+        if queued.get("accepted") is not True:
+            return dict(
+                blocked, status="M07_MAIN_M05_OWNER_PREVIEW_NOT_QUEUED",
+                owner_rejection_reason=queued.get("reason"),
+            )
+        return {
+            **blocked,
+            "status": "M07_MAIN_REFERENCE_BUY_QUEUED_M05_PREVIEW_NO_ORDER",
+            "owner_card_queued": True,
+            "preview_id": queued["preview_id"],
+            "client_order_id": client_order_id,
+            "pair": pair,
+            "buy_limit_price_idr_reference": format(price, "f"),
+            "base_quantity_reference": format(qty, "f"),
+            "buy_max_cost_idr_reference": format(quoted_cost, "f"),
+            "future_sell_vwap_idr_reference": sized.get(
+                "future_sell_vwap_idr_reference"),
+            "owner_card_preview_only": True,
+            "existing_m05_owner_telegram_delivery": True,
+        }
+
     def review_m07_manual_owner_sender_nonlive_once(
             self, *, owner_user_id: int, preview_id: str,
             account_fingerprint: str, draft: M07OrderDraft,
