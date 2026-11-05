@@ -132,7 +132,7 @@ class OwnerDecisionLedger:
                     expires_epoch INTEGER NOT NULL,
                     switch_audit_seq INTEGER NOT NULL,
                     delivery_state TEXT NOT NULL CHECK(delivery_state IN
-                        ('QUEUED','SENT')),
+                        ('QUEUED','SENT','INVALIDATED')),
                     sent_message_id INTEGER,
                     chosen_mode TEXT CHECK(chosen_mode IN ('MANUAL','AUTO')),
                     decided_epoch INTEGER
@@ -422,7 +422,7 @@ class OwnerDecisionLedger:
             ).fetchone()[0]
             # A previous keyboard cannot be resurrected by reopening it.
             db.execute(
-                "UPDATE m05_mode_menus SET chosen_mode='MANUAL', "
+                "UPDATE m05_mode_menus SET delivery_state='INVALIDATED', "
                 "decided_epoch=? WHERE chosen_mode IS NULL",
                 (now_epoch,),
             )
