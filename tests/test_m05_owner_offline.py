@@ -182,8 +182,12 @@ class M05OwnerOfflineTests(unittest.TestCase):
             with self.subTest(command=cmd):
                 response = ui.handle_command(
                     user_id=OWNER, chat_id=OWNER, text=cmd, now_epoch=NOW)
-                self.assertEqual(response["reason"],
-                                 "LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED")
+                self.assertEqual(
+                    response["reason"],
+                    ("M04_PROVIDER_READINESS_DIAGNOSTIC_ONLY"
+                     if cmd == "/ai" else
+                     "LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED"),
+                )
                 self.assertFalse(response["execution_allowed"])
         self.assertIn("MANUAL", ui.handle_command(
             user_id=OWNER, chat_id=OWNER,
