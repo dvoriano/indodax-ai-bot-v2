@@ -40,6 +40,7 @@ from .public_ws_health import public_ws_health
 from .m11_04_release_risk_offline import review_m11_release_risk_offline
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError, inspect_provider_configuration_offline
+from .m04_owner_config import owner_provider_source
 
 
 def _m03_compact_from_original(outcome) -> dict:
@@ -273,7 +274,27 @@ def main(argv: list[str] | None = None) -> int:
             # three already-existing MARKET/RISK/STRATEGY model IDs and
             # whether a credential is locally present. NOT provider auth.
             settings.require_m01_safety()
-            report = inspect_provider_configuration_offline()
+            # Never combine incomplete environment settings with an
+            # unrelated secret file. A complete local scope is either the
+            # explicit process environment or the canonical V2 owner slot.
+            role_keys = ("SUMOPOD_API_KEY", "SUMOPOD_MODEL_MARKET",
+                         "SUMOPOD_MODEL_RISK", "SUMOPOD_MODEL_STRATEGY")
+            if any(k in environ for k in role_keys):
+                local_source = environ
+                source_type = "PROCESS_ENV"
+                key_file_status = "NOT_USED"
+            else:
+                local = owner_provider_source()
+                if local is None:
+                    local_source = {}
+                    source_type = "NO_V2_LOCAL_CONFIG"
+                    key_file_status = "NOT_PRESENT"
+                else:
+                    local_source, key_file_status = local
+                    source_type = "V2_PROTECTED_LOCAL_FILE"
+            report = inspect_provider_configuration_offline(local_source)
+            report["config_source"] = source_type
+            report["v2_key_file_status"] = key_file_status
             print(json.dumps({
                 "m04_provider_readiness": report,
                 "final_decision": None,
