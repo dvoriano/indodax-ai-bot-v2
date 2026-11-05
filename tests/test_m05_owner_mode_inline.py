@@ -130,7 +130,7 @@ class OriginalM05OwnerModeInlineTests(unittest.TestCase):
         self.command(update_id=12)
         button_manual, _ = self.sent[-1]["reply_markup"]["inline_keyboard"][0]
         self.choose(update_id=13, button=button_manual["callback_data"],
-                    message_id=700 + len(self.sent) - 1)
+                    message_id=700 + len(self.sent))
         self.assertEqual(self.mode(), "MANUAL")
         self.assertEqual(self.owner.telegram_next_offset(), 14)
 
