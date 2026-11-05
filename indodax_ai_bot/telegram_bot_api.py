@@ -132,6 +132,7 @@ class TelegramOwnerPoller:
         self._ledger = ledger
         self._owner = OfflineTelegramOwnerInterface(ledger)
         self._clock = clock
+        self._pending_mode_menu = None
 
     def _dispatch(self, update: Mapping[str, Any],
                   now_epoch: int) -> tuple[str, str | None, str | None]:
@@ -172,6 +173,23 @@ class TelegramOwnerPoller:
             if (result.get("accepted") is True
                     and result.get("reason") == "M05_OWNER_BUTTON_TEST_QUEUED"):
                 return ("OWNER_REVIEW_TEST_QUEUED", None, None)
+            if result.get("mode_menu_queued") is True:
+                if (result.get("accepted") is not True
+                        or result.get("execution_allowed") is not False
+                        or result.get("auto_order_authorized") is not False
+                        or result.get("order_sent") is not False):
+                    raise TelegramTransportError(
+                        "M05_MODE_MENU_AUTHORITY_CHANGED")
+                callbacks = result.get("callbacks")
+                if (not isinstance(callbacks, dict)
+                        or set(callbacks) != {"MANUAL", "AUTO"}
+                        or any(type(x) is not str or len(x) > 64
+                               for x in callbacks.values())):
+                    raise TelegramTransportError(
+                        "M05_MODE_MENU_CALLBACKS_INVALID")
+                self._pending_mode_menu = result
+                return ("OWNER_MODE_MENU_QUEUED", "sendMessage",
+                        result["text"])
             # No source/account data is fabricated: UI gives NOT_CONNECTED.
             reply = result.get("text", "Perintah belum tersedia. Trading OFF.")
             if not isinstance(reply, str) or len(reply) > 1024:
@@ -214,6 +232,26 @@ class TelegramOwnerPoller:
             data=data, now_epoch=now_epoch, chat_type="private",
             telegram_message_id=message["message_id"],
         )
+        if data.startswith("m5mode:"):
+            if result.get("accepted") is True:
+                if (result.get("mode_switch_menu") is not True
+                        or result.get("owner_mode") not in ("MANUAL", "AUTO")
+                        or result.get("final_decision") is not None
+                        or result.get("execution_allowed") is not False
+                        or result.get("auto_order_authorized") is not False
+                        or result.get("order_sent") is not False):
+                    raise TelegramTransportError(
+                        "M05_MODE_CALLBACK_AUTHORITY_CHANGED")
+                mode = result["owner_mode"]
+                return (
+                    "OWNER_MODE_" + mode + "_RECORDED",
+                    "answerCallbackQuery",
+                    "Mode " + mode + " tersimpan. Trading tetap OFF.",
+                )
+            return (
+                "OWNER_MODE_MENU_INVALID", "answerCallbackQuery",
+                "Tombol mode kedaluwarsa/terpakai. Kirim /kontrol lagi.",
+            )
         # A successful owner PASS is stored as PASS, not rewritten to
         # REJECT. This is a consent-only shadow: execution remains OFF.
         if result.get("execution_allowed") is not False:
@@ -371,6 +409,20 @@ class TelegramOwnerPoller:
                         "chat_id": self._ledger.owner_user_id,
                         "text": reply,
                     }
+                    if outcome == "OWNER_MODE_MENU_QUEUED":
+                        menu = self._pending_mode_menu
+                        if (not isinstance(menu, dict)
+                                or menu.get("mode_menu_queued") is not True):
+                            raise TelegramTransportError(
+                                "M05_MODE_MENU_DISPATCH_MISSING")
+                        payload["reply_markup"] = {
+                            "inline_keyboard": [[
+                                {"text": "MANUAL",
+                                 "callback_data": menu["callbacks"]["MANUAL"]},
+                                {"text": "AUTO",
+                                 "callback_data": menu["callbacks"]["AUTO"]},
+                            ]],
+                        }
                 elif method == "answerCallbackQuery":
                     payload = {
                         "callback_query_id": callback["id"],
@@ -382,6 +434,34 @@ class TelegramOwnerPoller:
                 # Callback already committed exactly once BEFORE any Bot
                 # API effect. A failed/uncertain send is NEVER replayed.
                 if method == "answerCallbackQuery" and outcome in (
+                    "OWNER_MODE_AUTO_RECORDED",
+                    "OWNER_MODE_MANUAL_RECORDED",
+                    "OWNER_MODE_MENU_INVALID",
+                ):
+                    # Mode selection is separate from PASS/REJECT order
+                    # callbacks. A failed Telegram reply is never replayed.
+                    try:
+                        self._api.call(method, payload)
+                        if outcome != "OWNER_MODE_MENU_INVALID":
+                            self._api.call("editMessageReplyMarkup", {
+                                "chat_id": self._ledger.owner_user_id,
+                                "message_id": callback["message"]["message_id"],
+                            })
+                            self._api.call("sendMessage", {
+                                "chat_id": self._ledger.owner_user_id,
+                                "text": (
+                                    "Mode "
+                                    + ("AUTO" if outcome ==
+                                       "OWNER_MODE_AUTO_RECORDED" else "MANUAL")
+                                    + " tersimpan. Scanner tetap independen "
+                                    "dari mode. Tidak ada order; "
+                                    "LIVE masih OFF."
+                                ),
+                            })
+                    except TelegramTransportError:
+                        raise TelegramTransportError(
+                            "M05_MODE_FEEDBACK_UNCERTAIN_NO_RETRY") from None
+                elif method == "answerCallbackQuery" and outcome in (
                     "OWNER_CALLBACK_PASS_RECORDED",
                     "OWNER_CALLBACK_REJECT_RECORDED",
                     "OWNER_CALLBACK_STALE_UI_NOTICE",
@@ -441,7 +521,27 @@ class TelegramOwnerPoller:
                             "M05_OWNER_FEEDBACK_UNCERTAIN_NO_RETRY"
                         )
                 else:
-                    self._api.call(method, payload)
+                    sent = self._api.call(method, payload)
+                    if outcome == "OWNER_MODE_MENU_QUEUED":
+                        menu = self._pending_mode_menu
+                        if (not isinstance(sent, dict)
+                                or type(sent.get("message_id")) is not int
+                                or sent["message_id"] <= 0
+                                or not isinstance(sent.get("chat"), dict)
+                                or sent["chat"].get("id") !=
+                                    self._ledger.owner_user_id
+                                or sent["chat"].get("type") != "private"):
+                            raise TelegramTransportError(
+                                "M05_MODE_MENU_SEND_UNCERTAIN_NO_RETRY")
+                        try:
+                            self._ledger.confirm_mode_switch_menu_delivery(
+                                menu_id=menu["menu_id"],
+                                message_id=sent["message_id"],
+                            )
+                        except ValueError:
+                            raise TelegramTransportError(
+                                "M05_MODE_MENU_ACK_UNCERTAIN_NO_RETRY") from None
+                        self._pending_mode_menu = None
         return {
             "handled": handled, "ignored": ignored,
             "next_offset": self._ledger.telegram_next_offset(),
