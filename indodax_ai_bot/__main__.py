@@ -92,6 +92,25 @@ def _m06_fixed_budget_db() -> str:
                "indodax-ai-bot-v2" / "m06-owner-viewonly-one-shot-20261031.sqlite3")
 
 
+def _m04_original_provider_scope():
+    """One existing V2 source rule for BOTH readiness and shadow adapter.
+
+    Explicit process env wins as a complete scope. Never fill missing env
+    roles or credentials with a protected file, and never copy secrets into
+    a process-wide environment. Existing M04 owner file is read only when
+    no Sumopod credential/model variables are set by the invoking process.
+    """
+    role_keys = ("SUMOPOD_API_KEY", "SUMOPOD_MODEL_MARKET",
+                 "SUMOPOD_MODEL_RISK", "SUMOPOD_MODEL_STRATEGY")
+    if any(k in environ for k in role_keys):
+        return environ, "PROCESS_ENV", "NOT_USED"
+    local = owner_provider_source()
+    if local is None:
+        return {}, "NO_V2_LOCAL_CONFIG", "NOT_PRESENT"
+    source, key_status = local
+    return source, "V2_PROTECTED_LOCAL_FILE", key_status
+
+
 def _m06_redacted_error_code(exc: Exception) -> str:
     """Only show fixed M06 error identifiers; never exchange response/secret."""
     if type(exc) is M06ScopeDenied:
@@ -274,24 +293,9 @@ def main(argv: list[str] | None = None) -> int:
             # three already-existing MARKET/RISK/STRATEGY model IDs and
             # whether a credential is locally present. NOT provider auth.
             settings.require_m01_safety()
-            # Never combine incomplete environment settings with an
-            # unrelated secret file. A complete local scope is either the
-            # explicit process environment or the canonical V2 owner slot.
-            role_keys = ("SUMOPOD_API_KEY", "SUMOPOD_MODEL_MARKET",
-                         "SUMOPOD_MODEL_RISK", "SUMOPOD_MODEL_STRATEGY")
-            if any(k in environ for k in role_keys):
-                local_source = environ
-                source_type = "PROCESS_ENV"
-                key_file_status = "NOT_USED"
-            else:
-                local = owner_provider_source()
-                if local is None:
-                    local_source = {}
-                    source_type = "NO_V2_LOCAL_CONFIG"
-                    key_file_status = "NOT_PRESENT"
-                else:
-                    local_source, key_file_status = local
-                    source_type = "V2_PROTECTED_LOCAL_FILE"
+            local_source, source_type, key_file_status = (
+                _m04_original_provider_scope()
+            )
             report = inspect_provider_configuration_offline(local_source)
             report["config_source"] = source_type
             report["v2_key_file_status"] = key_file_status
@@ -1005,10 +1009,14 @@ def main(argv: list[str] | None = None) -> int:
                 "live_trading_authorized": False,
             }, sort_keys=True))
             return 0
-        provider = (
-            SumopodChatAdapter.configured_from_env()
-            if args.sumopod_shadow else None
-        )
+        # Only explicit nonlive --bulk-deep-once --sumopod-shadow may
+        # instantiate the already existing adapter. Reuse the EXACT same
+        # owner-protected V2 config resolution as local readiness; never
+        # start paid network, fabricate G1 receipts, or change scanner.
+        provider = None
+        if args.sumopod_shadow:
+            local_source, _, _ = _m04_original_provider_scope()
+            provider = SumopodChatAdapter.configured_from_env(local_source)
         if args.public_ws_unit_status:
             # No DecisionJournal, no systemctl state change, and no network.
             settings.require_m01_safety()

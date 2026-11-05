@@ -88,6 +88,89 @@ class M04VCLIShadowWiringTests(unittest.TestCase):
         self.assertNotIn(GOOD_ENV["SUMOPOD_API_KEY"], err.getvalue())
         post.assert_not_called()
 
+    def test_protected_v2_credential_connects_original_shadow_without_paid_call(self):
+        # Same original V2 slot as local readiness, now connected to the
+        # existing explicit nonlive shadow adapter. PUBLIC G1 still rejects.
+        local = {
+            "SUMOPOD_API_KEY": "do-not-echo-owner-protected-sample",
+            "SUMOPOD_MODEL_MARKET": "glm-5.3-flash",
+            "SUMOPOD_MODEL_RISK": "glm-5.3-flash",
+            "SUMOPOD_MODEL_STRATEGY": "glm-5.3-flash",
+        }
+        with patch(
+            "indodax_ai_bot.__main__.owner_provider_source",
+            return_value=(local, "M04_V2_KEY_FILE_PRESENT_LOCAL_ONLY"),
+        ) as slot:
+            with patch(
+                "indodax_ai_bot.sumopod_provider._post",
+                side_effect=AssertionError("SUMOPOD_PAID_REQUEST_MUST_NOT_HAPPEN"),
+            ) as send:
+                rc, report, stderr = self.run_public_bulk(
+                    flag=True, env={
+                        "INDODAX_TRADING_ENABLED": "NO",
+                        "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+                        "INDODAX_EXECUTION_MODE": "DRY_RUN",
+                    }
+                )
+        self.assertEqual(rc, 0)
+        self.assertEqual(stderr, "")
+        slot.assert_called_once_with()
+        send.assert_not_called()
+        self.assertTrue(report["sumopod_shadow"]["configured"])
+        self.assertFalse(report["sumopod_shadow"]["paid_network_allowed"])
+        self.assertEqual(report["sumopod_shadow"]["role_usage_events"], 0)
+        self.assertEqual(report["ai_shadow"]["completed_roles"], [])
+        self.assertIsNone(report["final_decision"])
+        self.assertFalse(report["execution_allowed"])
+        self.assertNotIn(local["SUMOPOD_API_KEY"], json.dumps(report))
+
+    def test_partial_explicit_env_never_mix_with_protected_v2_key(self):
+        invalid = {
+            "SUMOPOD_MODEL_MARKET": "glm-5.3-flash",
+            "INDODAX_TRADING_ENABLED": "NO",
+            "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+            "INDODAX_EXECUTION_MODE": "DRY_RUN",
+        }
+        out, err = StringIO(), StringIO()
+        with patch(
+            "indodax_ai_bot.__main__.owner_provider_source",
+            side_effect=AssertionError("OWNER_SLOT_MUST_NOT_BE_READ"),
+        ) as slot:
+            with patch.dict("os.environ", invalid, clear=True):
+                with redirect_stdout(out), redirect_stderr(err):
+                    rc = main(["--bulk-deep-once", "--sumopod-shadow"])
+        slot.assert_not_called()
+        self.assertEqual(rc, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("INVALID_SUMOPOD_API_KEY", err.getvalue())
+
+    def test_missing_private_key_blocks_shadow_without_http(self):
+        out, err = StringIO(), StringIO()
+        with patch(
+            "indodax_ai_bot.__main__.owner_provider_source",
+            return_value=({
+                "SUMOPOD_API_KEY": "",
+                "SUMOPOD_MODEL_MARKET": "glm-5.3-flash",
+                "SUMOPOD_MODEL_RISK": "glm-5.3-flash",
+                "SUMOPOD_MODEL_STRATEGY": "glm-5.3-flash",
+            }, "M04_V2_KEY_FILE_MISSING"),
+        ):
+            with patch.dict("os.environ", {
+                "INDODAX_TRADING_ENABLED": "NO",
+                "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+                "INDODAX_EXECUTION_MODE": "DRY_RUN",
+            }, clear=True):
+                with patch(
+                    "indodax_ai_bot.sumopod_provider._post",
+                    side_effect=AssertionError("NO_HTTP"),
+                ) as send:
+                    with redirect_stdout(out), redirect_stderr(err):
+                        rc = main(["--bulk-deep-once", "--sumopod-shadow"])
+                    send.assert_not_called()
+        self.assertEqual(rc, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("INVALID_SUMOPOD_API_KEY", err.getvalue())
+
     def test_sumopod_shadow_not_accepted_for_unrelated_health_commands(self):
         with patch("indodax_ai_bot.sumopod_provider._post",
                    side_effect=AssertionError("NO_SUMOPOD_NETWORK")) as post:
