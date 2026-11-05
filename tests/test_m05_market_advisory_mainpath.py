@@ -179,6 +179,9 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         )
         self.assertEqual(fake.sent["chat_id"], OWNER)
         self.assertIn("G1/account/order: UNVERIFIED", fake.sent["text"])
+        self.assertIn("Ini WATCH pasar saja, belum ada draft BUY/SELL", fake.sent["text"])
+        self.assertNotIn("Harga dan jumlah order belum diotorisasi", fake.sent["text"])
+        self.assertNotIn("Nominal pembelian (estimasi)", fake.sent["text"])
         self.assertIn("M03/M04 public advisory", fake.sent["text"])
         # Owner's live screenshot exposed literal backslash+n characters.
         # A real Telegram send must use newline characters, label WATCH
