@@ -384,17 +384,29 @@ class TelegramOwnerPoller:
                     # answerCallbackQuery popup is enough; do not add one
                     # permanent EXPIRED chat message per old WATCH card.
                     # Actual owner PASS/REJECT retains persistent feedback.
-                    if outcome != "OWNER_CALLBACK_STALE_UI_NOTICE":
+                    # A historical PASS/REJECT that was committed earlier
+                    # still deserves one persistent owner confirmation. Only
+                    # EXPIRED/MODE_CHANGED old cards get popup-only treatment.
+                    previously_recorded = (
+                        outcome == "OWNER_CALLBACK_STALE_UI_NOTICE"
+                        and reply.startswith((
+                            "M05 review PASS ", "M05 review REJECT ",
+                        ))
+                    )
+                    if (outcome != "OWNER_CALLBACK_STALE_UI_NOTICE"
+                            or previously_recorded):
                         try:
+                            confirmation = (
+                                reply if previously_recorded
+                                else "M05 review " +
+                                ("PASS" if outcome == "OWNER_CALLBACK_PASS_RECORDED"
+                                 else "REJECT") +
+                                " TERCATAT satu kali. SIMULASI saja, "
+                                "tidak ada BUY/SELL. Trading OFF."
+                            )
                             self._api.call("sendMessage", {
                                 "chat_id": self._ledger.owner_user_id,
-                                "text": (
-                                    "M05 review " +
-                                    ("PASS" if outcome == "OWNER_CALLBACK_PASS_RECORDED"
-                                     else "REJECT") +
-                                    " TERCATAT satu kali. SIMULASI saja, "
-                                    "tidak ada BUY/SELL. Trading OFF."
-                                ),
+                                "text": confirmation,
                             })
                         except TelegramTransportError:
                             failures.append("CONFIRM")
