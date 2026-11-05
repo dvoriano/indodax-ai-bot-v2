@@ -37,6 +37,7 @@ def _idr(value: Decimal) -> str:
 def render_m05_trade_order_card(
     draft: M07OrderDraft, *,
     mode: Literal["MANUAL", "AUTO"],
+    expected_buy_total_idr: Decimal | None = None,
     allocated_bot_owned_buy_cost_idr: Decimal | None = None,
     expected_net_sell_proceeds_idr: Decimal | None = None,
 ) -> str:
@@ -74,12 +75,31 @@ def render_m05_trade_order_card(
         if (allocated_bot_owned_buy_cost_idr is not None
                 or expected_net_sell_proceeds_idr is not None):
             raise ValueError("M05_BUY_CARD_CANNOT_INCLUDE_SELL_PROFIT")
+        buy_total = expected_buy_total_idr
+        if buy_total is None:
+            buy_total = gross
+        elif (type(buy_total) is not Decimal
+                or not buy_total.is_finite()
+                or buy_total < gross
+                or buy_total.adjusted() > 20):
+            raise ValueError("M05_BUY_CARD_TOTAL_COST_INVALID")
         summary.extend((
-            f"Nominal pembelian (estimasi): {_idr(gross)}",
+            f"Nominal pembelian (estimasi): {_idr(buy_total)}",
             f"Token diperoleh (estimasi): {qty} {token}",
         ))
     else:
-        summary.append(f"Total penjualan (estimasi): {_idr(gross)}")
+        if expected_buy_total_idr is not None:
+            raise ValueError("M05_SELL_CARD_BUY_COST_FIELD_INVALID")
+        projected_total = (
+            expected_net_sell_proceeds_idr
+            if expected_net_sell_proceeds_idr is not None
+            else gross
+        )
+        if (type(projected_total) is not Decimal
+                or not projected_total.is_finite()
+                or projected_total < 0 or projected_total > gross):
+            raise ValueError("M05_SELL_CARD_TOTAL_PROCEEDS_INVALID")
+        summary.append(f"Total penjualan (estimasi): {_idr(projected_total)}")
         if (allocated_bot_owned_buy_cost_idr is None
                 and expected_net_sell_proceeds_idr is None):
             summary.extend((
