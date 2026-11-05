@@ -63,7 +63,11 @@ def _owner_env_metadata(path: Path, home: Path) -> dict:
         "owner_ledger_source_identity_verified": False,
         "m05_queued_advisories": None,
         "m05_sent_advisories": None,
+        "m05_real_market_sent_with_message_id": None,
+        "m05_real_market_latest_closed_epoch": None,
+        "m05_real_market_db_ack_status": "NOT_VERIFIED",
         "m05_pending_manual_previews": None,
+        "m05_manual_preview_read_status": "NOT_VERIFIED",
         "m05_readonly_inspection_status": "NOT_AVAILABLE",
     }
     if not _safe_private_file(path, max_bytes=8192):
@@ -130,12 +134,48 @@ def _owner_env_metadata(path: Path, home: Path) -> dict:
                 "SELECT COUNT(*) FROM m05_market_advisory_outbox "
                 "WHERE delivery_state='SENT'"
             ).fetchone()[0]
-            result["m05_pending_manual_previews"] = con.execute(
-                "SELECT COUNT(*) FROM m05_manual_trade_previews "
-                "WHERE owner_choice IS NULL "
-                "AND send_state IN ('QUEUED','CLAIMED','SENT')"
-            ).fetchone()[0]
-            result["m05_readonly_inspection_status"] = "COUNTS_ONLY"
+            # Distinguish real market advisory DB ACKs from synthetic M05
+            # /button-test messages. No actual Telegram recipient proof here.
+            # A legacy owner DB may lack optional preview table; that must
+            # not turn already-read market counts into blanket UNVERIFIED.
+            try:
+                real = con.execute(
+                    "SELECT COUNT(*),MAX(closed_1m_epoch) "
+                    "FROM m05_market_advisory_outbox "
+                    "WHERE delivery_state='SENT' "
+                    "AND pair!='reviewtest_idr' "
+                    "AND sent_message_id IS NOT NULL "
+                    "AND sent_message_id>0"
+                ).fetchone()
+                if (real is not None and type(real[0]) is int
+                        and real[0] >= 0
+                        and (real[1] is None or
+                             (type(real[1]) is int and real[1] > 0))):
+                    result["m05_real_market_sent_with_message_id"] = real[0]
+                    result["m05_real_market_latest_closed_epoch"] = real[1]
+                    result["m05_real_market_db_ack_status"] = (
+                        "DB_ACK_ONLY_TELEGRAM_RECEIPT_NOT_VERIFIED"
+                    )
+            except sqlite3.Error:
+                result["m05_real_market_db_ack_status"] = (
+                    "SCHEMA_NOT_VERIFIED"
+                )
+            try:
+                result["m05_pending_manual_previews"] = con.execute(
+                    "SELECT COUNT(*) FROM m05_manual_trade_previews "
+                    "WHERE owner_choice IS NULL "
+                    "AND send_state IN ('QUEUED','CLAIMED','SENT')"
+                ).fetchone()[0]
+                result["m05_manual_preview_read_status"] = "COUNTS_ONLY"
+            except sqlite3.Error:
+                result["m05_manual_preview_read_status"] = (
+                    "MANUAL_PREVIEW_SCHEMA_UNVERIFIED"
+                )
+            result["m05_readonly_inspection_status"] = (
+                "MARKET_COUNTS_ONLY_MANUAL_PREVIEW_UNVERIFIED"
+                if result["m05_manual_preview_read_status"] != "COUNTS_ONLY"
+                else "COUNTS_ONLY"
+            )
         finally:
             con.close()
     except (OSError, ValueError, UnicodeError, sqlite3.Error):

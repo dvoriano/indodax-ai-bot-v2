@@ -186,6 +186,61 @@ class OriginalV2M03M05RuntimeEvidenceTests(unittest.TestCase):
         self.assertIn("M05_TOKEN_FILE_PERMISSIONS_UNVERIFIED", codes)
         self.assertFalse(self.inspect()["scanner_canary_start_authorized"])
 
+    def test_missing_optional_manual_preview_table_keeps_market_counts(self):
+        # A legacy V2 ledger can have a genuine market outbox but no
+        # newer manual preview table. Keep verified counts, no false success.
+        with sqlite3.connect(self.db) as con:
+            con.execute("DROP TABLE m05_manual_trade_previews")
+        owner = self.inspect()["m05_owner"]
+        self.assertTrue(owner["owner_ledger_source_identity_verified"])
+        self.assertEqual(owner["m05_queued_advisories"], 1)
+        self.assertEqual(owner["m05_sent_advisories"], 1)
+        self.assertIsNone(owner["m05_pending_manual_previews"])
+        self.assertEqual(
+            owner["m05_manual_preview_read_status"],
+            "MANUAL_PREVIEW_SCHEMA_UNVERIFIED",
+        )
+        self.assertEqual(
+            owner["m05_readonly_inspection_status"],
+            "MARKET_COUNTS_ONLY_MANUAL_PREVIEW_UNVERIFIED",
+        )
+        self.assertNotEqual(owner["m05_real_market_db_ack_status"],
+                            "DB_ACK_ONLY_TELEGRAM_RECEIPT_NOT_VERIFIED")
+
+    def test_real_market_sent_db_ack_excludes_synthetic_transport_test(self):
+        with sqlite3.connect(self.db) as con:
+            con.executescript("""
+                DROP TABLE m05_market_advisory_outbox;
+                CREATE TABLE m05_market_advisory_outbox(
+                    pair TEXT,closed_1m_epoch INTEGER,
+                    sent_message_id INTEGER,delivery_state TEXT);
+                INSERT INTO m05_market_advisory_outbox
+                VALUES('reviewtest_idr',1800000000,100,'SENT');
+                INSERT INTO m05_market_advisory_outbox
+                VALUES('inj_idr',1799999940,101,'SENT');
+                INSERT INTO m05_market_advisory_outbox
+                VALUES('btc_idr',1799999880,NULL,'SENT');
+                INSERT INTO m05_market_advisory_outbox
+                VALUES('inj_idr',1800000000,NULL,'QUEUED');
+            """)
+        owner = self.inspect()["m05_owner"]
+        self.assertEqual(owner["m05_sent_advisories"], 3)
+        self.assertEqual(owner["m05_queued_advisories"], 1)
+        self.assertEqual(owner["m05_real_market_sent_with_message_id"], 1)
+        self.assertEqual(owner["m05_real_market_latest_closed_epoch"],
+                         1799999940)
+        self.assertEqual(owner["m05_real_market_db_ack_status"],
+                         "DB_ACK_ONLY_TELEGRAM_RECEIPT_NOT_VERIFIED")
+        self.assertEqual(owner["m05_readonly_inspection_status"],
+                         "COUNTS_ONLY")
+
+    def test_missing_market_ack_columns_do_not_infer_actual_send(self):
+        owner = self.inspect()["m05_owner"]
+        self.assertEqual(owner["m05_sent_advisories"], 1)
+        self.assertIsNone(owner["m05_real_market_sent_with_message_id"])
+        self.assertEqual(owner["m05_real_market_db_ack_status"],
+                         "SCHEMA_NOT_VERIFIED")
+
     def test_owner_ledger_counts_only_without_secrets(self):
         report = self.inspect()
         owner = report["m05_owner"]
