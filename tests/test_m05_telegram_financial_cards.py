@@ -31,6 +31,21 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                 self.assertNotIn("komisi", body.lower())
                 self.assertIn("Trading OFF", body)
 
+    def test_buy_true_total_can_include_internal_costs_without_breakdown(self):
+        card = render_m05_trade_order_card(
+            draft(), mode="MANUAL",
+            expected_buy_total_idr=D("100200"),
+        )
+        self.assertIn("Nominal pembelian (estimasi): Rp100.200", card)
+        self.assertIn("Token diperoleh (estimasi): 4 INJ", card)
+        self.assertNotIn("fee", card.lower())
+        self.assertNotIn("pajak", card.lower())
+        with self.assertRaises(ValueError):
+            render_m05_trade_order_card(
+                draft(), mode="MANUAL",
+                expected_buy_total_idr=D("99000"),
+            )
+
     def test_sell_total_available_but_never_invents_buy_capital(self):
         for mode in ("MANUAL", "AUTO"):
             card = render_m05_trade_order_card(draft("SELL"), mode=mode)
@@ -46,7 +61,7 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                 allocated_bot_owned_buy_cost_idr=D("90000"),
                 expected_net_sell_proceeds_idr=D("98000"),
             )
-            self.assertIn("Total penjualan (estimasi): Rp100.000", card)
+            self.assertIn("Total penjualan (estimasi): Rp98.000", card)
             self.assertIn("Modal beli dialokasikan: Rp90.000", card)
             self.assertIn("Estimasi untung bersih: Rp8.000", card)
             self.assertNotIn("fee", card.lower())
@@ -76,6 +91,7 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             (D("-1"), D("90000")),
             (D("90000"), D("NaN")),
             (D("90000"), D("-3")),
+            (D("90000"), D("110000")),
         ):
             with self.subTest(cost=cost, net=net):
                 with self.assertRaises(ValueError):
