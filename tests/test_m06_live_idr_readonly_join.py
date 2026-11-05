@@ -108,6 +108,14 @@ class OwnerM06ActualIDRViewOnlyTests(unittest.TestCase):
             self.assertEqual(out["exchange_idr_free_observed"],"500000")
             self.assertEqual(out["exchange_idr_locked_observed"],"50000")
             self.assertEqual(out["all_pair_open_orders_observed"],0)
+            # Stable account UID/key pseudonym is same as original M07
+            # readonly journal scope; no UID, API key, or secret leaks.
+            from hashlib import sha256
+            self.assertEqual(out["viewonly_key_uid_fingerprint"], sha256(
+                ("OWNER_VIEW_ONLY_TEST_KEY:" + str(UID)).encode("utf-8")
+            ).hexdigest())
+            self.assertNotIn("OWNER_VIEW_ONLY_TEST_KEY", json.dumps(out))
+            self.assertNotIn(str(UID), json.dumps(out))
             self.assertIsNone(out["general_idr_unverified_preview"])
             self.assertIsNone(out["floki_rebuy_local_hold_idr"])
             self.assertFalse(out["spendable_idr_verified"])
