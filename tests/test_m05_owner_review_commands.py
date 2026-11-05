@@ -124,8 +124,12 @@ class OriginalOwnerCommandTests(unittest.TestCase):
             with self.subTest(command=command):
                 reply = self.call_ui(command)
                 self.assertFalse(reply["accepted"])
-                self.assertEqual(reply["reason"],
-                                 "LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED")
+                self.assertEqual(
+                    reply["reason"],
+                    ("M04_PROVIDER_READINESS_DIAGNOSTIC_ONLY"
+                     if command == "/ai" else
+                     "LIVE_DATA_OR_EXECUTOR_NOT_CONNECTED"),
+                )
                 self.assertIsNone(reply["final_decision"])
                 self.assertFalse(reply["execution_allowed"])
                 self.assertTrue(reply["text"])
