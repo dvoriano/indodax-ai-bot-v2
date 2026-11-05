@@ -90,6 +90,78 @@ class ExistingWsExternalEvidenceTest(unittest.TestCase):
         self.assertEqual(out["observed_trade_rows"], 1)
         self.assertFalse(out["g1_authenticated"])
 
+    def test_rolling_15_and_60_share_exact_end_and_locate_recorded_gap(self):
+        anchor = 1800000300  # 5 minutes into the next wall-clock hour
+        with sqlite3.connect(self.path) as db:
+            db.execute("DELETE FROM ws_trade_publications")
+            for offset in range(1, 62):
+                ts = anchor - 3600 + (offset - 1) * 60 + 12
+                rows = json.dumps([
+                    ["btcidr", ts, offset, "buy", "100000", "10000", "0.1"]
+                ], separators=(",", ":"))
+                db.execute(
+                    "INSERT INTO ws_trade_publications VALUES(?,?,?,?,?)",
+                    ("btc_idr", "77", offset,
+                     sha256(rows.encode()).hexdigest(), rows),
+                )
+            db.execute("UPDATE ws_stream_state SET last_offset=61")
+            db.execute(
+                "INSERT INTO ws_stream_discontinuities("
+                "pair,prior_epoch,prior_offset,new_epoch,new_offset,"
+                "reason,observed_at_epoch) VALUES(?,?,?,?,?,?,?)",
+                ("btc_idr", "77", 2, "77", 3, "LOCAL_GAP", anchor - 10000),
+            )
+            db.execute(
+                "INSERT INTO ws_stream_discontinuities("
+                "pair,prior_epoch,prior_offset,new_epoch,new_offset,"
+                "reason,observed_at_epoch) VALUES(?,?,?,?,?,?,?)",
+                ("btc_idr", "77", 40, "77", 41, "LOCAL_GAP", anchor - 30),
+            )
+        out = inspect_existing_btc_ws(str(self.path), now_epoch=anchor + 15)
+        w15 = out["windows"]["rolling_last_15_closed_minutes"]
+        w60 = out["windows"]["rolling_last_60_closed_minutes"]
+        aligned = out["windows"]["last_closed_1h"]
+        self.assertEqual(w15["end_epoch"], anchor)
+        self.assertEqual(w60["end_epoch"], anchor)
+        self.assertEqual(w15["minutes_with_observed_trades"], 15)
+        self.assertEqual(w60["minutes_with_observed_trades"], 60)
+        self.assertEqual(w15["recorded_gap_events_observed_during_window"], 1)
+        self.assertEqual(w60["recorded_gap_events_observed_during_window"], 1)
+        self.assertEqual(aligned["end_epoch"], 1800000000)
+        self.assertEqual(aligned["recorded_gap_events_observed_during_window"], 0)
+        self.assertEqual(out["discontinuities_recorded"], 2)
+        self.assertEqual(out["latest_recorded_gap_observed_at_epoch"], anchor-30)
+        self.assertFalse(out["same_end_rolling_windows_are_g1_attested"])
+        self.assertFalse(w60["complete_exchange_trade_tape_proven"])
+        self.assertFalse(w60["independent_issuer_attested"])
+        self.assertTrue(w60["no_gap_event_observed_does_not_prove_trade_completeness"])
+        self.assertFalse(out["execution_allowed"])
+
+    def test_gap_absence_and_missing_minute_do_not_promote_g1(self):
+        anchor = 1800000300
+        with sqlite3.connect(self.path) as db:
+            db.execute("DELETE FROM ws_trade_publications")
+            for offset in range(1, 62):
+                if offset == 59:
+                    continue
+                ts = anchor - 3600 + (offset - 1) * 60 + 12
+                rows = json.dumps([
+                    ["btcidr", ts, offset, "buy", "100000", "10000", "0.1"]
+                ], separators=(",", ":"))
+                db.execute(
+                    "INSERT INTO ws_trade_publications VALUES(?,?,?,?,?)",
+                    ("btc_idr", "77", offset,
+                     sha256(rows.encode()).hexdigest(), rows),
+                )
+            db.execute("UPDATE ws_stream_state SET last_offset=61")
+        out = inspect_existing_btc_ws(str(self.path), now_epoch=anchor+15)
+        win = out["windows"]["rolling_last_60_closed_minutes"]
+        self.assertEqual(win["minutes_with_observed_trades"], 59)
+        self.assertEqual(win["minutes_without_observed_trades_or_missing_data"], 1)
+        self.assertEqual(win["recorded_gap_events_observed_during_window"], 0)
+        self.assertFalse(win["complete_exchange_trade_tape_proven"])
+        self.assertFalse(out["g1_authenticated"])
+
     def test_nonexistent_db_does_not_get_created(self):
         missing = Path(self.tmp.name) / "absent.sqlite3"
         with self.assertRaisesRegex(ValueError, "WS_EVIDENCE_DB_NOT_FOUND_ABSOLUTE"):
