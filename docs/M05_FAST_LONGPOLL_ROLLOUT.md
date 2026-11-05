@@ -136,6 +136,20 @@ With the old timer INACTIVE and same service ACTIVE:
   manually via the original owner DB procedures, without deleting
   ledger rows or blind retries.
 
+Only after real owner Telegram responses and correct latency are
+observed, enable this **same service** for startup after reboot. The
+reviewed drop-in adds `[Install] WantedBy=default.target` but does
+NOT enable it automatically:
+
+```bash
+set -euo pipefail
+systemctl --user enable indodax-v2-m05-telegram.service
+test "$(systemctl --user is-enabled indodax-v2-m05-telegram.service)" = enabled
+test "$(systemctl --user is-active indodax-v2-m05-telegram.service)" = active
+test "$(systemctl --user is-active indodax-v2-m05-telegram.timer || true)" = inactive
+echo M05_FAST_LONGPOLL_PERSISTENCE_ENABLED
+```
+
 ## Reversible rollback, same service and SQLite
 
 If transport responsiveness/regression requires returning to the
@@ -147,7 +161,7 @@ inactive, remove the deployed drop-in and reenable the original timer:
 set -euo pipefail
 SERVICE=indodax-v2-m05-telegram.service
 TIMER=indodax-v2-m05-telegram.timer
-systemctl --user stop "$SERVICE"
+systemctl --user disable --now "$SERVICE"
 test "$(systemctl --user show -P ActiveState "$SERVICE")" = inactive
 rm -- "$HOME/.config/systemd/user/${SERVICE}.d/fast-longpoll.conf"
 systemctl --user daemon-reload
