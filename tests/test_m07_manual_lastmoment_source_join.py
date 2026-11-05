@@ -1,0 +1,232 @@
+"""Original M05 Telegram owner press -> M03/M06 recheck -> SAME M07 hold.
+
+All market/account/Telegram inputs are mocked or synthetic. The output never
+qualifies a LIVE order, independent G1 source, paid AI Risk or real IDR spend.
+"""
+from __future__ import annotations
+
+from dataclasses import replace
+from decimal import Decimal as D
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from indodax_ai_bot.config import Settings
+from indodax_ai_bot.deep_analysis import DeepCandidate
+from indodax_ai_bot.journal import DecisionJournal
+from indodax_ai_bot.m07_order_adapter import M07OrderDraft, OfficialV2OrderAdapter
+from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
+from indodax_ai_bot.owner_control import OwnerDecisionLedger
+from indodax_ai_bot.telegram_bot_api import TelegramBotApiClient, TelegramOwnerPoller
+from tests.test_m03_public_quote_friction_mainpath import public_observation
+from tests.test_m07_main_idr_sourcebound_sizing_original import NOW, RULES, account
+
+
+OWNER = 174401
+BOT_ID = 9876543210
+ACCOUNT_FP = "a" * 64
+CLIENT_ID = "m07_manual_fresh_001"
+
+
+class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
+    def setUp(self):
+        tmp = TemporaryDirectory(prefix="m07-owner-recheck-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.owner = OwnerDecisionLedger(
+            root / "owner.sqlite3", owner_user_id=OWNER)
+        self.journal = DecisionJournal(root / "decision.sqlite3")
+        self.app = DailyScalpingOrchestrator(
+            Settings(), self.journal, owner_control=self.owner)
+        obs = replace(public_observation(), pair_rule_fields=dict(RULES))
+        with patch.object(
+            self.journal, "record_and_compare_public_wall",
+            return_value={"status": "UNATTESTED"},
+        ):
+            candidate = self.app._attach_public_wall_experience(
+                DeepCandidate("btc_idr", 75, "PUBLIC_REVIEW", None), obs)
+        self.public = candidate.summary()["m07_same_candidate_public_preflight"]
+        self.account = dict(account(), viewonly_key_uid_fingerprint=ACCOUNT_FP)
+        self.funding = {
+            "requested_ticket_ceiling_idr": D("100000"),
+            "new_floki_sell_rebuy_hold_idr": D("0"),
+            "new_pepe_sell_rebuy_hold_idr": D("0"),
+            "commitments_not_locked_idr": D("0"),
+            "max_spread_bps": D("150"),
+        }
+        self.preview_id = None
+        self.draft = None
+
+    def prepare(self, *, click=True):
+        result = self.app.queue_m07_same_source_main_buy_preview_nonlive(
+            user_id=OWNER, chat_id=OWNER,
+            account_fingerprint=ACCOUNT_FP,
+            client_order_id=CLIENT_ID,
+            public_candidate=self.public,
+            account_snapshot=self.account, funding=self.funding,
+            now_epoch=NOW,
+        )
+        self.assertTrue(result["owner_card_queued"], result)
+        self.preview_id = result["preview_id"]
+        self.draft = M07OrderDraft(
+            symbol="BTCIDR", side="BUY", order_type="LIMIT",
+            client_order_id=CLIENT_ID,
+            price=D(result["buy_limit_price_idr_reference"]),
+            quantity=D(result["base_quantity_reference"]),
+        )
+        card = self.owner.claim_manual_trade_preview_delivery(now_epoch=NOW)
+        self.assertIsNotNone(card)
+        self.owner.confirm_manual_trade_preview_delivery(
+            preview_id=self.preview_id, message_id=88)
+        if click:
+            api = TelegramBotApiClient(
+                token=str(BOT_ID) + ":" + "A" * 30,
+                transport=lambda *args: (_ for _ in ()).throw(
+                    AssertionError("TELEGRAM_HTTP_NOT_ALLOWED")),
+            )
+            poller = TelegramOwnerPoller(
+                api=api, ledger=self.owner, expected_bot_id=BOT_ID,
+                clock=lambda: NOW,
+            )
+            outcome = poller._dispatch({
+                "update_id": 1,
+                "callback_query": {
+                    "id": "source-bound-manual-click",
+                    "from": {"id": OWNER},
+                    "data": card["confirm_callback"],
+                    "message": {
+                        "message_id": 88, "date": NOW,
+                        "from": {"id": BOT_ID, "is_bot": True},
+                        "chat": {"id": OWNER, "type": "private"},
+                    },
+                },
+            }, NOW)
+            self.assertEqual(outcome[0], "OWNER_MANUAL_PREVIEW_BUY_RECORDED")
+        return result
+
+    def review(self, **changes):
+        inputs = {
+            "owner_user_id": OWNER,
+            "preview_id": self.preview_id,
+            "account_fingerprint": ACCOUNT_FP,
+            "draft": self.draft,
+            "public_candidate": self.public,
+            "account_snapshot": self.account,
+            "funding": self.funding,
+            "owner_main_source_classified": True,
+            "now_epoch": NOW + 1,
+        }
+        inputs.update(changes)
+        return self.app.review_m07_manual_owner_last_moment_nonlive_once(
+            **inputs)
+
+    def holds(self):
+        with sqlite3.connect(self.journal._db_path) as db:
+            return db.execute(
+                "SELECT COUNT(*) FROM m07_manual_sender_nonlive").fetchone()[0]
+
+    def assert_blocked_without_new_hold(self, result):
+        self.assertFalse(result["m07_manual_sender_hold_staged"], result)
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["order_sent"])
+        self.assertEqual(self.holds(), 0)
+
+    def test_real_original_bot_callback_rechecks_and_stages_one_nonlive_hold(self):
+        self.prepare()
+        with patch(
+            "indodax_ai_bot.m07_private_order_readonly._https_json",
+            side_effect=AssertionError("NO_PRIVATE_GET"),
+        ) as private, patch(
+            "indodax_ai_bot.sumopod_provider._post",
+            side_effect=AssertionError("NO_PAID_AI"),
+        ) as paid:
+            result = self.review()
+        self.assertEqual(
+            result["status"],
+            "M07_MANUAL_LASTMOMENT_REFERENCE_HOLD_NONLIVE_ONLY")
+        self.assertTrue(result["owner_button_source_bound"])
+        self.assertTrue(result["m03_m06_reference_rechecked"])
+        self.assertTrue(result["m07_manual_sender_hold_staged"])
+        self.assertEqual(result["sender_status"], "OFFLINE_CLICK_BOUND_NO_SUBMIT")
+        for field in (
+            "g1_issuer_verified", "ai_risk_verified",
+            "account_spendable_verified", "owner_order_final_authenticated",
+            "order_sent", "execution_allowed",
+        ):
+            self.assertFalse(result[field])
+        self.assertEqual(self.holds(), 1)
+        self.assertFalse(OfficialV2OrderAdapter.contract_status()["network_allowed"])
+        private.assert_not_called()
+        paid.assert_not_called()
+
+    def test_unclicked_or_switched_owner_cannot_pass_recheck(self):
+        self.prepare(click=False)
+        self.assert_blocked_without_new_hold(self.review())
+        self.owner.switch_mode(
+            user_id=OWNER, chat_id=OWNER,
+            mode="AUTO", now_epoch=NOW + 1)
+        self.assert_blocked_without_new_hold(self.review())
+        self.assertEqual(
+            self.review()["status"], "M07_MANUAL_LASTMOMENT_OWNER_PRESS_DENIED")
+
+    def test_changed_account_scope_or_new_source_fingerprint_blocks(self):
+        self.prepare()
+        wrong = dict(self.account, viewonly_key_uid_fingerprint="b" * 64)
+        self.assert_blocked_without_new_hold(
+            self.review(account_snapshot=wrong))
+        self.assertEqual(
+            self.review(account_snapshot=wrong)["status"],
+            "M07_MANUAL_LASTMOMENT_SOURCE_IDENTITY_DENIED")
+        wrong_pair = dict(self.public, candidate_pair="eth_idr")
+        self.assert_blocked_without_new_hold(
+            self.review(public_candidate=wrong_pair))
+
+    def test_stale_market_and_account_block_at_last_moment(self):
+        self.prepare()
+        self.assert_blocked_without_new_hold(
+            self.review(now_epoch=NOW + 35))
+        older = dict(self.account, account_observed_epoch=NOW - 100)
+        self.assert_blocked_without_new_hold(
+            self.review(account_snapshot=older))
+
+    def test_changed_ask_or_reduced_funds_cannot_reuse_old_card(self):
+        self.prepare()
+        changed_quote = dict(
+            self.public, public_best_ask_idr_reference="101")
+        self.assert_blocked_without_new_hold(
+            self.review(public_candidate=changed_quote))
+        funded_less = dict(
+            self.account, exchange_idr_free_observed="60000")
+        result = self.review(account_snapshot=funded_less)
+        self.assertEqual(result["status"], "M07_MANUAL_LASTMOMENT_DRAFT_CHANGED")
+        self.assert_blocked_without_new_hold(result)
+
+    def test_foreign_draft_and_missing_classification_never_stage(self):
+        self.prepare()
+        swapped = M07OrderDraft(
+            symbol="BTCIDR", side="BUY", order_type="LIMIT",
+            client_order_id="m07_another_client", price=self.draft.price,
+            quantity=self.draft.quantity,
+        )
+        self.assert_blocked_without_new_hold(self.review(draft=swapped))
+        self.assert_blocked_without_new_hold(
+            self.review(owner_main_source_classified=False))
+
+    def test_existing_unknown_or_click_hold_blocks_replay_and_new_intent(self):
+        self.prepare()
+        first = self.review()
+        self.assertTrue(first["m07_manual_sender_hold_staged"])
+        again = self.review()
+        self.assertEqual(
+            again["status"], "M07_MANUAL_LASTMOMENT_OUTSTANDING_HOLD")
+        self.assertEqual(self.holds(), 1)
+        reopened = DecisionJournal(self.journal._db_path)
+        self.assertEqual(
+            reopened.m07_offline_intent_summary()["manual_sender_nonlive_holds"], 1)
+        self.assertFalse(again["execution_allowed"])
+
+
+if __name__ == "__main__":
+    unittest.main()
