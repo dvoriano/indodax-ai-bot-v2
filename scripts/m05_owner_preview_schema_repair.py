@@ -23,6 +23,7 @@ from indodax_ai_bot.owner_control import OwnerDecisionLedger
 from indodax_ai_bot.telegram_dedicated_inbound import (
     dedicated_poller_lock,
 )
+from indodax_ai_bot.telegram_bot_api import TelegramTransportError
 from scripts.m05_owner_live_schema_probe import (
     _database_path_from_env,
     _private_regular,
@@ -204,8 +205,11 @@ def repair_preview_table(*, db: Path, owner_id: int) -> dict:
         )) as verify:
             verify.execute("PRAGMA query_only=ON")
             _read_identity(verify, owner_id)
-            if (_market_status(verify) != after
-                    or not _REQUIRED <= _preview_columns(verify)
+            # Other active M03 processes may append new PUBLIC advisory rows
+            # after COMMIT. Do not mistake normal concurrent arrivals for
+            # data loss. The original row counts were verified *inside* the
+            # exclusive migration transaction.
+            if (not _REQUIRED <= _preview_columns(verify)
                     or verify.execute("PRAGMA quick_check(1)").fetchone() != ("ok",)):
                 raise PreviewRepairDenied("M05_PREVIEW_POSTCOMMIT_REVIEW_REQUIRED")
         return {
@@ -246,7 +250,7 @@ def main() -> int:
     except PreviewRepairDenied as exc:
         print(json.dumps({"ok": False, "reason": str(exc)}, sort_keys=True))
         return 2
-    except (OSError, sqlite3.Error, ValueError) as exc:
+    except (OSError, sqlite3.Error, ValueError, TelegramTransportError):
         code = "M05_PREVIEW_SCHEMA_BUSY_OR_UNAVAILABLE"
         print(json.dumps({"ok": False, "reason": code}, sort_keys=True))
         return 2
