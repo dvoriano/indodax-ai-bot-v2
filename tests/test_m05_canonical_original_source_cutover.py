@@ -154,6 +154,53 @@ class CanonicalOwnerM05CutoverTests(unittest.TestCase):
         self.assertEqual(backup.read_text(), self.legacy)
         self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
 
+    def test_extra_original_v2_hardening_preserved_byte_for_byte(self):
+        # Actual owner service may contain VPS-specific hardening/timeout
+        # directives not present in the current repository template.
+        # Only source paths are changed; leave all other directives intact.
+        hardened = self.legacy + (
+            "ProtectSystem=strict\\n"
+            "TimeoutStartSec=85s\\n"
+            "PrivateTmp=true\\n"
+        )
+        self.unit.write_text(hardened)
+        self.fake.loaded = hardened
+        result = self.go()
+        self.assertTrue(result["service_changed"])
+        self.assertEqual(
+            self.unit.read_text(),
+            hardened.replace(
+                "%h/indodax-ai-bot-v2-m05-release",
+                "%h/indodax-ai-bot-v2",
+            ),
+        )
+        self.assertEqual(self.fake.stop_count, 1)
+        self.assertTrue(self.fake.timer_active)
+
+    def test_conflicting_live_enable_env_blocks_unsafe_source_switch(self):
+        unsafe = self.legacy.replace(
+            "Environment=INDODAX_TRADING_ENABLED=NO",
+            "Environment=INDODAX_TRADING_ENABLED=YES",
+        )
+        self.unit.write_text(unsafe)
+        self.fake.loaded = unsafe
+        with self.assertRaisesRegex(
+            app.M05CutoverDenied, "M05_CUTOVER_REQUIRED_HARDLOCK_MISSING"
+        ):
+            self.go()
+        self.assertEqual(self.fake.stop_count, 0)
+        self.assertEqual(self.unit.read_text(), unsafe)
+
+    def test_changed_original_exec_command_blocks_source_switch(self):
+        unsafe = self.legacy.replace(" -I -B ", " -B ")
+        self.unit.write_text(unsafe)
+        self.fake.loaded = unsafe
+        with self.assertRaisesRegex(
+            app.M05CutoverDenied, "M05_CUTOVER_ORIGINAL_EXEC_OR_ENV_DIFFERS"
+        ):
+            self.go()
+        self.assertEqual(self.fake.stop_count, 0)
+
     def test_idempotent_second_run_keeps_same_original_timer(self):
         self.go()
         before = [x.name for x in self.units.iterdir()]
