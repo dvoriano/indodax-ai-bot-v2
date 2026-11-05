@@ -951,6 +951,148 @@ class DailyScalpingOrchestrator:
             "existing_m05_owner_telegram_delivery": True,
         }
 
+    def review_m07_manual_owner_last_moment_nonlive_once(
+            self, *, owner_user_id: int, preview_id: str,
+            account_fingerprint: str, draft: M07OrderDraft,
+            public_candidate: dict, account_snapshot: dict,
+            funding: dict, owner_main_source_classified: bool,
+            now_epoch: int) -> dict:
+        """Real M05 owner press -> fresh M03/M06 references -> SAME M07 journal.
+
+        This is a NONLIVE sender rehearsal, not a true preflight or Final.
+        An earlier queued preview is deliberately insufficient: the clicked
+        LIMIT BUY price, quantized qty, account fingerprint, IDR funding and
+        existing unresolved intents must still match at this moment. Public
+        fees and View Only account remain unverified for actual execution.
+        """
+        self.settings.require_m01_safety()
+        if self._owner_control is None:
+            raise ValueError("M07_MANUAL_LASTMOMENT_OWNER_LEDGER_REQUIRED")
+        blocked = {
+            "stage": "M07_MANUAL_OWNER_LASTMOMENT_NONLIVE",
+            "status": "M07_MANUAL_LASTMOMENT_BLOCKED",
+            "owner_button_source_bound": False,
+            "m03_m06_reference_rechecked": False,
+            "m07_manual_sender_hold_staged": False,
+            "g1_issuer_verified": False,
+            "ai_risk_verified": False,
+            "account_spendable_verified": False,
+            "owner_order_final_authenticated": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+        if (type(now_epoch) is not int or now_epoch <= 0
+                or type(draft) is not M07OrderDraft
+                or draft.side != "BUY" or draft.order_type != "LIMIT"
+                or type(owner_main_source_classified) is not bool
+                or owner_main_source_classified is not True
+                or type(public_candidate) is not dict
+                or type(account_snapshot) is not dict
+                or type(funding) is not dict
+                or set(funding) != {
+                    "requested_ticket_ceiling_idr",
+                    "new_floki_sell_rebuy_hold_idr",
+                    "new_pepe_sell_rebuy_hold_idr",
+                    "commitments_not_locked_idr",
+                    "max_spread_bps",
+                }
+                or any(type(v) is not Decimal for v in funding.values())):
+            return dict(blocked, status="M07_MANUAL_LASTMOMENT_INPUT_DENIED")
+        press = self._owner_control.inspect_manual_trade_press_for_sender_nonlive(
+            preview_id=preview_id, owner_user_id=owner_user_id,
+            account_fingerprint=account_fingerprint, draft=draft,
+            observed_epoch=now_epoch,
+        )
+        if (press.get("status") != "M05_MANUAL_CLICK_RECORDED_PREVIEW_ONLY"
+                or press.get("owner_button_recorded") is not True
+                or press.get("execution_allowed") is not False
+                or press.get("owner_final_execution_authenticated") is not False):
+            return dict(
+                blocked, status="M07_MANUAL_LASTMOMENT_OWNER_PRESS_DENIED",
+                owner_press_status=press.get("status"),
+            )
+        matched_owner = dict(blocked, owner_button_source_bound=True)
+        pair = draft.symbol[:-3].lower() + "_idr"
+        if (account_snapshot.get("viewonly_key_uid_fingerprint") !=
+                account_fingerprint
+                or type(account_fingerprint) is not str
+                or not re.fullmatch(r"[a-f0-9]{64}", account_fingerprint)
+                or public_candidate.get("candidate_pair") != pair
+                or public_candidate.get("observed_pair") != pair
+                or public_candidate.get("same_candidate_and_closed_minute") is not True
+                or public_candidate.get("execution_allowed") is not False
+                or account_snapshot.get("execution_allowed") is not False):
+            return dict(
+                matched_owner, status="M07_MANUAL_LASTMOMENT_SOURCE_IDENTITY_DENIED",
+            )
+        outstanding = self.journal.m07_offline_intent_summary()
+        if (outstanding.get("stage") != "M07_ORIGINAL_OFFLINE_INTENT_GUARD"
+                or outstanding.get("unresolved_simulated_intents") != 0
+                or outstanding.get("local_origin_prepared_no_submit_count") != 0
+                or outstanding.get("manual_sender_nonlive_holds") != 0
+                or outstanding.get("additional_buy_reservations_blocked") is not False):
+            return dict(
+                matched_owner, status="M07_MANUAL_LASTMOMENT_OUTSTANDING_HOLD",
+            )
+        # Re-run the SAME original M07 math with the current source-shaped
+        # observations, instead of trusting a stale Telegram message.
+        try:
+            sized = self.review_m07_owner_main_idr_sizing_offline(
+                public_candidate=public_candidate,
+                account_snapshot=account_snapshot,
+                owner_main_source_classified=owner_main_source_classified,
+                now_epoch=now_epoch, **funding,
+            )
+        except (M07PreflightBlocked, ValueError, TypeError, ArithmeticError):
+            return dict(
+                matched_owner, status="M07_MANUAL_LASTMOMENT_SIZING_DENIED",
+            )
+        if sized.get("status") != "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY":
+            return dict(
+                matched_owner, status="M07_MANUAL_LASTMOMENT_SIZING_DENIED",
+                sizing_status=sized.get("status"),
+            )
+        try:
+            expected_price = Decimal(
+                public_candidate["public_best_ask_idr_reference"])
+            expected_qty = Decimal(sized["sized_qty_base_reference"])
+            expected_cost = Decimal(sized["buy_max_cost_idr_reference"])
+            if (not all(x.is_finite() and x > 0 for x in (
+                    expected_price, expected_qty, expected_cost))
+                    or draft.price != expected_price
+                    or draft.quantity != expected_qty
+                    or expected_cost > funding["requested_ticket_ceiling_idr"]
+                    or draft.price * draft.quantity > expected_cost):
+                raise ValueError("M07_MANUAL_LASTMOMENT_CHANGED_ORDER")
+        except (KeyError, ValueError, TypeError, ArithmeticError,
+                InvalidOperation):
+            return dict(
+                matched_owner, status="M07_MANUAL_LASTMOMENT_DRAFT_CHANGED",
+            )
+        # The preflight observations are NOT signed Risk, G1 or spendable
+        # attestations. Stage only a durable NONLIVE no-submit hold in the
+        # EXISTING original DecisionJournal, never an exchange POST.
+        staged = self.review_m07_manual_owner_sender_nonlive_once(
+            owner_user_id=owner_user_id, preview_id=preview_id,
+            account_fingerprint=account_fingerprint, draft=draft,
+            now_epoch=now_epoch,
+        )
+        hold = staged.get("staged")
+        if (type(hold) is not dict
+                or hold.get("status") != "OFFLINE_CLICK_BOUND_NO_SUBMIT"
+                or staged.get("order_sent") is not False
+                or staged.get("execution_allowed") is not False):
+            raise ValueError("M07_MANUAL_LASTMOMENT_HARDLOCK_CHANGED")
+        return dict(
+            matched_owner,
+            status="M07_MANUAL_LASTMOMENT_REFERENCE_HOLD_NONLIVE_ONLY",
+            m03_m06_reference_rechecked=True,
+            m07_manual_sender_hold_staged=True,
+            client_order_id=draft.client_order_id,
+            draft_sha256=hold["draft_sha256"],
+            sender_status=hold["status"],
+        )
+
     def review_m07_manual_owner_sender_nonlive_once(
             self, *, owner_user_id: int, preview_id: str,
             account_fingerprint: str, draft: M07OrderDraft,
