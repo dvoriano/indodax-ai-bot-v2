@@ -159,9 +159,9 @@ class CanonicalOwnerM05CutoverTests(unittest.TestCase):
         # directives not present in the current repository template.
         # Only source paths are changed; leave all other directives intact.
         hardened = self.legacy + (
-            "ProtectSystem=strict\\n"
-            "TimeoutStartSec=85s\\n"
-            "PrivateTmp=true\\n"
+            "ProtectSystem=strict\n"
+            "TimeoutStartSec=85s\n"
+            "PrivateTmp=true\n"
         )
         self.unit.write_text(hardened)
         self.fake.loaded = hardened
