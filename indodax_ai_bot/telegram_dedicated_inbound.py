@@ -160,6 +160,7 @@ def _send_one_manual_trade_preview(
 def dedicated_owner_poll_once(
     *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
     expected_bot_id: int, lock_path: str | Path, limit: int = 10,
+    on_manual_buy_preview_nonlive=None,
 ) -> dict[str, Any]:
     """Get pinned identity, reject webhook conflict, poll ONCE, then release lock.
 
@@ -192,6 +193,7 @@ def dedicated_owner_poll_once(
         # until the NEXT timer tick and lost half their 90-second TTL.
         result = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
+            on_manual_buy_preview_nonlive=on_manual_buy_preview_nonlive,
         ).poll_once(limit=limit)
         outbound = _send_one_queued_market_advisory(
             api=api, ledger=ledger,
