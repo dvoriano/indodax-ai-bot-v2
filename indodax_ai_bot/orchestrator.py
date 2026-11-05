@@ -729,7 +729,8 @@ class DailyScalpingOrchestrator:
     def queue_m07_owner_manual_telegram_preview_offline(
             self, *, user_id: int, chat_id: int,
             account_fingerprint: str, draft: M07OrderDraft,
-            now_epoch: int) -> dict:
+            now_epoch: int,
+            expected_buy_total_idr: Decimal | None = None) -> dict:
         """One original M07 draft to SAME M05 owner ledger, preview ONLY.
 
         No fake market, account, AI, owner Final, preflight, execution or
@@ -746,6 +747,7 @@ class DailyScalpingOrchestrator:
             user_id=user_id,chat_id=chat_id,
             account_fingerprint=account_fingerprint,
             draft=draft,now_epoch=now_epoch,
+            expected_buy_total_idr=expected_buy_total_idr,
         )
         if result.get("accepted") is True and (
                 result.get("execution_allowed") is not False
@@ -870,6 +872,7 @@ class DailyScalpingOrchestrator:
             user_id=user_id, chat_id=chat_id,
             account_fingerprint=account_fingerprint,
             draft=draft, now_epoch=now_epoch,
+            expected_buy_total_idr=quoted_cost,
         )
         if queued.get("accepted") is not True:
             return dict(
