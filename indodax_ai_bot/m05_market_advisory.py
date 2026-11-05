@@ -111,6 +111,29 @@ def queue_scanner_owner_advisory(
             reasons.append("SOURCE_NOT_SERIALIZABLE")
             continue
         digest = sha256(snapshot.encode("utf-8")).hexdigest()
+        # Preserve only the same-scan quote from the actual M03 deep
+        # candidate. It is historical PUBLIC context, not an order price.
+        # Absent, stale or partial quotes remain absent. No extra GET.
+        public_reference = None
+        bid = row.get("public_best_bid_idr")
+        ask = row.get("public_best_ask_idr")
+        quoted = row.get("public_quote_observed_epoch")
+        score = row.get("score")
+        ratio = row.get("volume_ratio")
+        if (type(bid) is str and type(ask) is str
+                and type(quoted) is int
+                and closed_epoch <= quoted <= now_epoch
+                and now_epoch - quoted <= 90
+                and type(score) is int
+                and (ratio is None or type(ratio) is str)
+                and row.get("public_quote_is_trade_price") is False):
+            public_reference = {
+                "best_bid_idr": bid,
+                "best_ask_idr": ask,
+                "observed_epoch": quoted,
+                "score": score,
+                "volume_ratio": ratio,
+            }
         proposal = owner.issue_market_advisory_proposal(
             pair=pair, digest=digest,
             closed_1m_epoch=closed_epoch,
@@ -118,6 +141,7 @@ def queue_scanner_owner_advisory(
             source_expires_epoch=closed_epoch + 90,
             setup=setup, market_status=market_label,
             risk_status=risk_label,
+            public_reference=public_reference,
         )
         if proposal.get("accepted") is True:
             queued += 1
