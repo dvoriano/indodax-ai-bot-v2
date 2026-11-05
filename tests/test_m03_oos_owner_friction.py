@@ -20,12 +20,16 @@ from indodax_ai_bot.public_market import (
 from ops.m03_calibration_replay_once import evaluate_archive, main
 
 
-def seven_day_proxy(n: int = 7200) -> PublicCandleHistory:
+def nine_day_proxy(n: int = 12000) -> PublicCandleHistory:
     """Deterministic, explicitly SYNTHETIC minute bars, never market tape.
 
-    Every hourly signal at minute 30 is a 100-bps surge with a volume
-    spike; the subsequent next-hour minute 0 has a 300-bps hypothetical
-    30m forward close. The actual next-bar open is 100, not a fill.
+    Every hourly signal at minute 30 has 100-bps 5m acceleration and a
+    volume spike. Alternate hours have a prior order-independent high
+    at minute 25, yielding a distinct PULLBACK (not SURGE) proxy.
+    Each subsequent next-hour minute 0 has a 300-bps hypothetical 30m
+    forward close. The actual next-bar open is 100, not a fill.
+    >8 days are needed to supply 30 independent signals in EACH
+    mutually exclusive holdout cohort at a 30% holdout fraction.
     """
     start = 1800000000 - (1800000000 % 60)
     rows = []
@@ -33,10 +37,12 @@ def seven_day_proxy(n: int = 7200) -> PublicCandleHistory:
         minute = i % 60
         close = Decimal("103") if minute == 0 else (
             Decimal("101") if minute == 30 else Decimal("100"))
+        high = max(Decimal("100.2"), close + Decimal("0.2"))
+        if minute == 25 and (i // 60) % 2:
+            high = Decimal("103")
         rows.append(Candle(
             start + 60 * i, 60, Decimal("100"),
-            max(Decimal("100.2"), close + Decimal("0.2")),
-            Decimal("99.8"), close,
+            high, Decimal("99.8"), close,
             Decimal("300") if minute == 30 else Decimal("20"),
         ))
     return PublicCandleHistory(
@@ -48,9 +54,9 @@ def seven_day_proxy(n: int = 7200) -> PublicCandleHistory:
 
 
 class M03OwnerAssumedFrictionOOS(unittest.TestCase):
-    def test_seven_days_can_meet_30_holdout_and_costs_keep_no_trade(self):
+    def test_nine_days_can_meet_both_holdout_cohorts_without_trading(self):
         self.assertEqual(MAX_CALIBRATION_1M_ROWS, 20160)
-        src = seven_day_proxy()
+        src = nine_day_proxy()
         r = evaluate_public_ohlc_proxy_ablation(
             src,
             owner_assumed_roundtrip_friction_bps=Decimal("30"),
@@ -60,6 +66,10 @@ class M03OwnerAssumedFrictionOOS(unittest.TestCase):
         self.assertTrue(r["holdout_proxy_signal_count_minimum_met"])
         cohort = r["holdout"]["cohorts"]["SURGE_WITH_VOLUME_PROXY"]
         self.assertGreaterEqual(cohort["independent_hourly_samples"], 30)
+        self.assertGreaterEqual(
+            r["holdout"]["cohorts"]["PULLBACK_WITH_VOLUME_PROXY"][
+                "independent_hourly_samples"], 30,
+        )
         self.assertEqual(
             cohort["owner_assumed_joint_idr10000_and_roi2pct_30m_samples"],
             cohort["independent_hourly_samples"],
@@ -78,7 +88,7 @@ class M03OwnerAssumedFrictionOOS(unittest.TestCase):
         self.assertEqual(r["final_decision"], "REJECT")
 
     def test_roi_and_rupiah_checks_are_both_required_for_same_ticket(self):
-        src = seven_day_proxy()
+        src = nine_day_proxy()
         small_ticket = evaluate_public_ohlc_proxy_ablation(
             src, owner_assumed_roundtrip_friction_bps=Decimal("30"),
             hypothetical_ticket_idr=Decimal("100000"),
@@ -102,7 +112,7 @@ class M03OwnerAssumedFrictionOOS(unittest.TestCase):
         )
 
     def test_owner_scenarios_never_change_signals_or_observed_returns(self):
-        src = seven_day_proxy()
+        src = nine_day_proxy()
         first = evaluate_public_ohlc_proxy_ablation(src)
         stressed = evaluate_public_ohlc_proxy_ablation(
             src, owner_assumed_roundtrip_friction_bps=Decimal("200"),
@@ -125,7 +135,7 @@ class M03OwnerAssumedFrictionOOS(unittest.TestCase):
         self.assertIsNone(first["owner_assumed_roundtrip_friction_bps"])
 
     def test_reject_nonpaired_nan_negative_bogus_scenario(self):
-        src = seven_day_proxy(360)
+        src = nine_day_proxy(360)
         invalid = [
             (None, Decimal("500000")),
             (Decimal("30"), None),
@@ -146,7 +156,7 @@ class M03OwnerAssumedFrictionOOS(unittest.TestCase):
                     )
 
     def test_original_archive_over_4320_rows_readonly_and_cli_redacted(self):
-        src = seven_day_proxy(4680)
+        src = nine_day_proxy(4680)
         with TemporaryDirectory() as td:
             db = Path(td) / "v2_existing.sqlite3"
             journal = DecisionJournal(db)
