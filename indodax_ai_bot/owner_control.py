@@ -24,6 +24,9 @@ CALLBACK = re.compile(r"^m5:([a-f0-9]{24}):([PR]):([a-f0-9]{32})$")
 MANUAL_TRADE_CALLBACK = re.compile(
     r"^m5t:([a-f0-9]{24}):([BSR]):([a-f0-9]{32})$"
 )
+MODE_MENU_CALLBACK = re.compile(
+    r"^m5mode:([a-f0-9]{16}):([MA]):([a-f0-9]{24})$"
+)
 PROPOSAL_ID = re.compile(r"^[a-f0-9]{24}$")
 MODES = ("MANUAL", "AUTO")
 TTL_MAX = 90
@@ -120,6 +123,19 @@ class OwnerDecisionLedger:
                         ('BUY','SELL','REJECT')),
                     decided_epoch INTEGER,
                     execution_allowed INTEGER NOT NULL CHECK(execution_allowed=0)
+                );
+                CREATE TABLE IF NOT EXISTS m05_mode_menus (
+                    menu_id TEXT PRIMARY KEY,
+                    owner_user_id INTEGER NOT NULL,
+                    token_hash TEXT NOT NULL,
+                    created_epoch INTEGER NOT NULL,
+                    expires_epoch INTEGER NOT NULL,
+                    switch_audit_seq INTEGER NOT NULL,
+                    delivery_state TEXT NOT NULL CHECK(delivery_state IN
+                        ('QUEUED','SENT','INVALIDATED')),
+                    sent_message_id INTEGER,
+                    chosen_mode TEXT CHECK(chosen_mode IN ('MANUAL','AUTO')),
+                    decided_epoch INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS m05_audit (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -381,6 +397,155 @@ class OwnerDecisionLedger:
             "accepted": True, "owner_mode": mode,
             "final_decision": None,
             "auto_order_authorized": False, "execution_allowed": False,
+        }
+
+    def issue_mode_switch_menu(
+            self, *, user_id: int, chat_id: int, now_epoch: int,
+            chat_type: str = "private") -> dict[str, Any]:
+        """Private owner /kontrol UI, never an AUTO execution permit.
+
+        A new menu supersedes earlier pending menus; original owner
+        configuration and audit remain the only source of truth.
+        """
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        if type(now_epoch) is not int or now_epoch <= 0:
+            return _blocked("M05_MODE_MENU_TIME_INVALID")
+        mid, secret = secrets.token_hex(8), secrets.token_hex(12)
+        with self._tx() as db:
+            state = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            seq = db.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM m05_audit "
+                "WHERE event='OWNER_MODE_CHANGED'"
+            ).fetchone()[0]
+            # A previous keyboard cannot be resurrected by reopening it.
+            db.execute(
+                "UPDATE m05_mode_menus SET delivery_state='INVALIDATED', "
+                "decided_epoch=? WHERE chosen_mode IS NULL",
+                (now_epoch,),
+            )
+            db.execute(
+                """INSERT INTO m05_mode_menus(
+                    menu_id,owner_user_id,token_hash,created_epoch,
+                    expires_epoch,switch_audit_seq,delivery_state)
+                    VALUES (?,?,?,?,?,?,'QUEUED')""",
+                (mid, user_id, sha256(secret.encode()).hexdigest(),
+                 now_epoch, now_epoch + TTL_MAX, seq),
+            )
+        return {
+            "accepted": True,
+            "mode_menu_queued": True,
+            "menu_id": mid,
+            "callbacks": {
+                "MANUAL": f"m5mode:{mid}:M:{secret}",
+                "AUTO": f"m5mode:{mid}:A:{secret}",
+            },
+            "owner_mode": state,
+            "final_decision": None,
+            "auto_order_authorized": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+
+    def confirm_mode_switch_menu_delivery(
+            self, *, menu_id: str, message_id: int) -> None:
+        if (type(menu_id) is not str or len(menu_id) != 16
+                or type(message_id) is not int or message_id <= 0):
+            raise ValueError("M05_MODE_MENU_DELIVERY_INVALID")
+        with self._tx() as db:
+            if db.execute(
+                "UPDATE m05_mode_menus SET delivery_state='SENT', "
+                "sent_message_id=? WHERE menu_id=? "
+                "AND delivery_state='QUEUED' AND chosen_mode IS NULL",
+                (message_id, menu_id),
+            ).rowcount != 1:
+                raise ValueError("M05_MODE_MENU_DELIVERY_UNCERTAIN")
+
+    def apply_mode_switch_menu_callback(
+            self, *, user_id: int, chat_id: int,
+            callback_data: str, now_epoch: int,
+            telegram_message_id: int | None,
+            chat_type: str = "private") -> dict[str, Any]:
+        """Atomic one-shot mode choice, with no LIVE order authority."""
+        if not self._is_owner(user_id, chat_id, chat_type):
+            return _blocked("OWNER_NOT_AUTHORIZED")
+        matched = (MODE_MENU_CALLBACK.fullmatch(callback_data)
+                   if isinstance(callback_data, str) else None)
+        if (matched is None or type(now_epoch) is not int or now_epoch <= 0
+                or type(telegram_message_id) is not int
+                or telegram_message_id <= 0):
+            return _blocked("M05_MODE_MENU_CALLBACK_INVALID")
+        mid, choice, secret = matched.groups()
+        selected = "MANUAL" if choice == "M" else "AUTO"
+        with self._tx() as db:
+            row = db.execute(
+                """SELECT owner_user_id,token_hash,created_epoch,expires_epoch,
+                          switch_audit_seq,delivery_state,sent_message_id,
+                          chosen_mode FROM m05_mode_menus WHERE menu_id=?""",
+                (mid,),
+            ).fetchone()
+            if (row is None or row[0] != user_id
+                    or not hmac.compare_digest(
+                        row[1], sha256(secret.encode()).hexdigest())):
+                return _blocked("M05_MODE_MENU_CALLBACK_FORGED")
+            if row[5] != "SENT" or row[6] != telegram_message_id:
+                return _blocked("M05_MODE_MENU_NOT_DELIVERED")
+            if row[7] is not None:
+                return _blocked("M05_MODE_MENU_CALLBACK_ALREADY_USED")
+            seq = db.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM m05_audit "
+                "WHERE event='OWNER_MODE_CHANGED'"
+            ).fetchone()[0]
+            if (not row[2] <= now_epoch < row[3] or row[4] != seq):
+                return _blocked("M05_MODE_MENU_EXPIRED_OR_CHANGED")
+            if db.execute(
+                """UPDATE m05_mode_menus SET chosen_mode=?,decided_epoch=?
+                   WHERE menu_id=? AND chosen_mode IS NULL
+                     AND delivery_state='SENT'""",
+                (selected, now_epoch, mid),
+            ).rowcount != 1:
+                return _blocked("M05_MODE_MENU_CALLBACK_ALREADY_USED")
+            current = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()[0]
+            if current != selected:
+                closed = db.execute(
+                    """UPDATE m05_proposals SET state='REJECT',
+                       reason='MODE_CHANGED', decision_epoch=?
+                       WHERE state='PENDING'""",
+                    (now_epoch,),
+                ).rowcount
+                db.execute(
+                    "UPDATE m05_manual_trade_previews "
+                    "SET owner_choice='REJECT',decided_epoch=? "
+                    "WHERE owner_choice IS NULL",
+                    (now_epoch,),
+                )
+                db.execute(
+                    "UPDATE m05_config SET mode=? WHERE singleton=1",
+                    (selected,),
+                )
+                db.execute(
+                    """INSERT INTO m05_audit(
+                        event_epoch,owner_user_id,event,detail)
+                       VALUES (?,?,?,?)""",
+                    (now_epoch, user_id, "OWNER_MODE_CHANGED",
+                     f"{current}->{selected};cancelled={closed}"),
+                )
+            db.execute(
+                """INSERT INTO m05_audit(
+                    event_epoch,owner_user_id,proposal_id,event,detail)
+                   VALUES (?,?,?,?,?)""",
+                (now_epoch, user_id, mid,
+                 "OWNER_MODE_MENU_CHOSEN", selected + "_NO_ORDER"),
+            )
+        return {
+            "accepted": True, "mode_switch_menu": True,
+            "owner_mode": selected, "final_decision": None,
+            "auto_order_authorized": False,
+            "order_sent": False, "execution_allowed": False,
         }
 
     def queue_manual_trade_preview_offline(

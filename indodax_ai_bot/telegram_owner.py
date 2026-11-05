@@ -28,7 +28,7 @@ class OfflineTelegramOwnerInterface:
         if not parts:
             return _blocked("INVALID_TELEGRAM_COMMAND")
         command = parts[0].split("@")[0]
-        if command in ("/start", "/status", "/kontrol") and len(parts) == 1:
+        if command in ("/start", "/status") and len(parts) == 1:
             state = self.ledger.status(
                 user_id=user_id, chat_id=chat_id, chat_type=chat_type
             )
@@ -39,6 +39,25 @@ class OfflineTelegramOwnerInterface:
                     + state["owner_mode"]
                     + ". Tidak ada proposal eksekusi yang disahkan."
                 ),
+            }
+        if command == "/kontrol" and len(parts) == 1:
+            menu = self.ledger.issue_mode_switch_menu(
+                user_id=user_id, chat_id=chat_id,
+                now_epoch=now_epoch, chat_type=chat_type,
+            )
+            if menu.get("accepted") is not True:
+                return menu
+            return {
+                **menu,
+                "text": (
+                    "Pilih mode bot V2. Aktif saat ini: "
+                    + menu["owner_mode"]
+                    + ".\\nMANUAL: BUY/SELL memerlukan tombol order owner."
+                    + "\\nAUTO: keputusan bot otomatis hanya SETELAH"
+                    + " seluruh izin LIVE, AI Risk dan batas modal sah."
+                    + "\\nSaat ini order tetap OFF. Scanner tidak"
+                    + " dimatikan oleh pilihan mode."
+                ).replace("\\n", "\n"),
             }
         if command == "/kontrol" and len(parts) == 2:
             if parts[1] not in ("manual", "auto"):
@@ -154,6 +173,13 @@ class OfflineTelegramOwnerInterface:
                         data: str, now_epoch: int,
                         chat_type: str = "private",
                         telegram_message_id: int | None = None) -> dict[str, Any]:
+        if isinstance(data, str) and data.startswith("m5mode:"):
+            return self.ledger.apply_mode_switch_menu_callback(
+                user_id=user_id, chat_id=chat_id,
+                callback_data=data, now_epoch=now_epoch,
+                telegram_message_id=telegram_message_id,
+                chat_type=chat_type,
+            )
         if isinstance(data, str) and data.startswith("m5t:"):
             return self.ledger.apply_manual_trade_preview_callback(
                 user_id=user_id, chat_id=chat_id, callback_data=data,
