@@ -58,6 +58,11 @@ class DeepCandidate:
     public_quote_friction_diagnostic: dict | None = None
     # M07 public-source-bound gate, never capital/account or order authority.
     m07_same_candidate_public_preflight: dict | None = None
+    # Same ORIGINAL PUBLIC observation, not fetched again for Telegram.
+    # These bid/ask values are historical references, never limit orders.
+    public_best_bid_idr: Decimal | None = None
+    public_best_ask_idr: Decimal | None = None
+    public_quote_observed_epoch: int | None = None
 
     def summary(self) -> dict:
         return {
@@ -65,6 +70,16 @@ class DeepCandidate:
             "pair": self.pair, "score": self.score, "state": self.state,
             "rejection_reason": self.rejection_reason,
             "closed_1m_epoch": self.closed_1m_epoch,
+            "public_best_bid_idr": (
+                str(self.public_best_bid_idr)
+                if self.public_best_bid_idr is not None else None
+            ),
+            "public_best_ask_idr": (
+                str(self.public_best_ask_idr)
+                if self.public_best_ask_idr is not None else None
+            ),
+            "public_quote_observed_epoch": self.public_quote_observed_epoch,
+            "public_quote_is_trade_price": False,
             "rsi14": None if self.rsi14 is None else str(self.rsi14.quantize(Decimal("0.01"))),
             "ema8": None if self.ema8 is None else str(self.ema8),
             "ema21": None if self.ema21 is None else str(self.ema21),
@@ -1736,6 +1751,9 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                  if x.pair == pair), None,
             ),
             public_maintenance_flag=(pair in context.maintenance_pair_ids),
+            public_best_bid_idr=obs.snapshot.best_bid_idr,
+            public_best_ask_idr=obs.snapshot.best_ask_idr,
+            public_quote_observed_epoch=obs.snapshot.source.observed_epoch,
         )
         if on_candidate is not None:
             candidate = on_candidate(candidate, obs)
