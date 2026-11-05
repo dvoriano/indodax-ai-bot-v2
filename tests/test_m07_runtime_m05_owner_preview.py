@@ -85,7 +85,7 @@ class M07RuntimeOwnerCardTests(unittest.TestCase):
         self.ws.write_bytes(b"synthetic-placeholder")
         self.funding_file = root / "funding.json"
         self.funding_file.write_text(json.dumps({
-            k: str(v) for k, v in self.funding.items(),
+            k: str(v) for k, v in self.funding.items()
         }))
         self.funding_file.chmod(0o600)
 
