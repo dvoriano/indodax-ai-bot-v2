@@ -69,7 +69,15 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             self.assertIn("Target SELL netto: T1 2% | T2 8% | T3 11%", card)
             self.assertIn("Tier ROI tercapai: T2", card)
             self.assertIn(
-                "Syarat profit normal (min. Rp10.000 DAN 2% netto): BELUM TERPENUHI",
+                "Syarat RUPIAH: profit minimal Rp10.000 NETTO: BELUM LULUS",
+                card,
+            )
+            self.assertIn(
+                "Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS",
+                card,
+            )
+            self.assertIn(
+                "Kedua syarat profit normal (RUPIAH DAN PERSENTASE): BELUM TERPENUHI",
                 card,
             )
             self.assertNotIn("fee", card.lower())
@@ -100,7 +108,9 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
         self.assertIn("Modal beli dialokasikan: Rp145.200", card)
         self.assertIn("Estimasi untung bersih: Rp11.900", card)
         self.assertIn("Tier ROI tercapai: T2", card)
-        self.assertIn("Syarat profit normal (min. Rp10.000 DAN 2% netto): TERPENUHI", card)
+        self.assertIn("Syarat RUPIAH: profit minimal Rp10.000 NETTO: LULUS", card)
+        self.assertIn("Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS", card)
+        self.assertIn("Kedua syarat profit normal (RUPIAH DAN PERSENTASE): TERPENUHI", card)
         self.assertNotIn("fee", card.lower())
 
     def test_same_actual_buy_100k_and_sell_net_98k_is_loss_not_8k_profit(self):
@@ -143,12 +153,40 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                 self.assertIn("ROI netto estimasi: " + roi, card)
                 self.assertIn("Tier ROI tercapai: " + tier, card)
                 self.assertIn(
-                    "Syarat profit normal (min. Rp10.000 DAN 2% netto): " +
+                    "Syarat RUPIAH: profit minimal Rp10.000 NETTO: " +
+                    ("LULUS" if allowed else "BELUM LULUS"),
+                    card,
+                )
+                self.assertIn(
+                    "Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS",
+                    card,
+                )
+                self.assertIn(
+                    "Kedua syarat profit normal (RUPIAH DAN PERSENTASE): " +
                     ("TERPENUHI" if allowed else "BELUM TERPENUHI"),
                     card,
                 )
                 self.assertNotIn("fee", card.lower())
 
+    def test_both_exact_thresholds_met_at_500k_and_1m_capital(self):
+        for cost, net, expected_pnl in (
+            ("500000", "510000", "Rp10.000"),
+            ("1000000", "1020000", "Rp20.000"),
+        ):
+            with self.subTest(cost=cost):
+                gross = D(net) + D("1000")
+                card = render_m05_trade_order_card(
+                    draft("SELL", price=str(gross / D("4"))),
+                    mode="AUTO",
+                    allocated_bot_owned_buy_cost_idr=D(cost),
+                    expected_net_sell_proceeds_idr=D(net),
+                )
+                self.assertIn("Estimasi untung bersih: " + expected_pnl, card)
+                self.assertIn("ROI netto estimasi: 2%", card)
+                self.assertIn("Syarat RUPIAH: profit minimal Rp10.000 NETTO: LULUS", card)
+                self.assertIn("Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS", card)
+                self.assertIn("Kedua syarat profit normal (RUPIAH DAN PERSENTASE): TERPENUHI", card)
+    
     def test_high_capital_needs_2_percent_even_if_10k_net(self):
         # A 1m capital position making 10k must still fail the 2% ROI gate.
         card = render_m05_trade_order_card(
@@ -159,6 +197,8 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
         )
         self.assertIn("Estimasi untung bersih: Rp10.000", card)
         self.assertIn("ROI netto estimasi: 1%", card)
+        self.assertIn("Syarat RUPIAH: profit minimal Rp10.000 NETTO: LULUS", card)
+        self.assertIn("Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: BELUM LULUS", card)
         self.assertIn("Tier ROI tercapai: BELUM MENCAPAI T1", card)
         self.assertIn("BELUM TERPENUHI", card)
 
