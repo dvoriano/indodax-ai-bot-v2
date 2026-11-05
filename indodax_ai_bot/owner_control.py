@@ -568,6 +568,71 @@ class OwnerDecisionLedger:
             "order_sent": False, "execution_allowed": False,
         }
 
+    def load_clicked_manual_buy_draft_nonlive(
+            self, *, preview_id: str, owner_user_id: int,
+            observed_epoch: int):
+        """Read an already-consumed original M05 BUY card, never a new consent.
+
+        Poller first validates the real Bot API envelope and atomically
+        consumes its single-use callback. This method rehydrates the exact
+        immutable draft from that SAME row; do not trust Telegram payloads.
+        """
+        from .m07_order_adapter import M07OrderDraft
+        import json
+        if (type(preview_id) is not str
+                or PROPOSAL_ID.fullmatch(preview_id) is None
+                or type(owner_user_id) is not int
+                or owner_user_id != self.owner_user_id
+                or type(observed_epoch) is not int or observed_epoch <= 0):
+            return None
+        with self._tx() as db:
+            mode = db.execute(
+                "SELECT mode FROM m05_config WHERE singleton=1"
+            ).fetchone()
+            row = db.execute(
+                """SELECT owner_user_id,account_fingerprint,client_order_id,
+                          symbol,side,price_idr,quantity_base,draft_sha256,
+                          created_epoch,expires_epoch,send_state,sent_message_id,
+                          owner_choice,decided_epoch,execution_allowed
+                   FROM m05_manual_trade_previews WHERE preview_id=?""",
+                (preview_id,),
+            ).fetchone()
+            audit = db.execute(
+                """SELECT COUNT(*) FROM m05_audit
+                   WHERE proposal_id=? AND owner_user_id=?
+                     AND event='MANUAL_PREVIEW_BUY'
+                     AND detail='NO_ORDER_NO_FINAL'""",
+                (preview_id, owner_user_id),
+            ).fetchone()[0]
+        if (mode != ("MANUAL",) or row is None
+                or row[0] != owner_user_id or row[4] != "BUY"
+                or row[10] != "SENT"
+                or type(row[11]) is not int or row[11] <= 0
+                or row[12] != "BUY" or row[14] != 0
+                or type(row[13]) is not int
+                or not row[8] <= row[13] <= observed_epoch < row[9]
+                or audit != 1
+                or type(row[1]) is not str
+                or DIGEST.fullmatch(row[1]) is None):
+            return None
+        try:
+            draft = M07OrderDraft(
+                symbol=row[3], side="BUY", order_type="LIMIT",
+                client_order_id=row[2],
+                price=Decimal(row[5]), quantity=Decimal(row[6]),
+            )
+            digest = sha256(json.dumps(
+                draft.parameters(), ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("ascii")).hexdigest()
+        except (ValueError, TypeError, ArithmeticError):
+            return None
+        if not hmac.compare_digest(digest, row[7]):
+            return None
+        return {"preview_id": preview_id, "draft": draft,
+                "account_fingerprint": row[1],
+                "order_sent": False, "execution_allowed": False}
+
     def claim_manual_trade_preview_delivery(
             self, *, now_epoch: int) -> dict[str, Any] | None:
         """One original M05 queue, no uncertain send retry."""
