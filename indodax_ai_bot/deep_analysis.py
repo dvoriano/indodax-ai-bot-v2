@@ -1490,6 +1490,26 @@ def _quality_review(candidate: DeepCandidate, btc_regime: str) -> dict:
         flags.append("CLOSED_CANDLE_FALSE_BREAKOUT_CAUTION")
     if timing["stage"] == "EXHAUSTED_PUMP_CAUTION":
         flags.append("MOMENTUM_EXHAUSTION_CAUTION")
+    # M03-N stores FIRST-OBSERVED public ticker samples, not executed flow
+    # or closed candles. Use its existing 11+ contiguous-minute 1m/5m
+    # deltas as a CAUTION when a positive 5m move is already losing speed.
+    # A forged/stale/malformed sample cannot create positive momentum.
+    early = candidate.early_momentum
+    if (isinstance(early, dict)
+            and type(early.get("consecutive_minute_samples")) is int
+            and early["consecutive_minute_samples"] >= 11):
+        try:
+            r1 = Decimal(early["return_1m_pct"])
+            r5 = Decimal(early["return_5m_pct"])
+            accel = Decimal(
+                early["acceleration_current_5m_vs_prior_5m_pct_points"])
+        except (KeyError, TypeError, ValueError, InvalidOperation):
+            flags.append("MOMENTUM_SAMPLE_VALUES_UNVERIFIED")
+        else:
+            if not all(x.is_finite() for x in (r1, r5, accel)):
+                flags.append("MOMENTUM_SAMPLE_VALUES_UNVERIFIED")
+            elif r5 > ZERO and (r1 <= ZERO or accel <= ZERO):
+                flags.append("MOMENTUM_DECELERATION_CAUTION")
     book = candidate.book_wall_diagnostic or {}
     wall_status = book.get("status")
     if wall_status in ("BOOK_TICKER_MISMATCH_NO_WATCH",
@@ -1603,10 +1623,16 @@ def _same_window_gate(
         "PULLBACK_REBOUND_WATCH": 0,
         "EARLY_ACCELERATION_WATCH": 1,
         "BREAKOUT_CONTINUATION_WATCH": 2,
-        "NO_CONFIRMED_ENTRY_SETUP": 3,
-        "REVERSAL_ATTEMPT_REVIEW": 4,
     }
-    clean = [item for item in reviews if item["clear_of_provisional_cautions"]]
+    # Do NOT fill Telegram's two slots using a high-scoring pair with no
+    # observed setup, unconfirmed reversal or unknown entry timing. Such
+    # pairs remain visible in the SAME diagnostic/cohort for future scans,
+    # but are not owner-facing scalp-entry candidates. Zero is valid.
+    clean = [
+        item for item in reviews
+        if (item["clear_of_provisional_cautions"]
+            and (item.get("scalp_setup_stage") or {}).get("stage") in stage_rank)
+    ]
     provisional_watchlist = [
         item["pair"] for item in sorted(
             clean,
@@ -1629,6 +1655,8 @@ def _same_window_gate(
         ],
         provisional_quality_reviews=reviews,
         provisional_watchlist_preview=provisional_watchlist,
+        provisional_watchlist_requires_observed_setup=True,
+        provisional_no_setup_not_promoted=True,
         watchlist_is_trade_signal=False,
         provisional_thresholds_backtested=False,
     )

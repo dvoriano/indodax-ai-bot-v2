@@ -861,6 +861,30 @@ class OwnerDecisionLedger:
                 (pair, closed_1m_epoch),
             ).fetchone():
                 return _blocked("M05_ADVISORY_ALREADY_QUEUED_THIS_CANDLE")
+            # Repeated identical technical setups every DEEP20 cycle are
+            # not a new opportunity merely because the candle advanced.
+            # Compare the last immutable original owner outbox text, without
+            # another ledger, background worker, or AI request. A changed
+            # observed setup can still reach the owner. This 10-minute
+            # anti-spam interval is operational, NOT an edge calibration.
+            previous = db.execute(
+                """SELECT p.created_epoch,o.message_text
+                   FROM m05_market_advisory_outbox o
+                   JOIN m05_proposals p ON p.proposal_id=o.proposal_id
+                   WHERE o.pair=? AND p.created_epoch<=?
+                   ORDER BY p.created_epoch DESC LIMIT 1""",
+                (pair, now_epoch),
+            ).fetchone()
+            if previous is not None and now_epoch - previous[0] < 600:
+                prefix = "\nSetup M03: "
+                old_message = previous[1]
+                old_setup = (
+                    old_message.split(prefix, 1)[1].split("\n", 1)[0]
+                    if isinstance(old_message, str) and prefix in old_message
+                    else None
+                )
+                if old_setup == setup:
+                    return _blocked("M05_ADVISORY_SAME_SETUP_COOLDOWN")
             db.execute(
                 """INSERT INTO m05_proposals(
                    proposal_id,owner_user_id,pair,digest,closed_1m_epoch,

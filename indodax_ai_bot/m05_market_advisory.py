@@ -50,10 +50,28 @@ def queue_scanner_owner_advisory(
         return {"status": "CLOSED_MINUTE_STALE_OR_MISSING", "queued": 0}
     preview = cohort.get("provisional_watchlist_preview")
     rows = bulk.get("provisional_market_evidence")
+    reviews = cohort.get("provisional_quality_reviews")
     if (not isinstance(preview, list) or not 1 <= len(preview) <= 2
             or len(preview) != len(set(str(p) for p in preview))
-            or not isinstance(rows, list)):
+            or not isinstance(rows, list) or not isinstance(reviews, list)):
         return {"status": "NO_VALID_PREVIEW", "queued": 0}
+    # These are observed technical setups for OWNER WATCH, not a complete
+    # AI/Risk/Final trade approval. Never promote "NO_CONFIRMED_ENTRY_SETUP"
+    # just because the scanner filled its two public watchlist slots.
+    observed_setups = frozenset((
+        "PULLBACK_REBOUND_WATCH",
+        "EARLY_ACCELERATION_WATCH",
+        "BREAKOUT_CONTINUATION_WATCH",
+    ))
+    quality = {}
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        pair = review.get("pair")
+        if isinstance(pair, str) and pair in preview:
+            if pair in quality:
+                return {"status": "DUPLICATE_QUALITY_REVIEW", "queued": 0}
+            quality[pair] = review
     selected = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -80,6 +98,19 @@ def queue_scanner_owner_advisory(
             stage.get("stage") if isinstance(stage, dict) else None,
             "SETUP_UNAVAILABLE",
         )
+        review = quality.get(pair)
+        reviewed_stage = (review.get("scalp_setup_stage")
+                          if isinstance(review, dict) else None)
+        if (setup not in observed_setups
+                or not isinstance(review, dict)
+                or review.get("clear_of_provisional_cautions") is not True
+                or review.get("review_flags") != []
+                or not isinstance(reviewed_stage, dict)
+                or reviewed_stage.get("stage") != setup
+                or reviewed_stage.get("trade_authorized") is not False
+                or row.get("trade_authorized") is not False):
+            reasons.append("M03_NO_CONFIRMED_QUALITY_CLEAN_SETUP")
+            continue
         ai_reason = _label(
             ai_shadow.get("reason") if isinstance(ai_shadow, dict) else None,
             "M04_NOT_CONNECTED",

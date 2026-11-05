@@ -101,6 +101,60 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
         self.assertFalse(gate["g2_candidate_authorized"])
         self.assertFalse(gate["live_trading_authorized"])
 
+    def test_no_setup_high_score_stays_in_diagnostic_not_owner_preview(self):
+        scored = (
+            candidate("raw_idr", score=99),
+            candidate("stalled_idr", score=94, early="OBSERVED_NO_ACCELERATION"),
+            candidate("reversal_idr", score=92,
+                      structure="REVERSAL_ATTEMPT_OBSERVED"),
+        )
+        obs = {c.pair: observation(c.pair) for c in scored}
+        gate = _same_window_gate(fake_screen(), scored, obs,
+                                 observation("btc_idr"))
+        self.assertEqual(gate["status"], "ALIGNED_PUBLIC_UNATTESTED")
+        self.assertEqual(len(gate["ranked_same_window_diagnostics"]), 3)
+        self.assertEqual(gate["provisional_watchlist_preview"], [])
+        self.assertTrue(gate["provisional_no_setup_not_promoted"])
+        self.assertFalse(gate["watchlist_is_trade_signal"])
+
+    def test_slowing_measured_ticker_momentum_blocks_even_clean_pullback(self):
+        slowing = candidate(
+            "slowing_idr", score=92,
+            structure="PULLBACK_REBOUND_OBSERVED",
+        )
+        from dataclasses import replace
+        slowing = replace(slowing, early_momentum={
+            "status": "CONFIRMATION_PENDING",
+            "consecutive_minute_samples": 12,
+            "return_1m_pct": "-0.20",
+            "return_5m_pct": "4.0",
+            "acceleration_current_5m_vs_prior_5m_pct_points": "-0.8",
+            "source_trust_verified": False,
+        })
+        caution = _quality_review(slowing, "BTC_UPTREND_DIAGNOSTIC")
+        self.assertIn("MOMENTUM_DECELERATION_CAUTION", caution["review_flags"])
+        self.assertFalse(caution["clear_of_provisional_cautions"])
+        gate = _same_window_gate(
+            fake_screen(), (slowing,),
+            {"slowing_idr": observation("slowing_idr")},
+            observation("btc_idr"),
+        )
+        self.assertEqual(gate["provisional_watchlist_preview"], [])
+        self.assertFalse(gate["g2_candidate_authorized"])
+
+    def test_observed_setup_with_no_valid_momentum_sample_still_diagnostic(self):
+        sample = candidate("pull_idr", score=75,
+                           structure="PULLBACK_REBOUND_OBSERVED")
+        quality = _quality_review(sample, "BTC_UPTREND_DIAGNOSTIC")
+        self.assertTrue(quality["clear_of_provisional_cautions"])
+        gate = _same_window_gate(
+            fake_screen(), (sample,), {"pull_idr": observation("pull_idr")},
+            observation("btc_idr"),
+        )
+        self.assertEqual(gate["provisional_watchlist_preview"], ["pull_idr"])
+        self.assertFalse(gate["g2_candidate_authorized"])
+        self.assertFalse(gate["trade_history_complete"])
+
     def test_original_bulk_market_digest_works_for_preview_outside_score_top10(self):
         def assigned(obs, *, early_momentum=None):
             p = obs.pair
@@ -148,7 +202,10 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
                 return candidate(obs.pair, score=78,
                                  structure="PULLBACK_REBOUND_OBSERVED")
             if obs.pair == "btc_idr":
-                return candidate(obs.pair, score=99, rsi="55")
+                # BTC is eligible as the second preview only if an
+                # actual closed-candle setup exists, not score alone.
+                return candidate(obs.pair, score=99, rsi="55",
+                                 structure="SURGE_BREAKOUT_OBSERVED")
             return candidate(obs.pair, score=96, rsi="78")
         with patch("indodax_ai_bot.deep_analysis.analyze_observation",
                    side_effect=assigned):
