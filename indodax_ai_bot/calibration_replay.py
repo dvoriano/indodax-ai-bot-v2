@@ -20,6 +20,10 @@ _ZERO = Decimal("0")
 _HUNDRED = Decimal("10000")
 # Predeclared illustrative ROUNDTRIP cost cases: not Indodax fee schedule.
 _SCENARIO_COST_BPS = (Decimal("0"), Decimal("20"), Decimal("50"))
+# 14 days of closed 1m candles permits at most ~100 independent 30% holdout
+# hourly windows, unlike the former three-day cap (~21 windows) which made
+# the default 30-sample holdout requirement mathematically impossible.
+MAX_CALIBRATION_1M_ROWS = 14 * 24 * 60
 
 
 def _bps(first: Decimal, second: Decimal) -> Decimal:
@@ -35,6 +39,8 @@ def _mean_str(rows: list[Decimal]) -> str | None:
 def evaluate_public_ohlc_proxy_ablation(
     history: PublicCandleHistory, *,
     min_holdout_independent_signals: int = 30,
+    owner_assumed_roundtrip_friction_bps: Decimal | None = None,
+    hypothetical_ticket_idr: Decimal | None = None,
 ) -> dict:
     """Chronological holdout, purged 60m horizon, nonoverlapping 60m samples.
 
@@ -50,8 +56,21 @@ def evaluate_public_ohlc_proxy_ablation(
             or type(min_holdout_independent_signals) is not int
             or not 10 <= min_holdout_independent_signals <= 1000):
         raise PublicDataError("INVALID_CALIBRATION_SOURCE")
+    # Cost and IDR ticket are caller-supplied assumptions ONLY. They cannot
+    # establish actual Indodax tier fee, spread, slippage, fills or profit.
+    if ((owner_assumed_roundtrip_friction_bps is None) !=
+            (hypothetical_ticket_idr is None)):
+        raise PublicDataError("M03_CALIBRATION_FRICTION_AND_TICKET_REQUIRED_TOGETHER")
+    if owner_assumed_roundtrip_friction_bps is not None:
+        if (type(owner_assumed_roundtrip_friction_bps) is not Decimal
+                or not owner_assumed_roundtrip_friction_bps.is_finite()
+                or not Decimal("0") <= owner_assumed_roundtrip_friction_bps <= Decimal("3000")
+                or type(hypothetical_ticket_idr) is not Decimal
+                or not hypothetical_ticket_idr.is_finite()
+                or not Decimal("1") <= hypothetical_ticket_idr <= Decimal("1000000000000")):
+            raise PublicDataError("M03_CALIBRATION_OWNER_ASSUMPTION_INVALID")
     bars = history.candles
-    if (len(bars) < 240 or len(bars) > 4320
+    if (len(bars) < 240 or len(bars) > MAX_CALIBRATION_1M_ROWS
             or history.to_epoch - history.from_epoch != 60 * len(bars)):
         raise PublicDataError("INSUFFICIENT_CALIBRATION_HISTORY")
     for idx, bar in enumerate(bars):
@@ -129,8 +148,31 @@ def evaluate_public_ohlc_proxy_ablation(
             selected = [r for r in rows if r["flags"][name]]
             gross30 = [r["forward_30m_bps"] for r in selected]
             gross60 = [r["forward_60m_bps"] for r in selected]
+            # Each historical signal uses exactly one hypothetical
+            # buy-ticket basis. BOTH thresholds are required, not OR.
+            # This is a descriptive counterfactual, not executable edge.
+            friction = owner_assumed_roundtrip_friction_bps
+            ticket = hypothetical_ticket_idr
+            n30 = ([x - friction for x in gross30]
+                   if friction is not None else None)
+            n60 = ([x - friction for x in gross60]
+                   if friction is not None else None)
+            def joint_count(net_samples: list[Decimal] | None) -> int | None:
+                if net_samples is None or ticket is None:
+                    return None
+                return sum(
+                    net_bps >= Decimal("200")
+                    and ticket * net_bps / _HUNDRED >= Decimal("10000")
+                    for net_bps in net_samples
+                )
             cohorts[name] = {
                 "independent_hourly_samples": len(selected),
+                "owner_assumed_net_30m_bps_average": (
+                    _mean_str(n30) if n30 is not None else None),
+                "owner_assumed_net_60m_bps_average": (
+                    _mean_str(n60) if n60 is not None else None),
+                "owner_assumed_joint_idr10000_and_roi2pct_30m_samples": joint_count(n30),
+                "owner_assumed_joint_idr10000_and_roi2pct_60m_samples": joint_count(n60),
                 "avg_gross_30m_bps": _mean_str(gross30),
                 "avg_gross_60m_bps": _mean_str(gross60),
                 "illustrative_net_30m_bps_by_roundtrip_cost": {
@@ -154,6 +196,15 @@ def evaluate_public_ohlc_proxy_ablation(
         "source": "IMMUTABLE_AS_OBSERVED_PUBLIC_OHLC_NOT_EXCHANGE_SIGNED",
         "source_digest_sha256_local": local_digest,
         "closed_1m_rows_visible": len(bars),
+        "maximum_supported_closed_1m_rows": MAX_CALIBRATION_1M_ROWS,
+        "owner_assumed_roundtrip_friction_bps": (
+            str(owner_assumed_roundtrip_friction_bps)
+            if owner_assumed_roundtrip_friction_bps is not None else None),
+        "hypothetical_ticket_idr": (
+            str(hypothetical_ticket_idr)
+            if hypothetical_ticket_idr is not None else None),
+        "owner_assumed_friction_is_actual_exchange_fee_verified": False,
+        "owner_assumed_joint_threshold_is_qualification": False,
         "signal_interval_minutes": 60,
         "forward_horizons_minutes": [30, 60],
         "holdout_fraction_planned": "0.30",
