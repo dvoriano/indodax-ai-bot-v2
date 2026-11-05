@@ -744,6 +744,7 @@ class OwnerDecisionLedger:
         self, *, pair: str, digest: str, closed_1m_epoch: int,
         now_epoch: int, source_expires_epoch: int, setup: str,
         market_status: str, risk_status: str,
+        public_reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Original public M03/M04 observation -> owner MANUAL review, NO order.
 
@@ -768,6 +769,54 @@ class OwnerDecisionLedger:
                    for ch in v) for v in labels):
             return _blocked("INVALID_MARKET_ADVISORY_LABEL")
         expires = min(now_epoch + TTL_MAX, source_expires_epoch)
+        reference_text = "Harga referensi: tidak tersedia dari scan ini.\n"
+        if public_reference is not None:
+            if (not isinstance(public_reference, dict)
+                    or set(public_reference) != {
+                        "best_bid_idr", "best_ask_idr", "observed_epoch",
+                        "score", "volume_ratio",
+                    }):
+                return _blocked("M05_PUBLIC_REFERENCE_INVALID_SCHEMA")
+            epoch = public_reference["observed_epoch"]
+            score = public_reference["score"]
+            ratio = public_reference["volume_ratio"]
+            if (type(epoch) is not int
+                    or not closed_1m_epoch <= epoch <= now_epoch
+                    or epoch < now_epoch - 90
+                    or type(score) is not int or not 0 <= score <= 100):
+                return _blocked("M05_PUBLIC_REFERENCE_STALE_OR_INVALID")
+            try:
+                bid = Decimal(public_reference["best_bid_idr"])
+                ask = Decimal(public_reference["best_ask_idr"])
+                volume = Decimal(ratio) if ratio is not None else None
+                if (not bid.is_finite() or not ask.is_finite()
+                        or bid <= 0 or ask <= bid
+                        or bid.adjusted() > 18 or ask.adjusted() > 18
+                        or (volume is not None and (
+                            not volume.is_finite() or volume < 0
+                            or volume.adjusted() > 7))):
+                    raise ValueError("invalid public quote")
+                spread = (ask - bid) * Decimal(10000) / ask
+                bid_text = format(bid, "f")
+                ask_text = format(ask, "f")
+                spread_text = format(spread.quantize(Decimal("0.01")), "f")
+                volume_text = (
+                    "tidak tersedia" if volume is None
+                    else format(volume.quantize(Decimal("0.01")), "f") + "x"
+                )
+            except (InvalidOperation, TypeError, ValueError, ArithmeticError):
+                return _blocked("M05_PUBLIC_REFERENCE_INVALID_PRICE")
+            quote_wib = datetime.fromtimestamp(
+                epoch, ZoneInfo("Asia/Jakarta")
+            ).strftime("%H:%M:%S WIB")
+            reference_text = (
+                "Referensi PUBLIC saat scan " + quote_wib + "\n"
+                "Bid Rp" + bid_text + " | Ask Rp" + ask_text +
+                " | Spread " + spread_text + " bps\n"
+                "Skor scanner " + str(score) + "/100 | Volume 1m "
+                + volume_text + "\n"
+                "BUKAN harga entry atau quote saat ini.\n"
+            )
         proposal_id = secrets.token_hex(12)
         secret = secrets.token_hex(16)
         pass_cb = f"m5:{proposal_id}:P:{secret}"
@@ -783,6 +832,7 @@ class OwnerDecisionLedger:
             "Pair: " + pair.upper() + "\n"
             "Candle 1m tutup: " + closed_wib + "\n"
             "Setup M03: " + setup + "\n"
+            + reference_text +
             "Analisis M04: " + market_status + "\n"
             "RISK: " + risk_status + "\n"
             "Fingerprint: " + digest[:16] + "\n"

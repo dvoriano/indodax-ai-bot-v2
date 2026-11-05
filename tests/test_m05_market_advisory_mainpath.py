@@ -53,6 +53,11 @@ def public_cohort(closed_epoch=CLOSED, pair="inj_idr"):
         "provisional_market_evidence": [{
             "pair": pair, "closed_1m_epoch": closed_epoch,
             "score": 83, "trade_authorized": False,
+            "public_best_bid_idr": "1400",
+            "public_best_ask_idr": "1404",
+            "public_quote_observed_epoch": NOW - 5,
+            "public_quote_is_trade_price": False,
+            "volume_ratio": "2.40",
             "scalp_setup_stage": {"stage": "PULLBACK_REBOUND_WATCH"},
         }],
         "g1_source_admission": {"g1_verified": False},
@@ -183,6 +188,10 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertIn("\nPair: INJ_IDR\n", fake.sent["text"])
         self.assertIn("\nCandle 1m tutup: ", fake.sent["text"])
         self.assertIn(" WIB\n", fake.sent["text"])
+        self.assertIn("Bid Rp1400 | Ask Rp1404", fake.sent["text"])
+        self.assertIn("Spread 28.49 bps", fake.sent["text"])
+        self.assertIn("Skor scanner 83/100 | Volume 1m 2.40x", fake.sent["text"])
+        self.assertIn("BUKAN harga entry", fake.sent["text"])
         self.assertIn("bukan BUY/SELL", fake.sent["text"])
         keyboard = fake.sent["reply_markup"]["inline_keyboard"][0]
         self.assertEqual(len(keyboard), 2)

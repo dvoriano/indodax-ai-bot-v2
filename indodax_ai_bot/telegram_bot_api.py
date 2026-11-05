@@ -379,22 +379,37 @@ class TelegramOwnerPoller:
                         })
                     except TelegramTransportError:
                         failures.append("KEYBOARD")
-                    # Persistent owner-visible confirmation. A popup alone
-                    # disappears, leaving the impression nothing happened.
-                    try:
-                        self._api.call("sendMessage", {
-                            "chat_id": self._ledger.owner_user_id,
-                            "text": (
-                                reply if outcome == "OWNER_CALLBACK_STALE_UI_NOTICE"
+                    # A stale/EXPIRED press is already one-time audited and
+                    # the exact original keyboard was removed. Showing the
+                    # answerCallbackQuery popup is enough; do not add one
+                    # permanent EXPIRED chat message per old WATCH card.
+                    # Actual owner PASS/REJECT retains persistent feedback.
+                    # A historical PASS/REJECT that was committed earlier
+                    # still deserves one persistent owner confirmation. Only
+                    # EXPIRED/MODE_CHANGED old cards get popup-only treatment.
+                    previously_recorded = (
+                        outcome == "OWNER_CALLBACK_STALE_UI_NOTICE"
+                        and reply.startswith((
+                            "M05 review PASS ", "M05 review REJECT ",
+                        ))
+                    )
+                    if (outcome != "OWNER_CALLBACK_STALE_UI_NOTICE"
+                            or previously_recorded):
+                        try:
+                            confirmation = (
+                                reply if previously_recorded
                                 else "M05 review " +
                                 ("PASS" if outcome == "OWNER_CALLBACK_PASS_RECORDED"
                                  else "REJECT") +
                                 " TERCATAT satu kali. SIMULASI saja, "
                                 "tidak ada BUY/SELL. Trading OFF."
-                            ),
-                        })
-                    except TelegramTransportError:
-                        failures.append("CONFIRM")
+                            )
+                            self._api.call("sendMessage", {
+                                "chat_id": self._ledger.owner_user_id,
+                                "text": confirmation,
+                            })
+                        except TelegramTransportError:
+                            failures.append("CONFIRM")
                     if failures:
                         raise TelegramTransportError(
                             "M05_OWNER_FEEDBACK_UNCERTAIN_NO_RETRY"
