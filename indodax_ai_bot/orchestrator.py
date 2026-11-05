@@ -951,6 +951,100 @@ class DailyScalpingOrchestrator:
             "existing_m05_owner_telegram_delivery": True,
         }
 
+    def recheck_m07_clicked_manual_buy_from_sources_nonlive_once(
+            self, *, owner_user_id: int, preview_id: str,
+            api_key: str, secret_key: str, funding: dict,
+            local_ownership_db: str | None = None,
+            market: IndodaxPublicMarket | None = None) -> dict:
+        """Owner callback -> SAME M03 deep+BTC, M06 View Only, M07 NO-POST.
+
+        This bounded *single-pair* refresh is explicitly opt-in. It is not
+        a second scanner: reuse the original M03 preliminary universe,
+        deep_scan and its original candidate source-bound quote callback.
+        The clicked pair comes exclusively from the original M05 ledger,
+        never from Telegram callback text or the current highest-ranked coin.
+        """
+        self.settings.require_m01_safety()
+        blocked = {
+            "stage": "M07_ORIGINAL_CLICK_SOURCE_REFRESH_NONLIVE",
+            "status": "M07_CLICK_SOURCE_UNAVAILABLE",
+            "m03_m06_reference_rechecked": False,
+            "m07_manual_sender_hold_staged": False,
+            "g1_issuer_verified": False,
+            "ai_risk_verified": False,
+            "owner_order_final_authenticated": False,
+            "order_sent": False,
+            "execution_allowed": False,
+        }
+        if self._owner_control is None:
+            return dict(blocked, status="M07_CLICK_OWNER_LEDGER_MISSING")
+        clicked = self._owner_control.load_clicked_manual_buy_draft_nonlive(
+            preview_id=preview_id, owner_user_id=owner_user_id,
+            observed_epoch=int(time.time()),
+        )
+        if clicked is None:
+            return dict(blocked, status="M07_CLICK_NOT_BOUND_TO_OWNER_DRAFT")
+        draft = clicked["draft"]
+        pair = draft.symbol[:-3].lower() + "_idr"
+        # No private account access until the unchanged original scanner
+        # proves the exact clicked pair is currently in the 20-40 shortlist
+        # AND still has a clean observed entry setup in aligned BTC context.
+        client = market if market is not None else IndodaxPublicMarket()
+        try:
+            screening = self._scan_with_early_momentum(client)
+            shortlist = next(
+                (row for row in screening.shortlist if row.pair == pair),
+                None,
+            )
+            if shortlist is None:
+                return dict(blocked, status="M07_CLICK_PAIR_NO_LONGER_SHORTLISTED")
+            scoped = replace(screening, shortlist=(shortlist,),
+                             watchlist=(shortlist,))
+            evidence = deep_scan(
+                client, scoped, limit=1, require_btc=True,
+                on_candidate=self._attach_public_wall_experience,
+            )
+            same = evidence.same_window or {}
+            summaries = [c.summary() for c in evidence.analyzed]
+            candidate = summaries[0] if len(summaries) == 1 else {}
+            reviewed = next((
+                row for row in same.get("provisional_quality_reviews", [])
+                if row.get("pair") == pair
+            ), None)
+            if (same.get("status") != "ALIGNED_PUBLIC_UNATTESTED"
+                    or pair not in same.get(
+                        "provisional_watchlist_preview", [])
+                    or type(reviewed) is not dict
+                    or reviewed.get("clear_of_provisional_cautions") is not True
+                    or candidate.get("eligible_for_same_window_comparison") is not True
+                    or candidate.get("trade_authorized") is not False):
+                return dict(blocked, status="M07_CLICK_SETUP_NO_LONGER_QUALIFIED")
+            public = candidate.get("m07_same_candidate_public_preflight")
+            if (type(public) is not dict
+                    or public.get("status") !=
+                        "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY"
+                    or public.get("candidate_pair") != pair
+                    or public.get("same_candidate_and_closed_minute") is not True
+                    or public.get("execution_allowed") is not False):
+                return dict(blocked, status="M07_CLICK_PUBLIC_RULES_NOT_READY")
+            # Existing V2 signed View Only M06 source is the ONLY private
+            # reader; no trading/withdrawal key, paid AI or exchange POST.
+            account = self.inspect_m06_idr_budget_readonly_once(
+                api_key=api_key, secret_key=secret_key,
+                local_ownership_db=local_ownership_db,
+            )
+            return self.review_m07_manual_owner_last_moment_nonlive_once(
+                owner_user_id=owner_user_id, preview_id=preview_id,
+                account_fingerprint=clicked["account_fingerprint"],
+                draft=draft, public_candidate=public,
+                account_snapshot=account,
+                funding=funding, owner_main_source_classified=True,
+                now_epoch=int(time.time()),
+            )
+        except (PublicDataError, M07PreflightBlocked, ValueError, TypeError,
+                ArithmeticError, OSError, sqlite3.Error):
+            return dict(blocked, status="M07_CLICK_REFRESH_READONLY_FAILED")
+
     def review_m07_manual_owner_last_moment_nonlive_once(
             self, *, owner_user_id: int, preview_id: str,
             account_fingerprint: str, draft: M07OrderDraft,

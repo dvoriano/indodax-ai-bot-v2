@@ -114,7 +114,8 @@ class TelegramOwnerPoller:
     def __init__(self, *, api: TelegramBotApiClient,
                  ledger: OwnerDecisionLedger,
                  clock: Callable[[], float] = time.time,
-                 expected_bot_id: int | None = None):
+                 expected_bot_id: int | None = None,
+                 on_manual_buy_preview_nonlive: Callable[[str, int], dict] | None = None):
         if not isinstance(api, TelegramBotApiClient):
             raise TypeError("M05_REQUIRES_TELEGRAM_API_CLIENT")
         if not isinstance(ledger, OwnerDecisionLedger):
@@ -122,6 +123,10 @@ class TelegramOwnerPoller:
         if (expected_bot_id is not None and
                 (type(expected_bot_id) is not int or expected_bot_id <= 0)):
             raise ValueError("M05_INVALID_CALLBACK_BOT_ID")
+        if (on_manual_buy_preview_nonlive is not None
+                and not callable(on_manual_buy_preview_nonlive)):
+            raise ValueError("M07_ORIGINAL_CALLBACK_NOT_CALLABLE")
+        self._manual_buy_preview_nonlive = on_manual_buy_preview_nonlive
         self._expected_bot_id = expected_bot_id
         self._api = api
         self._ledger = ledger
@@ -226,10 +231,31 @@ class TelegramOwnerPoller:
                 raise TelegramTransportError(
                     "M05_MANUAL_PREVIEW_AUTHORITY_CHANGED")
             label = result["owner_decision"]
+            click_status = None
+            if label == "BUY" and self._manual_buy_preview_nonlive is not None:
+                # Called ONLY after Telegram bot+private owner identity and
+                # original single-use M05 callback have been verified.
+                # The original owner preview row supplies pair/price/qty.
+                # Any interrupted read/hold leaves an INCOMPLETE update
+                # for review, never an automatic retry of consent.
+                checked = self._manual_buy_preview_nonlive(
+                    result["preview_id"], now_epoch,
+                )
+                if (type(checked) is not dict
+                        or checked.get("order_sent") is not False
+                        or checked.get("execution_allowed") is not False
+                        or type(checked.get("status")) is not str
+                        or not checked["status"].startswith("M07_")):
+                    raise TelegramTransportError(
+                        "M07_CLICK_NONLIVE_HARDLOCK_CHANGED")
+                click_status = checked["status"]
+            reply = "Tombol " + label + " dicatat sebagai UJI. Tidak ada order."
+            if click_status is not None:
+                reply += " M07: " + click_status[:70]
             return (
                 "OWNER_MANUAL_PREVIEW_" + label + "_RECORDED",
                 "answerCallbackQuery",
-                "Tombol " + label + " dicatat sebagai UJI. Tidak ada order.",
+                reply,
             )
         choice = result.get("owner_decision")
         if result.get("accepted") is True:

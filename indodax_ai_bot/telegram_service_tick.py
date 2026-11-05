@@ -137,6 +137,69 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
             str(state_db) + ".dedicated-poller.lock"):
         raise ConfigurationError("M05_TICK_TOKEN_PATH_CONFLICT")
     ledger = _existing_owner_ledger(state_db, owner_id)
+    # Optional original M07 callback bridge. No View Only GET, public scan
+    # or journal side effects when GO is absent. The on-disk owner and
+    # original decision journals must already exist and be private.
+    on_click = None
+    if cfg.get("M07_MANUAL_RECHECK_NONLIVE_GO") == "YES":
+        from decimal import Decimal, InvalidOperation
+        from .journal import DecisionJournal
+        from .orchestrator import DailyScalpingOrchestrator
+        from .m06_scoped_https import (
+            _owner_private_file, read_view_only_credentials,
+        )
+        decisions = _private_file(cfg.get(
+            "M07_MANUAL_RECHECK_DECISION_DB", ""))
+        funding_file = _private_file(cfg.get(
+            "M07_MANUAL_RECHECK_FUNDING_FILE", ""))
+        key_file = _private_file(cfg.get(
+            "M07_MANUAL_RECHECK_VIEWONLY_KEY_FILE", ""))
+        if len({decisions, funding_file, key_file, token_path, state_db}) != 5:
+            raise ConfigurationError("M07_TICK_SOURCE_FILE_COLLISION")
+        owned = cfg.get("M07_MANUAL_RECHECK_OWNERSHIP_DB")
+        ownership_file = _private_file(owned) if owned else None
+        if ownership_file is not None and ownership_file in (
+                decisions, funding_file, key_file, token_path, state_db):
+            raise ConfigurationError("M07_TICK_OWNERSHIP_FILE_COLLISION")
+        raw = _owner_private_file(str(funding_file))
+        expected_keys = {
+            "requested_ticket_ceiling_idr",
+            "new_floki_sell_rebuy_hold_idr",
+            "new_pepe_sell_rebuy_hold_idr",
+            "commitments_not_locked_idr",
+            "max_spread_bps",
+        }
+        if type(raw) is not dict or set(raw) != expected_keys:
+            raise ConfigurationError("M07_TICK_FUNDING_SCHEMA_INVALID")
+        if any(type(raw[k]) is not str or not 1 <= len(raw[k]) <= 40
+               or not raw[k].isascii() for k in expected_keys):
+            raise ConfigurationError("M07_TICK_FUNDING_AMOUNT_INVALID")
+        try:
+            funding = {key: Decimal(raw[key]) for key in expected_keys}
+        except (ValueError, InvalidOperation):
+            raise ConfigurationError("M07_TICK_FUNDING_AMOUNT_INVALID") from None
+        if (any(not v.is_finite() or v < 0 for v in funding.values())
+                or funding["requested_ticket_ceiling_idr"] <= 0
+                or not 0 < funding["max_spread_bps"] <= 500):
+            raise ConfigurationError("M07_TICK_FUNDING_AMOUNT_INVALID")
+        # Instantiate the SAME original orchestrator only inside owner
+        # click handler. The normal M05 tick remains Telegram-only.
+        def _nonlive_owner_click(preview_id: str, click_epoch: int) -> dict:
+            if type(click_epoch) is not int or click_epoch <= 0:
+                raise ConfigurationError("M07_TICK_CLICK_EPOCH_INVALID")
+            api_key, secret_key = read_view_only_credentials(str(key_file))
+            app = DailyScalpingOrchestrator(
+                Settings.from_env(cfg), DecisionJournal(decisions),
+                owner_control=ledger,
+            )
+            return app.recheck_m07_clicked_manual_buy_from_sources_nonlive_once(
+                owner_user_id=owner_id,
+                preview_id=preview_id, api_key=api_key,
+                secret_key=secret_key, funding=funding,
+                local_ownership_db=(
+                    str(ownership_file) if ownership_file is not None else None),
+            )
+        on_click = _nonlive_owner_click
     token = _token_from_file(token_path, bot_id)
     client = TelegramBotApiClient(
         token=token, allow_network=True, timeout_seconds=6,
@@ -145,6 +208,7 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
         api=client, ledger=ledger, expected_bot_id=bot_id,
         lock_path=str(state_db) + ".dedicated-poller.lock",
         limit=10,
+        on_manual_buy_preview_nonlive=on_click,
     )
     return {
         "status": "M05_TICK_COMPLETED",
