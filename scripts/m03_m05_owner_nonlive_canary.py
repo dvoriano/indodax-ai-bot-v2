@@ -29,7 +29,7 @@ HOME_CONFIG = Path.home() / ".config" / "indodax-ai-bot-v2"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 ENV_NAME = "m03-m05-advisory.env"
 DROP_NAME = "90-owner-advisory.conf"
-_ID = re.compile(r"[1-9][0-9]{0,18}\\Z")
+_ID = re.compile(r"[1-9][0-9]{0,18}\Z")
 
 
 class CanaryDenied(ValueError):
@@ -186,9 +186,9 @@ def stage_original_nonlive_canary(
     # Owner DB path/ID are non-secret but avoid displaying either value.
     # No token value, token path, Telegram API call or other bot is touched.
     advisory_env = (
-        "M05_MARKET_ADVISORY_QUEUE_GO=YES\\n"
-        f"M05_TELEGRAM_OWNER_DB={db}\\n"
-        f"M05_TELEGRAM_OWNER_ID={owner_id}\\n"
+        "M05_MARKET_ADVISORY_QUEUE_GO=YES\n"
+        f"M05_TELEGRAM_OWNER_DB={db}\n"
+        f"M05_TELEGRAM_OWNER_ID={owner_id}\n"
     ).encode()
     drop_source = root / "deploy" / "indodax-v2-m03-owner-advisory.conf"
     if drop_source.is_symlink():
