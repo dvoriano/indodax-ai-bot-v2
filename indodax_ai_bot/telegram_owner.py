@@ -154,7 +154,7 @@ class OfflineTelegramOwnerInterface:
                 )
                 status = report["status"]
                 reply = (
-                    "M04 AI readiness (READ-ONLY)\\nSumber: " + origin
+                    "M04 AI readiness (READ-ONLY): MARKET, RISK, STRATEGY\\nSumber: " + origin
                     + "\\n" + fields
                     + "\\nAPI key: " + key_state
                     + "\\nStatus: " + status
