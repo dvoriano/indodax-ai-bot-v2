@@ -386,7 +386,9 @@ class OwnerDecisionLedger:
     def queue_manual_trade_preview_offline(
             self, *, user_id: int, chat_id: int,
             account_fingerprint: str, draft, now_epoch: int,
-            chat_type: str = "private") -> dict[str, Any]:
+            chat_type: str = "private",
+            expected_buy_total_idr: Decimal | None = None,
+            ) -> dict[str, Any]:
         """Original M07 draft → MANUAL owner Telegram preview, NO trade.
 
         A producer of real execution decisions MUST NOT reuse this method's
@@ -415,7 +417,16 @@ class OwnerDecisionLedger:
         # M05 original preview has NO authenticated bot-owned M08 BUY lot:
         # do not mint a SELL cost basis or profit from an account balance.
         from .m05_trade_order_card import render_m05_trade_order_card
-        text = render_m05_trade_order_card(draft, mode="MANUAL")
+        # M07 already models the all-in maximum cost internally; if a
+        # source-bound BUY preview supplies it, display that amount instead
+        # of pretending price*qty is the final IDR debit. Never print fees.
+        try:
+            text = render_m05_trade_order_card(
+                draft, mode="MANUAL",
+                expected_buy_total_idr=expected_buy_total_idr,
+            )
+        except (ValueError, TypeError, ArithmeticError):
+            return _blocked("M05_MANUAL_TRADE_FINANCIAL_CARD_INVALID")
         price, qty = str(draft.price), str(draft.quantity)
         preview_id, secret = secrets.token_hex(12), secrets.token_hex(16)
         action = "B" if draft.side == "BUY" else "S"
