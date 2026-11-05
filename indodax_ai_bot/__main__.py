@@ -39,7 +39,7 @@ from .telegram_dedicated_inbound import (
 from .public_ws_health import public_ws_health
 from .m11_04_release_risk_offline import review_m11_release_risk_offline
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
-from .sumopod_provider import SumopodChatAdapter, SumopodProviderError
+from .sumopod_provider import SumopodChatAdapter, SumopodProviderError, inspect_provider_configuration_offline
 
 
 def _m03_compact_from_original(outcome) -> dict:
@@ -105,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m04-provider-readiness-once", action="store_true",
+                       help="M04 original role/model/credential readiness only: no HTTP, provider billing, issuer or orders")
     group.add_argument("--m11-release-risk-offline-once", action="store_true",
                        help="M11-04 V2 risk ceiling/kill-switch review only; no account IO, GO, trade or service update")
     group.add_argument("--m11-risk-halt-shadow-offline-once", action="store_true",
@@ -265,6 +267,19 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+        if args.m04_provider_readiness_once:
+            # Direct original V2 CLI, BEFORE creating a DecisionJournal or
+            # scanning or instantiating the paid provider. This only checks
+            # three already-existing MARKET/RISK/STRATEGY model IDs and
+            # whether a credential is locally present. NOT provider auth.
+            settings.require_m01_safety()
+            report = inspect_provider_configuration_offline()
+            print(json.dumps({
+                "m04_provider_readiness": report,
+                "final_decision": None,
+                "execution_allowed": False,
+            }, sort_keys=True))
+            return 0
         if args.m07_origin_commitment_file is not None and not args.m07_origin_commitment_offline_once:
             raise ConfigurationError("M07_ORIGIN_FILE_REQUIRES_OFFLINE_ACTION")
         if args.m07_origin_commitment_offline_once:

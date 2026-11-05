@@ -80,6 +80,67 @@ def _model_id(value: Any) -> str:
     return value
 
 
+def inspect_provider_configuration_offline(
+    source: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Inspect ORIGINAL M04 configured roles without a key, HTTP or billing.
+
+    This deliberately does not instantiate a network-capable adapter, inspect
+    the real environment's unrelated secret values, validate provider-side
+    pricing/availability, or authorize AI model calls.
+    """
+    env = environ if source is None else source
+    api_key = env.get("SUMOPOD_API_KEY", "")
+    api_key_present = (
+        isinstance(api_key, str) and bool(api_key)
+        and len(api_key) <= 512 and not any(ch.isspace() for ch in api_key)
+    )
+    models: dict[str, str | None] = {}
+    invalid_roles: list[str] = []
+    for role in ROLES:
+        value = env.get("SUMOPOD_MODEL_" + role)
+        try:
+            models[role] = _model_id(value)
+        except SumopodProviderError:
+            models[role] = None
+            invalid_roles.append(role)
+    identifiers = [models[role] for role in ROLES if models[role] is not None]
+    distinct_models = len(set(identifiers))
+    configured = api_key_present and not invalid_roles and distinct_models <= 3
+    blockers: list[str] = []
+    if not api_key_present:
+        blockers.append("M04_SUMOPOD_CREDENTIAL_NOT_CONFIGURED")
+    if invalid_roles:
+        blockers.append("M04_SUMOPOD_ROLE_MODEL_CONFIG_MISSING_OR_INVALID")
+    # This audit is expressly offline, never assert an authorized paid GO.
+    blockers.extend((
+        "M04_SUMOPOD_PROVIDER_AVAILABILITY_UNVERIFIED",
+        "M04_SUMOPOD_PROVIDER_PRICING_UNVERIFIED",
+        "M04_G1_INDEPENDENT_ISSUER_NOT_VERIFIED",
+        "M04_THREE_REAL_ROLE_RESPONSES_NOT_OBSERVED",
+        "M04_OWNER_PAID_AI_GO_NOT_GRANTED",
+    ))
+    return {
+        "status": (
+            "M04_PROVIDER_LOCAL_CONFIG_PRESENT_UNVERIFIED"
+            if configured else "M04_PROVIDER_LOCAL_CONFIG_INCOMPLETE"
+        ),
+        "configured_models_by_role": models,
+        "configured_distinct_model_count": distinct_models,
+        "sumopod_key_present_nonempty": api_key_present,
+        "role_contract": list(ROLES),
+        "provider_http_attempted": False,
+        "billable_provider_calls": 0,
+        "actual_provider_model_availability_verified": False,
+        "actual_provider_pricing_verified": False,
+        "g1_independent_issuer_verified": False,
+        "three_real_role_responses_observed": False,
+        "paid_ai_go_authorized": False,
+        "trading_enabled": False,
+        "blockers": blockers,
+    }
+
+
 def _strict_json(text: str) -> dict[str, Any]:
     if not isinstance(text, str) or not text or len(text) > 16_384:
         raise SumopodProviderError("INVALID_SUMOPOD_MESSAGE")
