@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Literal
 
 from .m07_order_adapter import M07OrderDraft
+from .policy import ScalpingPolicy
 
 
 def _format_number(value: Decimal) -> str:
@@ -114,12 +115,55 @@ def render_m05_trade_order_card(
                     or type(net) is not Decimal or not net.is_finite()
                     or net < 0 or net.adjusted() > 20):
                 raise ValueError("M05_SELL_CARD_NET_BASIS_NOT_VERIFIED")
+            # Reuse the existing canonical ScalpingPolicy only. Both
+            # totals must already include all-in buy/sell costs, any tax
+            # and slippage supplied by the actual M08 fill/exit reconciler.
+            # Do NOT infer exchange fees here, and do NOT convert a
+            # displayed price tier into execution permission.
+            policy = ScalpingPolicy()
             pnl = net - cost
+            roi = Decimal("100") * pnl / cost
+            eligible_normal_profit = policy.eligible_buy(pnl, roi)
+            tiers = tuple(
+                (name, threshold) for name, threshold in zip(
+                    ("T1", "T2", "T3"),
+                    policy.sell_targets_net_percent,
+                ) if roi >= threshold
+            )
+            highest_tier = (
+                tiers[-1][0] if tiers else "BELUM MENCAPAI T1"
+            )
             summary.append(f"Modal beli dialokasikan: {_idr(cost)}")
             if pnl >= 0:
                 summary.append(f"Estimasi untung bersih: {_idr(pnl)}")
             else:
                 summary.append(f"Estimasi rugi bersih: {_idr(-pnl)}")
+            summary.append(
+                "ROI netto estimasi: "
+                + _format_number(roi.quantize(Decimal("0.01"))) + "%"
+            )
+            summary.append(
+                "Target SELL netto: " + " | ".join(
+                    name + " " + _format_number(threshold) + "%"
+                    for name, threshold in zip(
+                        ("T1", "T2", "T3"),
+                        policy.sell_targets_net_percent,
+                    )
+                )
+            )
+            summary.append("Tier ROI tercapai: " + highest_tier)
+            summary.append(
+                "Syarat profit normal (min. " +
+                _idr(policy.min_net_profit_idr) + " DAN " +
+                _format_number(policy.min_net_roi_percent) +
+                "% netto): " +
+                ("TERPENUHI" if eligible_normal_profit
+                 else "BELUM TERPENUHI")
+            )
+            if not eligible_normal_profit:
+                summary.append(
+                    "SELL protektif tetap dinilai RISK secara terpisah."
+                )
     summary.extend((
         f"ClientOrderID: {draft.client_order_id}",
         "Angka indikatif, nilai nyata ditentukan fill dan settlement.",
