@@ -175,6 +175,15 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertEqual(fake.sent["chat_id"], OWNER)
         self.assertIn("G1/account/order: UNVERIFIED", fake.sent["text"])
         self.assertIn("M03/M04 public advisory", fake.sent["text"])
+        # Owner's live screenshot exposed literal backslash+n characters.
+        # A real Telegram send must use newline characters, label WATCH
+        # explicitly and show a human WIB closed-candle time.
+        self.assertNotIn(chr(92) + "n", fake.sent["text"])
+        self.assertIn("\nWATCH PASAR, BUKAN PERINTAH BUY\n", fake.sent["text"])
+        self.assertIn("\nPair: INJ_IDR\n", fake.sent["text"])
+        self.assertIn("\nCandle 1m tutup: ", fake.sent["text"])
+        self.assertIn(" WIB\n", fake.sent["text"])
+        self.assertIn("bukan BUY/SELL", fake.sent["text"])
         keyboard = fake.sent["reply_markup"]["inline_keyboard"][0]
         self.assertEqual(len(keyboard), 2)
         self.assertEqual(keyboard[0]["text"], "PASS (review only)")
