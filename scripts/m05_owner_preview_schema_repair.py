@@ -76,10 +76,11 @@ def _expected_original_schema(parent: Path) -> str:
             fields = {row[1] for row in conn.execute(
                 "PRAGMA table_info(m05_manual_trade_previews)"
             )}
-    if (raw is None or not isinstance(raw[0], str)
-            or not raw[0].lstrip().upper().startswith(
-                "CREATE TABLE " + _TABLE.upper()
-            ) or not _REQUIRED <= fields):
+    normalized = raw[0].lstrip().upper() if raw and isinstance(raw[0], str) else ""
+    if (not normalized.startswith("CREATE TABLE " + _TABLE.upper())
+            and not normalized.startswith(
+                "CREATE TABLE IF NOT EXISTS " + _TABLE.upper()
+            )) or not _REQUIRED <= fields:
         raise PreviewRepairDenied("M05_PREVIEW_ORIGINAL_SOURCE_SCHEMA_INVALID")
     return raw[0]
 
