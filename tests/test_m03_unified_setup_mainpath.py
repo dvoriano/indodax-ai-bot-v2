@@ -202,7 +202,10 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
                 return candidate(obs.pair, score=78,
                                  structure="PULLBACK_REBOUND_OBSERVED")
             if obs.pair == "btc_idr":
-                return candidate(obs.pair, score=99, rsi="55")
+                # BTC is eligible as the second preview only if an
+                # actual closed-candle setup exists, not score alone.
+                return candidate(obs.pair, score=99, rsi="55",
+                                 structure="SURGE_BREAKOUT_OBSERVED")
             return candidate(obs.pair, score=96, rsi="78")
         with patch("indodax_ai_bot.deep_analysis.analyze_observation",
                    side_effect=assigned):
