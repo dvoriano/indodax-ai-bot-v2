@@ -285,12 +285,15 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
                  if name == "editMessageReplyMarkup"]
         self.assertEqual(len(edits), 1)
         self.assertEqual(edits[0]["message_id"], 42)
+        # Expired clicks are acknowledged in a popup and the original
+        # inline buttons removed; they must not flood owner chat with
+        # permanent EXPIRED messages for each stale WATCH card.
+        popups = [p["text"] for name, p in self.calls
+                  if name == "answerCallbackQuery"]
+        self.assertTrue(any("EXPIRED" in x for x in popups))
         notices = [p["text"] for name, p in self.calls if name == "sendMessage"
                    and "sudah ditutup" in p.get("text", "")]
-        self.assertEqual(len(notices), 1)
-        self.assertIn("EXPIRED", notices[0])
-        self.assertIn("Tidak ada keputusan baru", notices[0])
-        self.assertIn("Trading OFF", notices[0])
+        self.assertEqual(notices, [])
 
         self.incoming = [self.callback(
             keyboard[1]["callback_data"], update=103,
@@ -303,7 +306,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(len([
             p for name, p in self.calls if name == "sendMessage"
             and "sudah ditutup" in p.get("text", "")
-        ]), 1)
+        ]), 0)
         with sqlite3.connect(self.db) as db:
             self.assertEqual(db.execute(
                 "SELECT state,reason FROM m05_proposals"
