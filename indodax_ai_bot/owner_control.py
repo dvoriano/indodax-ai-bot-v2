@@ -411,6 +411,11 @@ class OwnerDecisionLedger:
         digest = sha256(json.dumps(
             params, ensure_ascii=True, separators=(",", ":"),
         ).encode("ascii")).hexdigest()
+        # Same display math will serve future AUTO notifications.
+        # M05 original preview has NO authenticated bot-owned M08 BUY lot:
+        # do not mint a SELL cost basis or profit from an account balance.
+        from .m05_trade_order_card import render_m05_trade_order_card
+        text = render_m05_trade_order_card(draft, mode="MANUAL")
         price, qty = str(draft.price), str(draft.quantity)
         preview_id, secret = secrets.token_hex(12), secrets.token_hex(16)
         action = "B" if draft.side == "BUY" else "S"
@@ -418,14 +423,7 @@ class OwnerDecisionLedger:
         reject = f"m5t:{preview_id}:R:{secret}"
         if max(len(confirm), len(reject)) > 64:
             return _blocked("M05_MANUAL_TRADE_CALLBACK_TOO_LONG")
-        text = (
-            "M05 MANUAL " + draft.side + " (SIMULASI TOMBOL, NO ORDER)\n" +
-            draft.symbol + " | LIMIT harga IDR " + price +
-            " | qty " + qty + "\n" +
-            "ClientOrderID: " + draft.client_order_id + "\n" +
-            "Akun, fee, G1, kepemilikan dan preflight BELUM TERVERIFIKASI.\n" +
-            "Menekan tombol hanya mencatat pilihan owner. Tidak BUY/SELL."
-        )
+
         with self._tx() as db:
             mode = db.execute(
                 "SELECT mode FROM m05_config WHERE singleton=1"
@@ -836,8 +834,8 @@ class OwnerDecisionLedger:
             "Analisis M04: " + market_status + "\n"
             "RISK: " + risk_status + "\n"
             "Fingerprint: " + digest[:16] + "\n"
-            "G1/account/order: UNVERIFIED. Harga dan jumlah order belum "
-            "diotorisasi.\n"
+            "G1/account/order: UNVERIFIED. Ini WATCH pasar saja, "
+            "belum ada draft BUY/SELL.\n"
             "PASS/REJECT hanya keputusan review owner, bukan BUY/SELL."
         )
         with self._tx() as db:

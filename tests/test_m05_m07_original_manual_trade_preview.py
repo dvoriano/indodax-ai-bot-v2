@@ -161,7 +161,10 @@ class ManualOwnerTradePreviewOriginalV2Tests(unittest.TestCase):
         self.assertEqual(len(self.sent),1)
         card=self.sent[0]
         self.assertIn("MANUAL BUY (SIMULASI TOMBOL, NO ORDER)",card["text"])
-        self.assertIn("25000",card["text"])
+        self.assertIn("Harga LIMIT per INJ: Rp25.000",card["text"])
+        self.assertIn("Nominal pembelian (estimasi): Rp100.000",card["text"])
+        self.assertIn("Token diperoleh (estimasi): 4 INJ",card["text"])
+        self.assertNotIn("fee",card["text"].lower())
         self.assertIn("m07manual001",card["text"])
         self.assertEqual(card["chat_id"],OWNER)
         buttons=card["reply_markup"]["inline_keyboard"][0]
@@ -193,6 +196,19 @@ class ManualOwnerTradePreviewOriginalV2Tests(unittest.TestCase):
         self.assertTrue(q["accepted"])
         self.assert_never_order(q)
         self.tick()
+        self.assertIn(
+            "Total penjualan (estimasi): Rp100.000",
+            self.sent[0]["text"],
+        )
+        self.assertIn(
+            "Modal beli: belum ada lot BUY V2 terverifikasi",
+            self.sent[0]["text"],
+        )
+        self.assertIn(
+            "Untung/rugi bersih: belum dapat dihitung",
+            self.sent[0]["text"],
+        )
+        self.assertNotIn("fee",self.sent[0]["text"].lower())
         button=self.sent[0]["reply_markup"]["inline_keyboard"][0][0]
         self.assertEqual(button["text"],"SELL (uji, tanpa order)")
         self.incoming=[self.callback(button["callback_data"])]
