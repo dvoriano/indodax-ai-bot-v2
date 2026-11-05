@@ -73,3 +73,10 @@ jobs:
             tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath
+      - name: Operator VPS explicit namespaced unittest regressions
+        run: |
+          python -B -m unittest -q \
+            tests.test_m07_manual_lastmoment_source_join \
+            tests.test_m08_original_exchange_buy_admission \
+            tests.test_m05_owner_mode_inline \
+            tests.test_m04_m05_telegram_ai_readiness

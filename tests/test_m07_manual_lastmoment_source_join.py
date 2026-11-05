@@ -238,7 +238,20 @@ class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
 
     def test_original_poller_click_refreshes_same_pair_and_stages_hold(self):
         from indodax_ai_bot.deep_analysis import DeepScan
-        from tests.test_m03g_bulk import fake_screen
+        from indodax_ai_bot.scanner import ScannerResult, ScreenedPair
+        # Keep the test self-contained: test_m03g_bulk imports its OWN
+        # test fixtures as top-level modules, which only works under
+        # unittest discover -s tests, not the operator's
+        # python -m unittest tests.test_m07_manual_lastmoment_source_join.
+        rows = tuple(
+            ScreenedPair(
+                "btc_idr" if i == 0 else f"token{i:03d}_idr",
+                D("30000000"), D("100"), D("101"),
+                D("50"), D("5"), NOW - 1,
+            )
+            for i in range(20)
+        )
+        screen = ScannerResult(NOW, 398, 300, 98, rows, rows[:2])
         self.prepare(click=False)
         with sqlite3.connect(self.owner.db_path) as db:
             token = db.execute(
@@ -300,7 +313,7 @@ class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
         )
         with (
             patch.object(self.app, "_scan_with_early_momentum",
-                         return_value=fake_screen()) as scanned,
+                         return_value=screen) as scanned,
             patch("indodax_ai_bot.orchestrator.deep_scan",
                   return_value=deep) as market,
             patch.object(self.app, "inspect_m06_idr_budget_readonly_once",
