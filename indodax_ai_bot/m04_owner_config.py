@@ -162,3 +162,112 @@ def stage_owner_default_models(
         "paid_ai_go_authorized": False,
         "trading_enabled": False,
     }
+
+
+def change_owner_models_explicitly(
+    models: Mapping[str, str], *,
+    directory: Path = CONFIG_DIR,
+    config: Path = CONFIG_FILE,
+    key_file: Path = API_KEY_FILE,
+) -> dict:
+    """Replace ONLY original V2 model IDs with the owner's explicit choices.
+
+    Never reads, writes, renames, copies or logs the Sumopod credential.
+    No model/provider availability claim, price/budget configuration, GO,
+    network call, trading permission or service restart. Atomic 0600 replace
+    avoids half-written config while an existing process reads it.
+    """
+    import fcntl
+    import tempfile
+
+    if (config != directory / "provider.json"
+            or key_file != directory / "sumopod.api-key"):
+        raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_PATH_INVALID")
+    if not isinstance(models, Mapping) or set(models) != set(ROLES):
+        raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_REQUIRES_THREE_ROLES")
+    from .sumopod_provider import _model_id, SumopodProviderError
+    try:
+        chosen = {r: _model_id(models[r]) for r in ROLES}
+    except SumopodProviderError:
+        raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_INVALID_MODEL_ID") from None
+    if len(set(chosen.values())) > 3:
+        raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_TOO_MANY_MODELS")
+    _directory_ok(directory.parent)
+    _directory_ok(directory)
+    lock_path = directory / ".owner-model-choice.lock"
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        lock_fd = os.open(lock_path, flags, 0o600)
+        st = os.fstat(lock_fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid()
+                or stat.S_IMODE(st.st_mode) != 0o600 or st.st_nlink != 1):
+            raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_LOCK_UNTRUSTED")
+    except OSError:
+        raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_LOCK_UNAVAILABLE") from None
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        raw = _private_read(config, max_bytes=4096)
+        try:
+            old = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_CONFIG_INVALID") from None
+        if (type(old) is not dict
+                or set(old) != {"schema_version", "models", "api_key_file"}
+                or type(old["schema_version"]) is not int
+                or old["schema_version"] != 1
+                or old["api_key_file"] != "sumopod.api-key"
+                or type(old["models"]) is not dict
+                or set(old["models"]) != set(ROLES)):
+            raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_CONFIG_INVALID")
+        try:
+            previous = {r: _model_id(old["models"][r]) for r in ROLES}
+        except SumopodProviderError:
+            raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_CONFIG_INVALID") from None
+        changed = previous != chosen
+        if changed:
+            new_doc = {
+                "schema_version": 1,
+                "models": chosen,
+                "api_key_file": "sumopod.api-key",
+            }
+            payload = (json.dumps(
+                new_doc, sort_keys=True, separators=(",", ":"),
+            ) + "\n").encode("utf-8")
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                prefix=".owner-model-choice-", dir=directory,
+            )
+            try:
+                with os.fdopen(tmp_fd, "wb") as writer:
+                    os.fchmod(writer.fileno(), 0o600)
+                    writer.write(payload)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                # original protected 0600 file remains the only target.
+                if _private_read(config, max_bytes=4096) != raw:
+                    raise M04OwnerConfigDenied(
+                        "M04_V2_MODEL_CHANGE_CONCURRENT_MODIFICATION"
+                    )
+                os.replace(tmp_path, config)
+                dir_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                raise M04OwnerConfigDenied("M04_V2_MODEL_CHANGE_WRITE_FAILED") from None
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+        return {
+            "status": "M04_V2_OWNER_MODEL_SELECTION_SAVED_LOCAL_ONLY",
+            "changed": changed,
+            "role_models": chosen,
+            "distinct_model_count": len(set(chosen.values())),
+            "credential_file_read_or_changed": False,
+            "provider_account_or_prices_verified": False,
+            "provider_http_attempted": False,
+            "paid_ai_go_authorized": False,
+            "trading_enabled": False,
+        }
+    finally:
+        os.close(lock_fd)
