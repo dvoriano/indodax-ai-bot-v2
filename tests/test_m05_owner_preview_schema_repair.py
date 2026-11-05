@@ -163,7 +163,9 @@ class M05OriginalPreviewSchemaRepairTests(unittest.TestCase):
         with patch.object(
             repair, "_backup_online", side_effect=OSError("simulated IO error")
         ):
-            with self.assertRaises(OSError):
+            # The existing M05 lock converts an internal OSError to its
+            # own stable transport-side failure code on scope exit.
+            with self.assertRaises(TelegramTransportError):
                 self._repair()
         self.assertEqual(len(self._outbox(self.db)), 6)
         with sqlite3.connect(self.db) as con:
