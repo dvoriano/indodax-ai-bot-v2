@@ -116,18 +116,46 @@ def inspect_existing_btc_ws(
         observed_lag_seconds = now_epoch - newest
         observed_recent = 0 <= observed_lag_seconds <= 120
         newest_closed = newest // 60 * 60
+        # These timestamps locate when the locally recorded discontinuity
+        # was SEEN, not the full interval of trades absent upstream.
+        # A gap observed outside a window may still impact its coverage.
+        recorded_gap_times = [
+            epoch for (epoch,) in con.execute(
+                "SELECT observed_at_epoch FROM ws_stream_discontinuities "
+                "WHERE pair=? ORDER BY id", ("btc_idr",)
+            )
+            if type(epoch) is int and epoch > 0
+        ]
         windows = {}
-        for seconds, key in ((900, "last_closed_15m"), (3600, "last_closed_1h")):
-            end = (newest_closed // seconds) * seconds
+        # Original aligned windows retained for existing tests/callers.
+        # Rolling windows end at the SAME latest completed minute to
+        # remove ambiguity when the last closed 15m/1h do not overlap.
+        specs = (
+            (900, "last_closed_15m", (newest_closed // 900) * 900,
+             "ALIGNED_15M_BOUNDARY"),
+            (3600, "last_closed_1h", (newest_closed // 3600) * 3600,
+             "ALIGNED_1H_BOUNDARY"),
+            (900, "rolling_last_15_closed_minutes", newest_closed,
+             "SAME_LAST_CLOSED_MINUTE"),
+            (3600, "rolling_last_60_closed_minutes", newest_closed,
+             "SAME_LAST_CLOSED_MINUTE"),
+        )
+        for seconds, key, end, alignment in specs:
             start = end - seconds
             within = [t for t in times if start <= t < end]
             minutes = {t // 60 for t in within}
+            events = sum(
+                start <= epoch < end for epoch in recorded_gap_times
+            )
             windows[key] = {
                 "start_epoch": start, "end_epoch": end,
+                "window_alignment": alignment,
                 "observed_trade_rows": len(within),
                 "minutes_with_observed_trades": len(minutes),
                 "minutes_without_observed_trades_or_missing_data":
                     seconds // 60 - len(minutes),
+                "recorded_gap_events_observed_during_window": events,
+                "no_gap_event_observed_does_not_prove_trade_completeness": True,
                 "complete_exchange_trade_tape_proven": False,
                 "independent_issuer_attested": False,
             }
@@ -149,6 +177,10 @@ def inspect_existing_btc_ws(
             "source_eligible_for_live_decision": False,
             "distinct_stream_epochs": len(seen_epoch),
             "discontinuities_recorded": gaps,
+            "latest_recorded_gap_observed_at_epoch": (
+                max(recorded_gap_times) if recorded_gap_times else None
+            ),
+            "same_end_rolling_windows_are_g1_attested": False,
             "offset_jumps_between_stored_publications": offset_gaps,
             "trade_sequence_jumps_between_observed_rows": seq_gaps,
             "invalid_trade_rows": invalid_rows,
