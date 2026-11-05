@@ -207,8 +207,9 @@ def switch_original_m05_source(
             "bot_or_owner_db_changed": False, "trading_enabled": False,
         }
 
-    if prop(SERVICE, "ActiveState") != "inactive":
-        raise M05CutoverDenied("M05_CUTOVER_SERVICE_NOT_IDLE")
+    # The original 3-second timer may briefly have the oneshot running.
+    # Do not reject based on this race before pausing timer; the next block
+    # waits for the existing process to finish before switching the source.
     if (str(home / _LEGACY / _EXEC) not in prop(SERVICE, "ExecStart")
             or prop(SERVICE, "WorkingDirectory") != str(home / _LEGACY)):
         raise M05CutoverDenied("M05_CUTOVER_LOADED_SOURCE_DIFFERS")
