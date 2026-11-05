@@ -116,6 +116,62 @@ class OfflineTelegramOwnerInterface:
                 **_blocked("M10_OPS_OWNER_READONLY_NO_EXECUTION"),
                 "text": reply,
             }
+        if command == "/ai" and len(parts) == 1:
+            # Only inspect original V2 protected owner configuration. This
+            # does not call Sumopod or prove model access/paid GO/G1.
+            from .m04_owner_config import (
+                owner_provider_source, M04OwnerConfigDenied,
+            )
+            from .sumopod_provider import inspect_provider_configuration_offline
+            import os
+            try:
+                keys = (
+                    "SUMOPOD_API_KEY", "SUMOPOD_MODEL_MARKET",
+                    "SUMOPOD_MODEL_RISK", "SUMOPOD_MODEL_STRATEGY",
+                )
+                if any(key in os.environ for key in keys):
+                    source = {key: os.environ.get(key, "") for key in keys}
+                    origin = "PROCESS_ENV"
+                else:
+                    protected = owner_provider_source()
+                    source = protected[0] if protected is not None else {}
+                    origin = (
+                        "V2_PROTECTED_LOCAL_FILE" if protected is not None
+                        else "M04_CONFIG_NOT_FOUND"
+                    )
+                report = inspect_provider_configuration_offline(source)
+                # Model IDs are locally schema-validated, but no key value,
+                # billing data or raw error is ever put on Telegram.
+                models = report["configured_models_by_role"]
+                fields = "; ".join(
+                    role + "=" + (models.get(role) or "BELUM_DIATUR")
+                    for role in ("MARKET", "RISK", "STRATEGY")
+                )
+                key_state = (
+                    "TERKONFIGURASI_LOKAL"
+                    if report["sumopod_key_present_nonempty"]
+                    else "BELUM_TERDETEKSI"
+                )
+                status = report["status"]
+                reply = (
+                    "M04 AI readiness (READ-ONLY): MARKET, RISK, STRATEGY\\nSumber: " + origin
+                    + "\\n" + fields
+                    + "\\nAPI key: " + key_state
+                    + "\\nStatus: " + status
+                    + "\\nModel/provider online: BELUM_DIVERIFIKASI"
+                    + "\\nG1 independen: BELUM_DIVERIFIKASI"
+                    + "\\n3 respons AI nyata: BELUM_TERVERIFIKASI"
+                    + "\\nPaid AI dipanggil: TIDAK. Order: OFF."
+                ).replace("\\n", "\n")
+            except (M04OwnerConfigDenied, ValueError, OSError):
+                reply = (
+                    "M04 AI readiness: KONFIGURASI_TIDAK_BISA_DIVERIFIKASI. "
+                    "Tidak ada akses provider, biaya AI atau order. OFF."
+                )
+            return {
+                **_blocked("M04_PROVIDER_READINESS_DIAGNOSTIC_ONLY"),
+                "text": reply,
+            }
         # Original M05 SQLite review records are genuine local evidence,
         # never exchange trade/fill evidence. Read the SAME owner ledger.
         if command in ("/market", "/history") and len(parts) == 1:
@@ -153,7 +209,7 @@ class OfflineTelegramOwnerInterface:
         # unavailable status without pretending to access private APIs.
         unavailable = {
             "/scanner": "Scanner M03 terjadwal belum berizin aktif; /market hanya menampilkan ledger M05. Trading OFF.",
-            "/ai": "MARKET, RISK, STRATEGY belum mempunyai respons provider berbayar dan sumber G1 tervalidasi. Trading OFF.",
+
             "/buy": "BUY tidak tersedia: G1, risk, saldo akun, izin LIVE dan executor belum terverifikasi. Tidak mengirim order.",
             "/positions": "Posisi milik bot belum diverifikasi dari fill Indodax. Tidak mengarang posisi atau saldo.",
             "/sell": "SELL tidak tersedia: kepemilikan lot/fill dan executor belum terverifikasi. Tidak mengirim order.",
