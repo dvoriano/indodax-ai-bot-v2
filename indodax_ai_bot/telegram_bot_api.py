@@ -345,12 +345,18 @@ class TelegramOwnerPoller:
                 reply = "Proposal tidak berlaku. Tidak ada order."
         return (outcome, "answerCallbackQuery", reply)
 
-    def poll_once(self, *, limit: int = 10) -> dict[str, Any]:
+    def poll_once(self, *, limit: int = 10,
+                  wait_seconds: int = 0) -> dict[str, Any]:
         if type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("INVALID_M05_POLL_LIMIT")
+        # Original timer-based one-shot still uses zero-second polling.
+        # The separately opted-in persistent worker waits at Telegram's
+        # getUpdates endpoint so owner clicks wake it immediately.
+        if type(wait_seconds) is not int or not 0 <= wait_seconds <= 5:
+            raise ValueError("M05_INVALID_LONGPOLL_WAIT")
         offset = self._ledger.telegram_next_offset()
         updates = self._api.call("getUpdates", {
-            "offset": offset, "limit": limit, "timeout": 0,
+            "offset": offset, "limit": limit, "timeout": wait_seconds,
             "allowed_updates": ["message", "callback_query"],
         })
         if not isinstance(updates, list) or len(updates) > limit:
