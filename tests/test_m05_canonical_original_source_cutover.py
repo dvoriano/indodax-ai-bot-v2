@@ -199,7 +199,7 @@ class CanonicalOwnerM05CutoverTests(unittest.TestCase):
         with sqlite3.connect(self.db) as conn:
             conn.execute(
                 "INSERT INTO m05_telegram_updates("
-                "update_id,callback_query_id,status,received_epoch) "
+                "update_id,callback_query_id,status,event_epoch) "
                 "VALUES(99,NULL,'CLAIMED',1793820000)"
             )
         with self.assertRaisesRegex(
@@ -234,7 +234,7 @@ class CanonicalOwnerM05CutoverTests(unittest.TestCase):
         self.unit.write_text(CANONICAL)
         self.fake.loaded = self.legacy
         with self.assertRaisesRegex(
-            app.M05CutoverDenied, "M05_CUTOVER_CANONICAL_LOAD_NOT_VERIFIED"
+            app.M05CutoverDenied, "M05_CUTOVER_UNIT_METADATA_UNVERIFIED"
         ):
             self.go()
         self.assertEqual(self.fake.stop_count, 0)
