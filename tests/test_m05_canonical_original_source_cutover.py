@@ -216,7 +216,7 @@ class CanonicalOwnerM05CutoverTests(unittest.TestCase):
             "ExecStart=", "ExecStartPre=/bin/false\nExecStart="))
         self.fake.loaded = self.unit.read_text()
         with self.assertRaisesRegex(
-            app.M05CutoverDenied, "M05_CUTOVER_UNREVIEWED_UNIT_DIFFERENCE"
+            app.M05CutoverDenied, "M05_CUTOVER_ADDITIONAL_COMMANDS_UNREVIEWED"
         ):
             self.go()
         self.assertTrue(self.fake.timer_active)
