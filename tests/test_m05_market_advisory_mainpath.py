@@ -46,6 +46,10 @@ def public_cohort(closed_epoch=CLOSED, pair="inj_idr"):
             "provisional_quality_reviews": [{
                 "pair": pair, "review_flags": [],
                 "clear_of_provisional_cautions": True,
+                "scalp_setup_stage": {
+                    "stage": "PULLBACK_REBOUND_WATCH",
+                    "trade_authorized": False,
+                },
             }],
             "source_trust_verified": False,
             "g1_verified": False, "trade_history_complete": False,
@@ -323,6 +327,82 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertEqual(
             self.ledger.status(user_id=OWNER, chat_id=OWNER)[
                 "pending_shadow_proposals"], 1,
+        )
+
+
+    def test_no_confirmed_entry_never_sends_owner_card_even_if_watchlist_names_pair(self):
+        bad = public_cohort()
+        bad["provisional_market_evidence"][0]["scalp_setup_stage"] = {
+            "stage": "NO_CONFIRMED_ENTRY_SETUP", "trade_authorized": False,
+        }
+        bad["eligible_cohort"]["provisional_quality_reviews"][0]["scalp_setup_stage"] = {
+            "stage": "NO_CONFIRMED_ENTRY_SETUP", "trade_authorized": False,
+        }
+        outcome = self.market_cycle(bad)
+        self.assertEqual(outcome.owner_advisory["queued"], 0)
+        self.assertIn("M03_NO_CONFIRMED_QUALITY_CLEAN_SETUP",
+                      outcome.owner_advisory["diagnostics"])
+        self.assertIsNone(self.ledger.claim_market_advisory_delivery(
+            now_epoch=NOW + 3))
+        self.assertFalse(outcome.execution_allowed)
+
+    def test_quality_flags_and_stage_mismatch_fail_closed_before_telegram(self):
+        for issue in ("flagged", "mismatched", "untrusted"):
+            with self.subTest(issue=issue), TemporaryDirectory() as td:
+                ledger = OwnerDecisionLedger(
+                    Path(td) / "owner.sqlite3", owner_user_id=OWNER)
+                bulk = public_cohort()
+                q = bulk["eligible_cohort"]["provisional_quality_reviews"][0]
+                if issue == "flagged":
+                    q["review_flags"] = ["MOMENTUM_DECELERATION_CAUTION"]
+                    q["clear_of_provisional_cautions"] = False
+                elif issue == "mismatched":
+                    q["scalp_setup_stage"]["stage"] = "EARLY_ACCELERATION_WATCH"
+                else:
+                    q["scalp_setup_stage"].pop("trade_authorized")
+                from indodax_ai_bot.m05_market_advisory import (
+                    queue_scanner_owner_advisory,
+                )
+                out = queue_scanner_owner_advisory(
+                    bulk=bulk, ai_shadow=None, owner=ledger, now_epoch=NOW)
+                self.assertEqual(out["queued"], 0)
+                self.assertEqual(out["diagnostics"],
+                                 ["M03_NO_CONFIRMED_QUALITY_CLEAN_SETUP"])
+                self.assertFalse(out["execution_allowed"])
+
+    def test_repeat_identical_setup_cooldown_but_changed_setup_is_allowed(self):
+        from indodax_ai_bot.m05_market_advisory import queue_scanner_owner_advisory
+        first = self.market_cycle()
+        self.assertEqual(first.owner_advisory["queued"], 1)
+        later = public_cohort(closed_epoch=CLOSED + 360)
+        later["provisional_market_evidence"][0][
+            "public_quote_observed_epoch"] = NOW + 355
+        same = queue_scanner_owner_advisory(
+            bulk=later, ai_shadow=None, owner=self.ledger,
+            now_epoch=NOW + 360)
+        self.assertEqual(same["queued"], 0)
+        self.assertEqual(same["diagnostics"],
+                         ["M05_ADVISORY_SAME_SETUP_COOLDOWN"])
+        self.assertIsNone(same["owner_final_decision"])
+        changed = public_cohort(closed_epoch=CLOSED + 420)
+        changed["provisional_market_evidence"][0][
+            "public_quote_observed_epoch"] = NOW + 415
+        changed["provisional_market_evidence"][0]["scalp_setup_stage"] = {
+            "stage": "BREAKOUT_CONTINUATION_WATCH", "trade_authorized": False,
+        }
+        changed["eligible_cohort"]["provisional_quality_reviews"][0][
+            "scalp_setup_stage"] = {
+                "stage": "BREAKOUT_CONTINUATION_WATCH",
+                "trade_authorized": False,
+            }
+        fresh = queue_scanner_owner_advisory(
+            bulk=changed, ai_shadow=None, owner=self.ledger,
+            now_epoch=NOW + 420)
+        self.assertEqual(fresh["queued"], 1)
+        self.assertFalse(fresh["execution_allowed"])
+        self.assertEqual(
+            self.ledger.status(user_id=OWNER, chat_id=OWNER)[
+                "pending_shadow_proposals"], 2,
         )
 
 
