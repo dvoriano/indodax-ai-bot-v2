@@ -1,0 +1,328 @@
+"""Fast M05 Telegram longpoll against ORIGINAL owner ledger and poller.
+
+No real Telegram, token, paid AI, exchange HTTP, systemd or LIVE order.
+Tests run both `python -m unittest discover -s tests` and `tests.*`.
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+from indodax_ai_bot.config import ConfigurationError
+from indodax_ai_bot.owner_control import OwnerDecisionLedger
+from indodax_ai_bot.telegram_bot_api import (
+    TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError,
+)
+from indodax_ai_bot.telegram_dedicated_inbound import (
+    dedicated_owner_fast_loop_nonlive, dedicated_poller_lock,
+)
+from indodax_ai_bot.telegram_service_tick import service_fast_loop_nonlive
+
+OWNER = 45912007
+BOT = 9241907991
+TOKEN = str(BOT) + ":" + "A" * 30
+NOW = int(time.time())
+
+
+class M05OriginalFastLongpollTests(unittest.TestCase):
+    def setUp(self):
+        t = tempfile.TemporaryDirectory(prefix="original-m05-fast-")
+        self.addCleanup(t.cleanup)
+        root = Path(t.name)
+        self.state = root / "state"
+        self.state.mkdir(mode=0o700)
+        self.state.chmod(0o700)
+        self.secrets = root / "secrets"
+        self.secrets.mkdir(mode=0o700)
+        self.secrets.chmod(0o700)
+        self.db = self.state / "owner.sqlite3"
+        self.owner = OwnerDecisionLedger(self.db, owner_user_id=OWNER)
+        self.db.chmod(0o600)
+        self.key_file = self.secrets / "token"
+        self.key_file.write_text(TOKEN + "\n", encoding="ascii")
+        self.key_file.chmod(0o600)
+        self.lock = str(self.db) + ".dedicated-poller.lock"
+        self.env = {
+            "INDODAX_TRADING_ENABLED": "NO",
+            "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+            "INDODAX_EXECUTION_MODE": "DRY_RUN",
+            "M05_TELEGRAM_TICK_GO": "YES",
+            "M05_TELEGRAM_NETWORK_GO": "YES",
+            "M05_TELEGRAM_DEDICATED_GO": "YES",
+            "M05_TELEGRAM_FAST_LONGPOLL_GO": "YES",
+            "M05_TELEGRAM_DEDICATED_BOT_ID": str(BOT),
+            "M05_TELEGRAM_OWNER_ID": str(OWNER),
+            "M05_TELEGRAM_OWNER_DB": str(self.db),
+            "M05_TELEGRAM_TOKEN_FILE": str(self.key_file),
+        }
+        self.calls = []
+        self.sent = []
+        self.mode_button = None
+        self.bot_api = TelegramBotApiClient(
+            token=TOKEN, transport=self.transport,
+            timeout_seconds=9,
+        )
+
+    def data(self, method, payload):
+        self.calls.append((method, dict(payload)))
+        if method == "getMe":
+            return {"id": BOT, "is_bot": True, "username": "pitidenbot"}
+        if method == "getWebhookInfo":
+            return {"url": "", "pending_update_count": 0}
+        if method == "getUpdates":
+            self.assertEqual(payload["timeout"], 2)
+            offset = payload["offset"]
+            if offset <= 1:
+                return [{
+                    "update_id": 1,
+                    "message": {
+                        "from": {"id": OWNER},
+                        "chat": {"id": OWNER, "type": "private"},
+                        "date": NOW, "text": "/kontrol",
+                    },
+                }]
+            if offset == 2 and self.mode_button is not None:
+                return [{
+                    "update_id": 2,
+                    "callback_query": {
+                        "id": "fast-choice-auto",
+                        "from": {"id": OWNER},
+                        "data": self.mode_button,
+                        "message": {
+                            "message_id": 501,
+                            "date": NOW,
+                            "from": {"id": BOT, "is_bot": True},
+                            "chat": {"id": OWNER, "type": "private"},
+                        },
+                    },
+                }]
+            if offset == 3:
+                return [{
+                    "update_id": 3,
+                    "message": {
+                        "from": {"id": OWNER},
+                        "chat": {"id": OWNER, "type": "private"},
+                        "date": NOW, "text": "/status",
+                    },
+                }]
+            return []
+        if method == "sendMessage":
+            self.sent.append(dict(payload))
+            if "reply_markup" in payload:
+                self.mode_button = payload["reply_markup"][
+                    "inline_keyboard"][0][1]["callback_data"]
+                return {"message_id": 501,
+                        "chat": {"id": OWNER, "type": "private"}}
+            return {"message_id": 501 + len(self.sent),
+                    "chat": {"id": OWNER, "type": "private"}}
+        if method in ("answerCallbackQuery", "editMessageReplyMarkup"):
+            return True
+        raise AssertionError("UNKNOWN_FAKE_BOT_METHOD")
+
+    def transport(self, method, payload, _timeout):
+        return {"ok": True, "result": self.data(method, payload)}
+
+    def test_existing_owner_poller_wakes_on_update_then_reply_same_batch(self):
+        report = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=3, wait_seconds=2,
+        )
+        self.assertEqual(report["status"], "M05_FAST_LOOP_EXITED_NONLIVE")
+        self.assertEqual(report["batches"], 3)
+        self.assertEqual(report["handled"], 3)
+        self.assertEqual(report["next_offset"], 4)
+        self.assertFalse(report["execution_allowed"])
+        self.assertFalse(report["order_sent"])
+        self.assertEqual(self.owner.status(
+            user_id=OWNER, chat_id=OWNER)["owner_mode"], "AUTO")
+        self.assertEqual([
+            method for method, _ in self.calls
+            if method == "getUpdates"], ["getUpdates"] * 3)
+        self.assertTrue(all(
+            payload["timeout"] == 2 for method, payload in self.calls
+            if method == "getUpdates"
+        ))
+        self.assertEqual([
+            method for method, _ in self.calls
+            if method == "getMe"], ["getMe"])
+        self.assertIn("answerCallbackQuery",
+                      [method for method, _ in self.calls])
+        self.assertEqual(len(self.sent), 3)
+        self.assertNotIn(TOKEN, str(report))
+        self.assertTrue(all("order" not in method.lower()
+                            for method, _ in self.calls))
+
+    def test_fast_loop_reuses_cursor_after_restart_no_double_reply(self):
+        first = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=3,
+        )
+        self.assertEqual(first["handled"], 3)
+        self.calls.clear()
+        self.sent.clear()
+        second = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api,
+            ledger=OwnerDecisionLedger(self.db, owner_user_id=OWNER),
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=2,
+        )
+        self.assertEqual(second["handled"], 0)
+        self.assertEqual(second["next_offset"], 4)
+        self.assertEqual(self.sent, [])
+
+    def test_only_one_same_bot_consumer_holds_original_lock(self):
+        with dedicated_poller_lock(self.lock):
+            with self.assertRaisesRegex(
+                TelegramTransportError, "ALREADY_RUNNING"
+            ):
+                dedicated_owner_fast_loop_nonlive(
+                    api=self.bot_api, ledger=self.owner,
+                    expected_bot_id=BOT, lock_path=self.lock,
+                    max_batches=1,
+                )
+        self.assertEqual(self.calls, [])
+
+    def test_fast_go_and_trading_off_required_before_network(self):
+        with self.assertRaisesRegex(
+            ConfigurationError, "M05_FAST_LONGPOLL_GO_REQUIRED"
+        ):
+            service_fast_loop_nonlive(
+                env={**self.env, "M05_TELEGRAM_FAST_LONGPOLL_GO": "NO"},
+                max_batches=1,
+            )
+        for change in (
+            {"INDODAX_TRADING_ENABLED": "YES"},
+            {"INDODAX_EXECUTION_MODE": "LIVE"},
+            {"M05_TELEGRAM_NETWORK_GO": "NO"},
+        ):
+            with self.subTest(change=change), self.assertRaises(
+                    ConfigurationError):
+                service_fast_loop_nonlive(
+                    env={**self.env, **change}, max_batches=1,
+                )
+        self.assertEqual(self.calls, [])
+
+    def test_service_fast_entry_uses_existing_secure_source_and_worker(self):
+        with patch.object(
+            TelegramBotApiClient, "call",
+            side_effect=lambda method, payload: self.data(method, payload),
+        ):
+            report = service_fast_loop_nonlive(
+                env=self.env, max_batches=3,
+            )
+        self.assertEqual(report["handled"], 3)
+        self.assertEqual(self.owner.telegram_next_offset(), 4)
+        self.assertFalse(report["execution_allowed"])
+        self.assertEqual([
+            method for method, payload in self.calls if method == "getUpdates"
+        ], ["getUpdates"] * 3)
+        self.assertNotIn(TOKEN, json.dumps(report))
+
+    def test_bad_wait_and_batch_limit_fail_without_network(self):
+        for wait in (0, 6, True, "2"):
+            with self.subTest(wait=wait), self.assertRaises(ValueError):
+                dedicated_owner_fast_loop_nonlive(
+                    api=self.bot_api, ledger=self.owner,
+                    expected_bot_id=BOT, lock_path=self.lock,
+                    wait_seconds=wait, max_batches=1,
+                )
+        for count in (0, -1, True, 201):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                dedicated_owner_fast_loop_nonlive(
+                    api=self.bot_api, ledger=self.owner,
+                    expected_bot_id=BOT, lock_path=self.lock,
+                    max_batches=count,
+                )
+        self.assertEqual(self.calls, [])
+        poller = TelegramOwnerPoller(api=self.bot_api, ledger=self.owner)
+        with self.assertRaisesRegex(ValueError, "INVALID_LONGPOLL_WAIT"):
+            poller.poll_once(wait_seconds=-1)
+
+    def test_webhook_conflict_blocks_before_getupdates(self):
+        def hooked(method, payload, timeout):
+            self.calls.append((method, payload))
+            if method == "getMe":
+                row = {"id": BOT, "is_bot": True, "username": "pitidenbot"}
+            elif method == "getWebhookInfo":
+                row = {"url": "https://webhook.example.invalid/connected",
+                       "pending_update_count": 0}
+            else:
+                raise AssertionError("NO_GETUPDATES_WITH_WEBHOOK")
+            return {"ok": True, "result": row}
+        api = TelegramBotApiClient(token=TOKEN, transport=hooked)
+        with self.assertRaisesRegex(
+                TelegramTransportError, "WEBHOOK_PRESENT"
+        ):
+            dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner,
+                expected_bot_id=BOT, lock_path=self.lock, max_batches=1,
+            )
+        self.assertEqual([m for m, _ in self.calls],
+                         ["getMe", "getWebhookInfo"])
+
+    def test_stop_and_periodic_identity_rechecks(self):
+        stopped = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            stop_requested=lambda: True, max_batches=3,
+        )
+        self.assertEqual(stopped["batches"], 0)
+        self.assertEqual([m for m, _ in self.calls],
+                         ["getMe", "getWebhookInfo"])
+        self.calls.clear()
+        # A no-updates source tests 16 iterations without any fake owner
+        # commands. Periodic preflight after the 15th cycle must occur.
+        def empty(method, payload, timeout):
+            self.calls.append((method, payload))
+            if method == "getMe":
+                out = {"id": BOT, "is_bot": True, "username": "pitidenbot"}
+            elif method == "getWebhookInfo":
+                out = {"url": "", "pending_update_count": 0}
+            elif method == "getUpdates":
+                self.assertEqual(payload["timeout"], 2)
+                out = []
+            else:
+                raise AssertionError("UNEXPECTED_IDLE_API")
+            return {"ok": True, "result": out}
+        empty_api = TelegramBotApiClient(token=TOKEN, transport=empty)
+        report = dedicated_owner_fast_loop_nonlive(
+            api=empty_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=16,
+        )
+        self.assertEqual(report["handled"], 0)
+        self.assertEqual(
+            [m for m, _ in self.calls].count("getMe"), 2,
+        )
+        self.assertEqual(
+            [m for m, _ in self.calls].count("getUpdates"), 16,
+        )
+
+    def test_fast_optin_dropin_does_not_modify_legacy_timer(self):
+        root = Path(__file__).resolve().parents[1]
+        original = (root / "systemd/user"
+                    / "indodax-v2-m05-telegram.service").read_text()
+        timer = (root / "systemd/user"
+                 / "indodax-v2-m05-telegram.timer").read_text()
+        optin = (root / "systemd/user"
+                 / "indodax-v2-m05-telegram.service.d"
+                 / "fast-longpoll.conf").read_text()
+        self.assertIn("Type=oneshot", original)
+        self.assertIn("OnUnitInactiveSec=3s", timer)
+        self.assertIn("Type=simple", optin)
+        self.assertIn("M05_TELEGRAM_FAST_LONGPOLL_GO=YES", optin)
+        self.assertIn("Restart=on-failure", optin)
+        self.assertIn("is-active --quiet indodax-v2-m05-telegram.timer",
+                      optin)
+        self.assertNotIn(TOKEN, original + timer + optin)
+
+
+if __name__ == "__main__":
+    unittest.main()

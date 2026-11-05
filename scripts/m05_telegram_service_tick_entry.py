@@ -15,8 +15,16 @@ if not (REPO / "indodax_ai_bot" / "__init__.py").is_file():
 
 sys.path.insert(0, str(REPO))
 
-from indodax_ai_bot.telegram_service_tick import main  # noqa: E402
+from indodax_ai_bot.telegram_service_tick import (  # noqa: E402
+    main, fast_main,
+)
+import os  # noqa: E402
 
 
 if __name__ == "__main__":
+    # Same original isolated V2 service entrypoint and bot identity.
+    # Persistent long polling is a separately opted-in, reviewed systemd
+    # drop-in; without its explicit flag the old one-shot is unchanged.
+    if os.environ.get("M05_TELEGRAM_FAST_LONGPOLL_GO") == "YES":
+        raise SystemExit(fast_main())
     raise SystemExit(main())

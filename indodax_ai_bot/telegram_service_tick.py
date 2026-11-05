@@ -19,6 +19,7 @@ from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import TelegramBotApiClient, TelegramTransportError, TOKEN_RE
 from .telegram_dedicated_inbound import (
     LEGACY_CAIPITI_BOT_ID, dedicated_owner_poll_once,
+    dedicated_owner_fast_loop_nonlive,
 )
 
 
@@ -117,8 +118,10 @@ def _existing_owner_ledger(db_path: Path, owner_id: int) -> OwnerDecisionLedger:
     return OwnerDecisionLedger(db_path, owner_user_id=owner_id)
 
 
-def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]:
-    cfg = os.environ if env is None else env
+def _prepare_tick_runtime(
+        cfg: Mapping[str, str], *, client_timeout_seconds: float,
+) -> tuple[TelegramBotApiClient, OwnerDecisionLedger, int, Path, Any]:
+    """Shared original M05 auth and owner-safe source setup for both modes."""
     Settings.from_env(cfg).require_m01_safety()
     for gate in (
         "M05_TELEGRAM_TICK_GO", "M05_TELEGRAM_NETWORK_GO",
@@ -202,7 +205,16 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
         on_click = _nonlive_owner_click
     token = _token_from_file(token_path, bot_id)
     client = TelegramBotApiClient(
-        token=token, allow_network=True, timeout_seconds=6,
+        token=token, allow_network=True,
+        timeout_seconds=client_timeout_seconds,
+    )
+    return client, ledger, bot_id, state_db, on_click
+
+
+def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    cfg = os.environ if env is None else env
+    client, ledger, bot_id, state_db, on_click = _prepare_tick_runtime(
+        cfg, client_timeout_seconds=6,
     )
     outcome = dedicated_owner_poll_once(
         api=client, ledger=ledger, expected_bot_id=bot_id,
@@ -220,6 +232,60 @@ def service_tick_once(*, env: Mapping[str, str] | None = None) -> dict[str, Any]
         "execution_allowed": False,
         "final_decision": None,
     }
+
+
+def service_fast_loop_nonlive(
+        *, env: Mapping[str, str] | None = None,
+        max_batches: int | None = None, stop_requested=None,
+        heartbeat=None) -> dict[str, Any]:
+    """Explicit opt-in persistent low-latency owner Telegram receiver.
+
+    The old one-shot service and the installed timer remain unchanged
+    unless the owner *separately* deploys the reviewed systemd drop-in
+    after disabling the original M05 timer. Same bot ID, same cursor,
+    same SQLite lock, same M05 commands, same M07 NONLIVE callback.
+    """
+    cfg = os.environ if env is None else env
+    if cfg.get("M05_TELEGRAM_FAST_LONGPOLL_GO") != "YES":
+        raise ConfigurationError("M05_FAST_LONGPOLL_GO_REQUIRED")
+    client, ledger, bot_id, state_db, on_click = _prepare_tick_runtime(
+        cfg, client_timeout_seconds=9,
+    )
+    return dedicated_owner_fast_loop_nonlive(
+        api=client, ledger=ledger, expected_bot_id=bot_id,
+        lock_path=str(state_db) + ".dedicated-poller.lock",
+        on_manual_buy_preview_nonlive=on_click,
+        wait_seconds=2,
+        max_batches=max_batches, stop_requested=stop_requested,
+        heartbeat=heartbeat,
+    )
+
+
+def fast_main() -> int:
+    """The sole alternative ExecStart for the ORIGINAL V2 M05 service."""
+    import signal
+    stopping = False
+
+    def _stop(_signum, _frame) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        report = service_fast_loop_nonlive(
+            stop_requested=lambda: stopping,
+            heartbeat=lambda row: print(
+                json.dumps(row, sort_keys=True), flush=True),
+        )
+    except (ConfigurationError, TelegramTransportError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    except (OSError, sqlite3.Error):
+        print("M05_FAST_LONGPOLL_LOCAL_ERROR", file=sys.stderr)
+        return 2
+    print(json.dumps(report, sort_keys=True), flush=True)
+    return 0
 
 
 def main() -> int:

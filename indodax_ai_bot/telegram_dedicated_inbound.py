@@ -157,6 +157,104 @@ def _send_one_manual_trade_preview(
     return {"delivery": "SENT_OWNER_PRIVATE_REVIEW_ONLY", "messages_sent": 1}
 
 
+def dedicated_owner_fast_loop_nonlive(
+    *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
+    expected_bot_id: int, lock_path: str | Path,
+    on_manual_buy_preview_nonlive=None,
+    stop_requested=None, max_batches: int | None = None,
+    wait_seconds: int = 2,
+    heartbeat=None,
+) -> dict[str, Any]:
+    """Single original owner poller/ledger, always waiting at Telegram.
+
+    A *separate explicitly opted-in* service process owns the EXISTING
+    dedicated-poller lock continuously. The old M05 3-second timer MUST
+    be disabled before deployment. Per-update audit/offset, delivery claims
+    and callback authorization are unchanged. No background thread, new
+    Telegram bot, exchange order, paid AI or competing SQLite owner.
+    """
+    if (not isinstance(api, TelegramBotApiClient)
+            or not isinstance(ledger, OwnerDecisionLedger)
+            or type(expected_bot_id) is not int or expected_bot_id <= 0
+            or expected_bot_id == LEGACY_CAIPITI_BOT_ID):
+        raise TelegramTransportError("M05_FAST_LOOP_DEDICATED_IDENTITY_INVALID")
+    if type(wait_seconds) is not int or not 1 <= wait_seconds <= 5:
+        raise ValueError("M05_FAST_LOOP_WAIT_INVALID")
+    if (max_batches is not None
+            and (type(max_batches) is not int
+                 or not 1 <= max_batches <= 200)):
+        raise ValueError("M05_FAST_LOOP_BATCH_LIMIT_INVALID")
+    if stop_requested is not None and not callable(stop_requested):
+        raise ValueError("M05_FAST_LOOP_STOP_HOOK_INVALID")
+    if heartbeat is not None and not callable(heartbeat):
+        raise ValueError("M05_FAST_LOOP_HEARTBEAT_INVALID")
+    batches = handled = ignored = notices = 0
+    # No new network behavior unless owner GO was granted upstream.
+    with dedicated_poller_lock(lock_path):
+        def _preflight() -> None:
+            result = inspect_telegram_readonly(
+                api, expected_bot_id=expected_bot_id,
+            )
+            if result.get("status") == "WEBHOOK_PRESENT_POLLING_BLOCKED":
+                raise TelegramTransportError("M05_DEDICATED_WEBHOOK_PRESENT")
+            if result.get("status") != (
+                    "READONLY_PREFLIGHT_OK_POLLING_NOT_AUTHORIZED"):
+                raise TelegramTransportError("M05_DEDICATED_PREFLIGHT_UNSAFE")
+
+        _preflight()
+        poller = TelegramOwnerPoller(
+            api=api, ledger=ledger, expected_bot_id=expected_bot_id,
+            on_manual_buy_preview_nonlive=on_manual_buy_preview_nonlive,
+        )
+        while True:
+            if stop_requested is not None and stop_requested():
+                break
+            # Recheck bot identity and webhook periodically, not on
+            # every owner press. Upstream getUpdates also rejects a webhook.
+            if batches > 0 and batches % 15 == 0:
+                _preflight()
+            result = poller.poll_once(limit=10, wait_seconds=wait_seconds)
+            if (result.get("execution_allowed") is not False
+                    or result.get("final_decision") is not None):
+                raise TelegramTransportError("M05_FAST_LOOP_EXECUTOR_CHANGED")
+            # Flush the same original owner outboxes on each wakeup. During
+            # idle periods getUpdates returns after <= wait_seconds.
+            outbound = _send_one_queued_market_advisory(
+                api=api, ledger=ledger,
+            )
+            manual_preview = (
+                {"delivery": "DEFERRED_ONE_OWNER_CARD_PER_TICK",
+                 "messages_sent": 0}
+                if outbound["messages_sent"] != 0
+                else _send_one_manual_trade_preview(api=api, ledger=ledger)
+            )
+            batches += 1
+            handled += result["handled"]
+            ignored += result["ignored"]
+            notices += (outbound["messages_sent"]
+                        + manual_preview["messages_sent"])
+            if heartbeat is not None and batches % 10 == 0:
+                heartbeat({
+                    "status": "M05_FAST_LOOP_HEARTBEAT_NONLIVE",
+                    "batches": batches, "handled": handled,
+                    "ignored": ignored, "outbound_sent": notices,
+                    "execution_allowed": False,
+                })
+            if max_batches is not None and batches >= max_batches:
+                break
+    return {
+        "status": "M05_FAST_LOOP_EXITED_NONLIVE",
+        "batches": batches, "handled": handled,
+        "ignored": ignored, "outbound_sent": notices,
+        "next_offset": ledger.telegram_next_offset(),
+        "single_original_poller": True,
+        "bot_identity_pinned_and_matched": True,
+        "owner_ledger_original": True,
+        "order_sent": False, "execution_allowed": False,
+        "final_decision": None,
+    }
+
+
 def dedicated_owner_poll_once(
     *, api: TelegramBotApiClient, ledger: OwnerDecisionLedger,
     expected_bot_id: int, lock_path: str | Path, limit: int = 10,
