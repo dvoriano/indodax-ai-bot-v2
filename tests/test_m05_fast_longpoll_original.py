@@ -319,6 +319,8 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         self.assertIn("Type=simple", optin)
         self.assertIn("M05_TELEGRAM_FAST_LONGPOLL_GO=YES", optin)
         self.assertIn("Restart=on-failure", optin)
+        self.assertIn("[Install]", optin)
+        self.assertIn("WantedBy=default.target", optin)
         self.assertIn("is-active --quiet indodax-v2-m05-telegram.timer",
                       optin)
         self.assertNotIn(TOKEN, original + timer + optin)
