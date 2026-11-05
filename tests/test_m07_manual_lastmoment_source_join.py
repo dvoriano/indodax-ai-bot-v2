@@ -157,6 +157,14 @@ class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
         ):
             self.assertFalse(result[field])
         self.assertEqual(self.holds(), 1)
+        self.assertTrue(result["m08_original_buy_admission_checked"])
+        self.assertEqual(
+            result["m08_account_buy_source_status"],
+            "M08_EXCHANGE_BUY_NOT_OBSERVED",
+        )
+        self.assertEqual(result["m08_verified_bot_owned_lots"], 0)
+        self.assertEqual(result["m08_sellable_bot_owned_base_qty"], "0")
+        self.assertFalse(result["m08_position_manager_admitted"])
         self.assertFalse(OfficialV2OrderAdapter.contract_status()["network_allowed"])
         private.assert_not_called()
         paid.assert_not_called()
@@ -353,6 +361,103 @@ class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
         self.assertIsNone(self.owner.load_clicked_manual_buy_draft_nonlive(
             preview_id=self.preview_id, owner_user_id=OWNER,
             observed_epoch=NOW + 3))
+
+    def record_account_only_buy_for_clicked_draft(self):
+        from indodax_ai_bot.m07_private_order_readonly import M07ReadOnlyOrder
+        from indodax_ai_bot.m07_readonly_fills import M07VerifiedReadOnlyFills
+        from hashlib import sha256
+        gross = self.draft.price * self.draft.quantity
+        account_order = M07ReadOnlyOrder(
+            symbol=self.draft.symbol,
+            client_order_id=self.draft.client_order_id,
+            order_id=7734, full_order_id="TEST_ACCOUNT_ONLY_7734",
+            side="BUY", order_type="LIMIT", status="FILLED",
+            original_qty=self.draft.quantity,
+            executed_qty=self.draft.quantity,
+            created_ms=(NOW - 120) * 1000,
+        )
+        account_fills = M07VerifiedReadOnlyFills(
+            account_symbol=self.draft.symbol,
+            client_order_id=self.draft.client_order_id,
+            full_order_id="TEST_ACCOUNT_ONLY_7734",
+            side="BUY", executed_base=self.draft.quantity,
+            gross_quote=gross, total_commission_including_tax_quote=D("100"),
+            net_quote=gross + D("100"),
+            count=1,
+            sha256=sha256(b"account-only-not-bot-owned").hexdigest(),
+        )
+        self.journal.record_m07_authenticated_readonly_order_status(
+            account_fingerprint=ACCOUNT_FP, order=account_order,
+            observed_ms=NOW * 1000,
+        )
+        self.journal.record_m07_exchange_readonly_fills(
+            account_fingerprint=ACCOUNT_FP, fills=account_fills,
+            observed_ms=NOW * 1000 + 1,
+        )
+        return gross
+
+    def test_m08_same_journal_account_fill_is_cost_reference_never_bot_lot(self):
+        self.prepare()
+        gross = self.record_account_only_buy_for_clicked_draft()
+        result = self.review()
+        self.assertEqual(
+            result["status"],
+            "M07_MANUAL_LASTMOMENT_REFERENCE_HOLD_NONLIVE_ONLY",
+        )
+        self.assertEqual(
+            result["m08_account_buy_source_status"],
+            "M08_ACCOUNT_BUY_COST_BASIS_ONLY_NOT_BOT_OWNED",
+        )
+        self.assertTrue(result["m08_account_fill_cost_basis_reference_only"])
+        self.assertEqual(result["m08_sellable_bot_owned_base_qty"], "0")
+        self.assertEqual(result["m08_verified_bot_owned_lots"], 0)
+        self.assertEqual(self.holds(), 1)
+        account = self.app.review_m08_buy_position_admission_readonly(
+            account_fingerprint=ACCOUNT_FP,
+            symbol=self.draft.symbol,
+            client_order_id=self.draft.client_order_id,
+        )
+        self.assertEqual(
+            D(account["account_buy_cost_basis_idr_reference"]),
+            gross + D("100"),
+        )
+        self.assertFalse(account["bot_owned_buy_fill_proven"])
+        self.assertFalse(account["position_manager_admission"])
+        self.assertFalse(account["execution_allowed"])
+        restarted = DecisionJournal(self.journal._db_path)
+        self.assertEqual(
+            restarted.m07_offline_intent_summary()[
+                "manual_sender_nonlive_holds"], 1,
+        )
+
+    def test_m08_corrupt_account_fee_source_blocks_before_m07_hold(self):
+        self.prepare()
+        self.record_account_only_buy_for_clicked_draft()
+        with sqlite3.connect(self.journal._db_path) as db:
+            db.execute(
+                "UPDATE m07_exchange_readonly_fill_summaries "
+                "SET net_quote_idr='1' WHERE client_order_id=?",
+                (self.draft.client_order_id,),
+            )
+        denied = self.review()
+        self.assertEqual(
+            denied["status"],
+            "M07_MANUAL_LASTMOMENT_M08_SOURCE_CONFLICT",
+        )
+        self.assertTrue(denied["owner_button_source_bound"])
+        self.assert_blocked_without_new_hold(denied)
+        self.assertEqual(self.journal.m07_offline_intent_summary()[
+            "manual_sender_nonlive_holds"], 0)
+
+    def test_m08_foreign_account_fills_do_not_count_as_owner_position(self):
+        self.prepare()
+        self.record_account_only_buy_for_clicked_draft()
+        result = self.review(account_fingerprint="b" * 64)
+        self.assertEqual(
+            result["status"], "M07_MANUAL_LASTMOMENT_OWNER_PRESS_DENIED",
+        )
+        self.assert_blocked_without_new_hold(result)
+
 
 
 if __name__ == "__main__":
