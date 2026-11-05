@@ -228,5 +228,132 @@ class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
         self.assertFalse(again["execution_allowed"])
 
 
+    def test_original_poller_click_refreshes_same_pair_and_stages_hold(self):
+        from indodax_ai_bot.deep_analysis import DeepScan
+        from tests.test_m03g_bulk import fake_screen
+        self.prepare(click=False)
+        with sqlite3.connect(self.owner.db_path) as db:
+            token = db.execute(
+                "SELECT confirm_callback FROM m05_manual_trade_previews"
+            ).fetchone()[0]
+        candidate = DeepCandidate(
+            "btc_idr", 75, "PUBLIC_EVIDENCE_UNATTESTED", None,
+            m07_same_candidate_public_preflight=self.public,
+        )
+        same = {
+            "status": "ALIGNED_PUBLIC_UNATTESTED",
+            "provisional_watchlist_preview": ["btc_idr"],
+            "provisional_quality_reviews": [
+                {"pair": "btc_idr",
+                 "clear_of_provisional_cautions": True}
+            ],
+        }
+        deep = DeepScan(40, 20, (candidate,), 1, same_window=same)
+        calls = []
+        update = {
+            "update_id": 4,
+            "callback_query": {
+                "id": "m07-click-id-4", "from": {"id": OWNER},
+                "data": token,
+                "message": {
+                    "message_id": 88, "date": NOW,
+                    "from": {"id": BOT_ID, "is_bot": True},
+                    "chat": {"id": OWNER, "type": "private"},
+                },
+            },
+        }
+        def telegram(method, payload, timeout):
+            calls.append(method)
+            if method == "getUpdates":
+                result = [update] if payload["offset"] <= 4 else []
+            elif method in ("answerCallbackQuery", "editMessageReplyMarkup"):
+                result = True
+            elif method == "sendMessage":
+                result = {"message_id": 89,
+                          "chat": {"id": OWNER, "type": "private"}}
+            else:
+                raise AssertionError("NO_UNEXPECTED_TELEGRAM_METHOD")
+            return {"ok": True, "result": result}
+        api = TelegramBotApiClient(
+            token=str(BOT_ID) + ":" + "A" * 30, transport=telegram,
+        )
+        nonlive = []
+        def on_click(preview_id, epoch):
+            nonlive.append(preview_id)
+            return self.app.recheck_m07_clicked_manual_buy_from_sources_nonlive_once(
+                owner_user_id=OWNER, preview_id=preview_id,
+                api_key="TEST_VIEWONLY", secret_key="TEST_VIEWONLY",
+                funding=self.funding,
+            )
+        poller = TelegramOwnerPoller(
+            api=api, ledger=self.owner, clock=lambda: NOW + 1,
+            expected_bot_id=BOT_ID,
+            on_manual_buy_preview_nonlive=on_click,
+        )
+        with (
+            patch.object(self.app, "_scan_with_early_momentum",
+                         return_value=fake_screen()) as scanned,
+            patch("indodax_ai_bot.orchestrator.deep_scan",
+                  return_value=deep) as market,
+            patch.object(self.app, "inspect_m06_idr_budget_readonly_once",
+                         return_value=self.account) as funds,
+            patch("indodax_ai_bot.orchestrator.time.time",
+                  return_value=NOW + 1),
+        ):
+            first = poller.poll_once()
+            second = poller.poll_once()
+        self.assertEqual(first["handled"], 1)
+        self.assertEqual(second["handled"], 0)
+        self.assertEqual(nonlive, [self.preview_id])
+        self.assertEqual(self.holds(), 1)
+        self.assertEqual(scanned.call_count, 1)
+        self.assertEqual(market.call_count, 1)
+        self.assertEqual(funds.call_count, 1)
+        self.assertIn("answerCallbackQuery", calls)
+        self.assertEqual(self.owner.telegram_next_offset(), 5)
+        self.assertFalse(first["execution_allowed"])
+        self.assertFalse(OfficialV2OrderAdapter.contract_status()["network_allowed"])
+
+    def test_no_click_no_refresh_and_reject_cannot_start_m07(self):
+        self.prepare(click=False)
+        self.assertIsNone(self.owner.load_clicked_manual_buy_draft_nonlive(
+            preview_id=self.preview_id, owner_user_id=OWNER,
+            observed_epoch=NOW))
+        self.assertIsNone(self.owner.load_clicked_manual_buy_draft_nonlive(
+            preview_id=self.preview_id, owner_user_id=OWNER + 1,
+            observed_epoch=NOW))
+        with patch.object(
+            self.app, "_scan_with_early_momentum",
+            side_effect=AssertionError("SHOULD_NOT_SCAN"),
+        ) as scanned:
+            outcome = self.app.recheck_m07_clicked_manual_buy_from_sources_nonlive_once(
+                owner_user_id=OWNER, preview_id=self.preview_id,
+                api_key="test", secret_key="test", funding=self.funding,
+            )
+        self.assertEqual(outcome["status"],
+                         "M07_CLICK_NOT_BOUND_TO_OWNER_DRAFT")
+        scanned.assert_not_called()
+        self.assertEqual(self.holds(), 0)
+
+    def test_dedicated_owner_press_cannot_upgrade_synthetic_source_to_live(self):
+        self.prepare(click=True)
+        press = self.owner.load_clicked_manual_buy_draft_nonlive(
+            preview_id=self.preview_id, owner_user_id=OWNER,
+            observed_epoch=NOW + 1)
+        self.assertIsNotNone(press)
+        self.assertEqual(press["draft"], self.draft)
+        self.assertFalse(press["order_sent"])
+        self.assertIsNone(self.owner.load_clicked_manual_buy_draft_nonlive(
+            preview_id=self.preview_id, owner_user_id=OWNER,
+            observed_epoch=NOW + 91))
+        self.owner.switch_mode(
+            user_id=OWNER, chat_id=OWNER, mode="AUTO",
+            now_epoch=NOW + 2,
+        )
+        self.assertIsNone(self.owner.load_clicked_manual_buy_draft_nonlive(
+            preview_id=self.preview_id, owner_user_id=OWNER,
+            observed_epoch=NOW + 3))
+
+
 if __name__ == "__main__":
     unittest.main()
