@@ -80,3 +80,9 @@ jobs:
             tests.test_m08_original_exchange_buy_admission \
             tests.test_m05_owner_mode_inline \
             tests.test_m04_m05_telegram_ai_readiness
+      - name: Exact VPS M05 fast longpoll and old 3s timer compatibility
+        run: |
+          python -B -m unittest -q \
+            tests.test_m05_fast_longpoll_original \
+            tests.test_m05_owner_mode_inline \
+            tests.test_m05_telegram_service_tick
