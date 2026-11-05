@@ -64,8 +64,74 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             self.assertIn("Total penjualan (estimasi): Rp98.000", card)
             self.assertIn("Modal beli dialokasikan: Rp90.000", card)
             self.assertIn("Estimasi untung bersih: Rp8.000", card)
+            self.assertIn("ROI netto estimasi: 8%", card)
+            self.assertIn("Target SELL netto: T1 2% | T2 8% | T3 11%", card)
+            self.assertIn("Tier ROI tercapai: T2", card)
+            self.assertIn(
+                "Syarat profit normal (min. Rp10.000 DAN 2% netto): BELUM TERPENUHI",
+                card,
+            )
             self.assertNotIn("fee", card.lower())
             self.assertNotIn("komisi", card.lower())
+
+    def test_same_actual_buy_100k_and_sell_net_98k_is_loss_not_8k_profit(self):
+        # Regression: the owner reported that an unrelated 90k capital
+        # was mistakenly used with this 100k BUY in a prior illustration.
+        for mode in ("MANUAL", "AUTO"):
+            card = render_m05_trade_order_card(
+                draft("SELL"), mode=mode,
+                allocated_bot_owned_buy_cost_idr=D("100000"),
+                expected_net_sell_proceeds_idr=D("98000"),
+            )
+            self.assertIn("Modal beli dialokasikan: Rp100.000", card)
+            self.assertIn("Total penjualan (estimasi): Rp98.000", card)
+            self.assertIn("Estimasi rugi bersih: Rp2.000", card)
+            self.assertIn("ROI netto estimasi: -2%", card)
+            self.assertIn("Tier ROI tercapai: BELUM MENCAPAI T1", card)
+            self.assertIn("BELUM TERPENUHI", card)
+            self.assertNotIn("Estimasi untung bersih:", card)
+
+    def test_10k_and_two_percent_both_required_and_tiers_are_net(self):
+        # No strategy changes: target levels come from original
+        # ScalpingPolicy: T1=2%, T2=8%, T3=11%.
+        cases = (
+            ("102000", "Rp2.000", "2%", "T1", False),
+            ("108000", "Rp8.000", "8%", "T2", False),
+            ("110000", "Rp10.000", "10%", "T2", True),
+            ("111000", "Rp11.000", "11%", "T3", True),
+        )
+        for net, profit, roi, tier, allowed in cases:
+            with self.subTest(net=net):
+                # Set gross order price above the projected net proceeds.
+                gross = D(net) + D("1000")
+                card = render_m05_trade_order_card(
+                    draft("SELL", price=str(gross / D("4"))),
+                    mode="MANUAL",
+                    allocated_bot_owned_buy_cost_idr=D("100000"),
+                    expected_net_sell_proceeds_idr=D(net),
+                )
+                self.assertIn("Estimasi untung bersih: " + profit, card)
+                self.assertIn("ROI netto estimasi: " + roi, card)
+                self.assertIn("Tier ROI tercapai: " + tier, card)
+                self.assertIn(
+                    "Syarat profit normal (min. Rp10.000 DAN 2% netto): " +
+                    ("TERPENUHI" if allowed else "BELUM TERPENUHI"),
+                    card,
+                )
+                self.assertNotIn("fee", card.lower())
+
+    def test_high_capital_needs_2_percent_even_if_10k_net(self):
+        # A 1m capital position making 10k must still fail the 2% ROI gate.
+        card = render_m05_trade_order_card(
+            draft("SELL",price="255000",qty="4"),
+            mode="AUTO",
+            allocated_bot_owned_buy_cost_idr=D("1000000"),
+            expected_net_sell_proceeds_idr=D("1010000"),
+        )
+        self.assertIn("Estimasi untung bersih: Rp10.000", card)
+        self.assertIn("ROI netto estimasi: 1%", card)
+        self.assertIn("Tier ROI tercapai: BELUM MENCAPAI T1", card)
+        self.assertIn("BELUM TERPENUHI", card)
 
     def test_sell_loss_show_explicit_loss_not_positive_profit(self):
         card = render_m05_trade_order_card(
