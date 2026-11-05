@@ -22,12 +22,18 @@ class M03EgressAdmissionError(ValueError):
 
 _MAX_BYTES = 8192
 _MAX_AGE_SECONDS = 900
+# Explicit V2-only owner-confirmed NONLIVE pilot. This is an operator
+# declaration, not independent shared-IP telemetry or a trading permit.
+_MAX_NONLIVE_PILOT_SECONDS = 20 * 3600
+_V2_NONLIVE_SCOPE = "M03_NONLIVE_PUBLIC_PILOT"
+_V2_LOCAL_REST_CAP = 90
 _FIELDS = frozenset({
     "schema_version", "owner_approved_public_only",
     "all_shared_ip_consumers_accounted", "egress_public_ip",
     "external_consumer_ids", "external_peak_requests_rolling_60s",
     "issued_at_epoch", "expires_at_epoch",
 })
+_V2_FIELDS = _FIELDS | frozenset({"pilot_scope"})
 _CONSUMER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
@@ -68,13 +74,22 @@ class M03SharedEgressAdmission:
             finally:
                 os.close(fd)
             policy = json.loads(raw)
-            if not isinstance(policy, dict) or set(policy) != _FIELDS:
+            if not isinstance(policy, dict):
                 raise M03EgressAdmissionError("M03_EGRESS_POLICY_INVALID")
-            if (type(policy["schema_version"]) is not int
-                    or policy["schema_version"] != 1
-                    or policy["owner_approved_public_only"] is not True
+            version = policy.get("schema_version")
+            if (type(version) is not int or version not in (1, 2)
+                    or set(policy) != (_FIELDS if version == 1
+                                       else _V2_FIELDS)):
+                raise M03EgressAdmissionError("M03_EGRESS_POLICY_INVALID")
+            if (policy["owner_approved_public_only"] is not True
                     or policy["all_shared_ip_consumers_accounted"] is not True):
                 raise M03EgressAdmissionError("M03_EGRESS_UNACCOUNTED_PEERS")
+            if version == 2 and policy["pilot_scope"] != _V2_NONLIVE_SCOPE:
+                raise M03EgressAdmissionError("M03_EGRESS_PILOT_SCOPE_INVALID")
+            if version == 2 and (
+                    policy["external_consumer_ids"] != []
+                    or policy["external_peak_requests_rolling_60s"] != 0):
+                raise M03EgressAdmissionError("M03_EGRESS_PILOT_PEERS_PRESENT")
             ip = policy["egress_public_ip"]
             if not isinstance(ip, str) or not 1 <= len(ip) <= 45:
                 raise M03EgressAdmissionError("M03_EGRESS_POLICY_INVALID")
@@ -98,9 +113,10 @@ class M03SharedEgressAdmission:
             if (type(issued) is not int or type(expires) is not int
                     or issued > now or expires <= now
                     or issued <= 0 or expires <= issued
-                    or expires - issued > _MAX_AGE_SECONDS):
+                    or expires - issued > (_MAX_AGE_SECONDS if version == 1
+                                            else _MAX_NONLIVE_PILOT_SECONDS)):
                 raise M03EgressAdmissionError("M03_EGRESS_ATTESTATION_EXPIRED")
-            return 168 - used
+            return min(_V2_LOCAL_REST_CAP, 168 - used) if version == 2 else 168 - used
         except M03EgressAdmissionError:
             raise
         except (OSError, ValueError, TypeError, UnicodeError, OverflowError):
