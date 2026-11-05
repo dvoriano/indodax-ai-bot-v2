@@ -165,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Original M03/M06/M07 source-shaped 0600 local preview only; no private GET or order")
     group.add_argument("--m07-main-readonly-cycle-once", action="store_true",
                        help="One real M03 bulk scan + original two signed M06 View Only GET + hardlocked M07 sizing; no order")
+    parser.add_argument("--m07-owner-preview-m05", action="store_true",
+                        help="Opt-in original source-bound M07 one-cycle READ ONLY to existing M05 owner BUY PREVIEW, never an order")
     group.add_argument("--m07-limit-preflight-offline-once", action="store_true",
                        help="Original V2 LIMIT BUY pair/min-step/fee/general IDR scenario preflight, 0600 JSON fixture, no API/trade")
     group.add_argument("--m07-order-adapter-offline-once", action="store_true",
@@ -516,6 +518,15 @@ def main(argv: list[str] | None = None) -> int:
         if (args.m07_runtime_funding_file is not None
                 and not args.m07_main_readonly_cycle_once):
             raise ConfigurationError("M07_RUNTIME_FUNDING_ONLY_FOR_REAL_READONLY_CYCLE")
+        if args.m07_owner_preview_m05:
+            settings.require_m01_safety()
+            if (not args.m07_main_readonly_cycle_once
+                    or type(args.m05_shadow_db) is not str
+                    or not args.m05_shadow_db
+                    or type(args.m05_shadow_owner_id) is not int
+                    or args.m05_shadow_owner_id <= 0):
+                raise ConfigurationError(
+                    "M07_RUNTIME_M05_PREVIEW_REQUIRES_EXPLICIT_OWNER_SCOPE")
         if args.m07_readonly_m11_source_observation:
             settings.require_m01_safety()
             if not args.m07_main_readonly_cycle_once:
@@ -852,7 +863,9 @@ def main(argv: list[str] | None = None) -> int:
                 or args.m05_telegram_readonly_preflight_once
                 or args.m05_telegram_owner_safe_status_once
                 or (args.scheduled_public_scanner_once
-                    and args.m05_market_advisory_queue)):
+                    and args.m05_market_advisory_queue)
+                or (args.m07_main_readonly_cycle_once
+                    and args.m07_owner_preview_m05)):
             raise ConfigurationError("M05_SHADOW_ONLY_ON_MAINPATH")
         if ((args.m05_telegram_poll_once
              or args.m05_telegram_readonly_preflight_once
@@ -864,12 +877,21 @@ def main(argv: list[str] | None = None) -> int:
                 or (args.ws_db is not None
                     and Path(args.m05_shadow_db).resolve() == Path(args.ws_db).resolve())):
             raise ConfigurationError("M05_SHADOW_DB_MUST_BE_SEPARATE")
-        owner_control = (
-            OwnerDecisionLedger(
-                args.m05_shadow_db, owner_user_id=args.m05_shadow_owner_id,
+        if args.m07_owner_preview_m05:
+            # NEVER initialize a new owner DB for runtime preview. The same
+            # existing dedicated Telegram service owns this 0600 SQLite,
+            # its private owner identity and next update cursor.
+            from .telegram_service_tick import _existing_owner_ledger
+            owner_control = _existing_owner_ledger(
+                Path(args.m05_shadow_db), args.m05_shadow_owner_id,
             )
-            if args.m05_shadow_db is not None else None
-        )
+        else:
+            owner_control = (
+                OwnerDecisionLedger(
+                    args.m05_shadow_db, owner_user_id=args.m05_shadow_owner_id,
+                )
+                if args.m05_shadow_db is not None else None
+            )
         try:
             bulk_min_volume_idr = Decimal(args.bulk_min_volume_idr)
         except (InvalidOperation, ValueError, TypeError):
@@ -1367,6 +1389,9 @@ def main(argv: list[str] | None = None) -> int:
                     deep_limit=args.bulk_deep_limit,
                     include_m11_source_observation=(
                         args.m07_readonly_m11_source_observation),
+                    owner_preview_user_id=(
+                        args.m05_shadow_owner_id if
+                        args.m07_owner_preview_m05 else None),
                 )
             except (M07PreflightBlocked, M06ScopeDenied, ValueError,
                     OSError, ArithmeticError, TypeError, KeyError,

@@ -460,7 +460,8 @@ class DailyScalpingOrchestrator:
             ws_db_path: str | None = None,
             min_volume_idr: Decimal = Decimal("150000000"),
             deep_limit: int = 20,
-            include_m11_source_observation: bool = False) -> dict:
+            include_m11_source_observation: bool = False,
+            owner_preview_user_id: int | None = None) -> dict:
         """One ORIGINAL M03 bulk -> fresh M06 View Only -> M07 sizing.
 
         The M03 public scanner and M06 signed account reader are called here,
@@ -471,6 +472,20 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         if type(include_m11_source_observation) is not bool:
             raise ValueError("M11_M07_OBSERVATION_FLAG_INVALID")
+        if owner_preview_user_id is not None:
+            if (type(owner_preview_user_id) is not int
+                    or self._owner_control is None
+                    or owner_preview_user_id !=
+                        self._owner_control.owner_user_id):
+                raise ValueError("M07_RUNTIME_M05_OWNER_IDENTITY_REQUIRED")
+            state = self._owner_control.status(
+                user_id=owner_preview_user_id,
+                chat_id=owner_preview_user_id,
+                chat_type="private",
+            )
+            if (state.get("accepted") is not True
+                    or state.get("owner_mode") != "MANUAL"):
+                raise ValueError("M07_RUNTIME_M05_MANUAL_MODE_REQUIRED")
         required = {
             "requested_ticket_ceiling_idr",
             "new_floki_sell_rebuy_hold_idr",
@@ -682,6 +697,47 @@ class DailyScalpingOrchestrator:
             m06_idr_locked_observed=account.get("exchange_idr_locked_observed"),
             m07_main_sizing=sized,
         )
+        if owner_preview_user_id is not None:
+            # Dedicated M05 service/timer owns Telegram delivery, never this
+            # scanner. One original source-bound, quality-clean candidate
+            # + exact real View Only UID/key pseudonym may queue a no-order
+            # MANUAL preview. Caution-only ranked fallback is NOT qualified.
+            if not selected_quality_clean:
+                preview = {
+                    "status": "M07_RUNTIME_M05_CAUTION_ONLY_NO_PREVIEW",
+                    "owner_card_queued": False, "execution_allowed": False,
+                }
+            elif not ready_reference:
+                preview = {
+                    "status": "M07_RUNTIME_M05_SIZING_NOT_READY_NO_PREVIEW",
+                    "owner_card_queued": False, "execution_allowed": False,
+                }
+            else:
+                fingerprint = account.get("viewonly_key_uid_fingerprint")
+                if (type(fingerprint) is not str
+                        or re.fullmatch(r"[a-f0-9]{64}", fingerprint) is None):
+                    preview = {
+                        "status": "M07_RUNTIME_M05_UID_BINDING_NOT_VERIFIED",
+                        "owner_card_queued": False, "execution_allowed": False,
+                    }
+                else:
+                    # Client IDs stay deterministic per scan trace/pair/minute
+                    # and already have replay/duplicate checks in original
+                    # M05 ledger. No key/UID is embedded in any order ID.
+                    client_id = "m7p" + hashlib.sha256(
+                        (trace_id + ":" + selected["candidate_pair"] + ":"
+                         + str(selected["closed_1m_epoch"])).encode("utf-8")
+                    ).hexdigest()[:24]
+                    preview = self.queue_m07_same_source_main_buy_preview_nonlive(
+                        user_id=owner_preview_user_id,
+                        chat_id=owner_preview_user_id,
+                        account_fingerprint=fingerprint,
+                        client_order_id=client_id,
+                        public_candidate=selected,
+                        account_snapshot=account,
+                        funding=funding, now_epoch=int(time.time()),
+                    )
+            report["m07_owner_preview"] = preview
         if include_m11_source_observation:
             report["m11_sourcebound_risk_observation"] = (
                 self.observe_m11_m07_sourcebound_account_and_loss_readonly_once(

@@ -8,6 +8,7 @@ rebuy source completeness cannot be inferred from present ledger amounts.
 from __future__ import annotations
 
 from decimal import Decimal
+from hashlib import sha256
 import time
 
 from .m06_private_payloads import parse_account, M06PayloadError
@@ -68,6 +69,13 @@ def inspect_idr_budget_readonly_once(*, api_key: str, secret_key: str,
         "requests_completed": 2,
         "account_observed_epoch": int(time.time()),
         "view_only_permissions_verified": True,
+        # Account UID and API key are never emitted. This one-way local
+        # fingerprint matches existing M07 View Only order journal identity
+        # for a future manual reference card. It is NOT bot ownership or
+        # spendable capital proof, and is never a trade authorization.
+        "viewonly_key_uid_fingerprint": sha256(
+            (api_key + ":" + str(account.uid)).encode("utf-8")
+        ).hexdigest(),
         "exchange_idr_free_observed": str(account.free_idr),
         "exchange_idr_locked_observed": str(account.locked_idr),
         "all_pair_open_orders_observed": len(orders),
