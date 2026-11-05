@@ -101,6 +101,10 @@ def prepare_nonlive_pilot(
         ip = ip_reader().strip()
         if ip != old["egress_public_ip"] or not ipaddress.ip_address(ip).is_global:
             raise PilotDenied("M03_PUBLIC_EGRESS_IP_CHANGED")
+    except PilotDenied:
+        # Preserve the precise fixed reason for IP drift; PilotDenied is
+        # a ValueError subclass and must not be swallowed as bad JSON.
+        raise
     except (ValueError, TypeError, KeyError, UnicodeError):
         raise PilotDenied("M03_EXISTING_OWNER_DECLARATION_INVALID") from None
 
