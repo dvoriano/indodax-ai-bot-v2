@@ -63,12 +63,13 @@ class M03FPublicQualityReviewTests(unittest.TestCase):
         self.assertFalse(r["g2_candidate_authorized"])
         self.assertFalse(r["trade_authorized"])
 
-    def test_aligned_public_two_pair_watchlist_is_only_preview(self):
+    def test_aligned_public_without_setup_remains_diagnostic_not_owner_preview(self):
         with patch("indodax_ai_bot.deep_analysis._rsi14", return_value=Decimal("60")):
             report = deep_scan(MarketFixture(), screening(), require_btc=True).summary()
         gate = report["same_window"]
         self.assertEqual(gate["status"], "ALIGNED_PUBLIC_UNATTESTED")
-        self.assertEqual(gate["provisional_watchlist_preview"], ["btc_idr", "eth_idr"])
+        self.assertEqual(gate["provisional_watchlist_preview"], [])
+        self.assertEqual(len(gate["ranked_same_window_diagnostics"]), 2)
         self.assertEqual(len(gate["provisional_quality_reviews"]), 2)
         self.assertFalse(gate["watchlist_is_trade_signal"])
         self.assertFalse(gate["provisional_thresholds_backtested"])
