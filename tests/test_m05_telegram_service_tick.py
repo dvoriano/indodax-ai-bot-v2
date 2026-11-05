@@ -290,5 +290,110 @@ class M05SystemdTickTests(unittest.TestCase):
         self.assertNotIn("ExecStart=python", unit)
 
 
+    def test_m07_optin_missing_secure_sources_fails_before_bot_http(self):
+        with self.assertRaisesRegex(
+                ConfigurationError, "M05_TICK_INVALID_PRIVATE_PATH"):
+            self.run_tick({"M07_MANUAL_RECHECK_NONLIVE_GO": "YES"})
+        self.assertEqual(self.calls, [])
+
+    def test_m07_optin_uses_original_service_callback_only_for_owner_buy(self):
+        import json
+        from decimal import Decimal
+        from indodax_ai_bot.journal import DecisionJournal
+        from indodax_ai_bot.m07_order_adapter import M07OrderDraft
+        from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
+        now = int(time.time())
+        decisions = self.state / "decisions.sqlite3"
+        DecisionJournal(decisions)
+        decisions.chmod(0o600)
+        funding_file = self.secrets / "funding.json"
+        funding_file.write_text(json.dumps({
+            "requested_ticket_ceiling_idr": "100000",
+            "new_floki_sell_rebuy_hold_idr": "0",
+            "new_pepe_sell_rebuy_hold_idr": "0",
+            "commitments_not_locked_idr": "0",
+            "max_spread_bps": "150",
+        }))
+        funding_file.chmod(0o600)
+        key_file = self.secrets / "viewonly.json"
+        key_file.write_text(json.dumps({
+            "api_key": "viewonly_test", "secret_key": "viewonly_test",
+        }))
+        key_file.chmod(0o600)
+        draft = M07OrderDraft(
+            symbol="BTCIDR", side="BUY", order_type="LIMIT",
+            client_order_id="tick_owner_click_test", price=Decimal("100"),
+            quantity=Decimal("100"),
+        )
+        row = self.ledger.queue_manual_trade_preview_offline(
+            user_id=OWNER, chat_id=OWNER, draft=draft,
+            account_fingerprint="a" * 64, now_epoch=now,
+        )
+        self.assertTrue(row["accepted"])
+        card = self.ledger.claim_manual_trade_preview_delivery(
+            now_epoch=now)
+        self.ledger.confirm_manual_trade_preview_delivery(
+            preview_id=row["preview_id"], message_id=88,
+        )
+        update = {
+            "update_id": 77,
+            "callback_query": {
+                "id": "service-m07-click", "from": {"id": OWNER},
+                "data": card["confirm_callback"],
+                "message": {
+                    "message_id": 88, "date": now,
+                    "from": {"id": BOT_ID, "is_bot": True},
+                    "chat": {"id": OWNER, "type": "private"},
+                },
+            },
+        }
+        def fake_api(method, payload):
+            self.calls.append((method, dict(payload)))
+            if method == "getMe":
+                return {"id": BOT_ID, "is_bot": True, "username": "pitidenbot"}
+            if method == "getWebhookInfo":
+                return {"url": "", "pending_update_count": 0}
+            if method == "getUpdates":
+                return [update] if payload["offset"] <= 77 else []
+            if method in ("answerCallbackQuery", "editMessageReplyMarkup"):
+                return True
+            if method == "sendMessage":
+                return {"message_id": 101,
+                        "chat": {"id": OWNER, "type": "private"}}
+            raise AssertionError("UNEXPECTED_TELEGRAM")
+        source_calls = []
+        def fake_nonlive(self_app, **kwargs):
+            source_calls.append(kwargs)
+            return {"status": "M07_CLICK_SETUP_NO_LONGER_QUALIFIED",
+                    "order_sent": False, "execution_allowed": False}
+        cfg = {
+            "M07_MANUAL_RECHECK_NONLIVE_GO": "YES",
+            "M07_MANUAL_RECHECK_DECISION_DB": str(decisions),
+            "M07_MANUAL_RECHECK_FUNDING_FILE": str(funding_file),
+            "M07_MANUAL_RECHECK_VIEWONLY_KEY_FILE": str(key_file),
+        }
+        with patch.object(DailyScalpingOrchestrator,
+                          "recheck_m07_clicked_manual_buy_from_sources_nonlive_once",
+                          autospec=True, side_effect=fake_nonlive):
+            result = self.run_tick(cfg, fake=fake_api)
+            repeated = self.run_tick(cfg, fake=fake_api)
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(repeated["processed"], 0)
+        self.assertEqual(len(source_calls), 1)
+        self.assertEqual(source_calls[0]["preview_id"], row["preview_id"])
+        self.assertEqual(source_calls[0]["owner_user_id"], OWNER)
+        self.assertEqual(source_calls[0]["api_key"], "viewonly_test")
+        self.assertEqual(source_calls[0]["funding"]["max_spread_bps"],
+                         Decimal("150"))
+        self.assertFalse(result["execution_allowed"])
+        self.assertEqual(self.ledger.telegram_next_offset(), 78)
+        self.assertNotIn("viewonly_test", str(result))
+        with sqlite3.connect(decisions) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM m07_manual_sender_nonlive"
+                           ).fetchone()[0], 0)
+
+
+
 if __name__ == "__main__":
     unittest.main()
