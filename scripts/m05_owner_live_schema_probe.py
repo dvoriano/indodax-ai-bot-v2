@@ -13,9 +13,6 @@ import sqlite3
 import stat
 import sys
 
-from indodax_ai_bot.owner_control import OwnerDecisionLedger
-
-
 class OwnerSchemaProbeError(ValueError):
     """Fixed diagnostic code; never print a path, token or SQL payload."""
 
@@ -117,12 +114,6 @@ def inspect_original_owner_schema(db: Path) -> dict:
                 "database_contents_modified": False,
                 "telegram_network_used": False,
                 "orders_or_trades_sent": False,
-                "source_expected_schema_table": (
-                    "m05_manual_trade_previews"
-                    if "m05_manual_trade_previews" in
-                    OwnerDecisionLedger.__init__.__code__.co_consts.__repr__()
-                    else "NOT_DISCOVERED"
-                ),
             }
     except OwnerSchemaProbeError:
         raise
