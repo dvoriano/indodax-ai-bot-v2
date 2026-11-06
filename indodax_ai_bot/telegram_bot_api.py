@@ -34,6 +34,10 @@ class TelegramTransportError(RuntimeError):
     """Stable error codes only, never print Bot API URLs or bearer tokens."""
 
 
+class TelegramGetUpdatesTransportError(TelegramTransportError):
+    """Read-only getUpdates network failure; stable legacy error text."""
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # The secret token appears in the request URL. Never follow redirects.
@@ -355,10 +359,21 @@ class TelegramOwnerPoller:
         if type(wait_seconds) is not int or not 0 <= wait_seconds <= 5:
             raise ValueError("M05_INVALID_LONGPOLL_WAIT")
         offset = self._ledger.telegram_next_offset()
-        updates = self._api.call("getUpdates", {
-            "offset": offset, "limit": limit, "timeout": wait_seconds,
-            "allowed_updates": ["message", "callback_query"],
-        })
+        try:
+            updates = self._api.call("getUpdates", {
+                "offset": offset, "limit": limit, "timeout": wait_seconds,
+                "allowed_updates": ["message", "callback_query"],
+            })
+        except TelegramTransportError as error:
+            # ONLY a transport failure during a read-only getUpdates may
+            # be retried by the persistent receiver. A failure in a later
+            # sendMessage/answerCallbackQuery MUST remain uncertain and
+            # must never be retried under this code.
+            if str(error) == "M05_TELEGRAM_API_TRANSPORT_FAILED":
+                raise TelegramGetUpdatesTransportError(
+                    "M05_TELEGRAM_API_TRANSPORT_FAILED"
+                ) from None
+            raise
         if not isinstance(updates, list) or len(updates) > limit:
             raise TelegramTransportError("M05_TELEGRAM_INVALID_BATCH")
         ids = []
