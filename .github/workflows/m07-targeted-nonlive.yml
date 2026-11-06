@@ -6,6 +6,7 @@ on:
       - "indodax_ai_bot/**"
       - "scripts/m07_readonly_once.sh"
       - "tests/test_m07_*.py"
+      - "tests/test_m03_scalping_evidence_continuation.py"
       - "tests/test_m08_original_exchange_buy_admission.py"
       - "tests/test_m08_original_protective_exit.py"
       - "tests/test_m08_original_net_tier_exit.py"
@@ -23,6 +24,7 @@ on:
       - "indodax_ai_bot/**"
       - "scripts/m07_readonly_once.sh"
       - "tests/test_m07_*.py"
+      - "tests/test_m03_scalping_evidence_continuation.py"
       - "tests/test_m08_original_exchange_buy_admission.py"
       - "tests/test_m08_original_protective_exit.py"
       - "tests/test_m08_original_net_tier_exit.py"
@@ -86,3 +88,7 @@ jobs:
             tests.test_m05_fast_longpoll_original \
             tests.test_m05_owner_mode_inline \
             tests.test_m05_telegram_service_tick
+      - name: Existing original M03 continuation classification remains diagnostic
+        run: |
+          python -B -m unittest -q \
+            tests.test_m03_scalping_evidence_continuation
