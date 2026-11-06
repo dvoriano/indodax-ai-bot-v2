@@ -16,6 +16,7 @@ from typing import Callable
 # Fixed allowlist. Do not discover or inspect other projects/services.
 _V2_UNITS = (
     ("btc_public_ws", "indodax-v2-public-ws-btc.service"),
+    ("btc_public_ws_timer", "indodax-v2-public-ws-btc.timer"),
     ("m05_telegram", "indodax-v2-m05-telegram.service"),
     ("m05_telegram_timer", "indodax-v2-m05-telegram.timer"),
     ("m03_scanner", "indodax-v2-m03-mainpath.service"),
@@ -127,9 +128,13 @@ def inspect_named_v2_units(
         and timer["unit_needs_daemon_reload"] == "no"
     )
     # Even if the timer is disabled, that cannot authorize a future start.
+    # Standing public M03 scheduling is an owner-approved normal profile.
+    # Flag contradictory/transition metadata, not an enabled active timer.
+    active = timer["observed_active"] == "active"
+    enabled = timer["observed_enabled"] in ("enabled", "enabled-runtime")
     needs_safety_review = (
-        timer["observed_active"] in ("active", "activating")
-        or timer["observed_enabled"] in ("enabled", "enabled-runtime")
+        timer["observed_active"] in ("activating", "deactivating", "reloading")
+        or active != enabled
     )
     return {
         "scope": "KNOWN_V2_USER_UNITS_ONLY",

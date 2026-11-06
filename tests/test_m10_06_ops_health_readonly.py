@@ -199,10 +199,22 @@ class M10OpsReadonlyTests(unittest.TestCase):
                                    "observed_enabled": "enabled"},
                 m05_telegram_timer={"observed_active": "inactive"}),
             status_document=safe_doc(), now_epoch=NOW)
-        self.assertIn("M03_TIMER_NOT_CONFIRMED_DISABLED", r["alert_codes"])
+        # Standing PUBLIC M03 active+enabled is explicitly expected;
+        # M05 inactive remains a real operational warning.
+        self.assertNotIn("M03_TIMER_NOT_CONFIRMED_DISABLED", r["alert_codes"])
         self.assertIn("M05_TIMER_NOT_ACTIVE", r["alert_codes"])
+        self.assertTrue(r["m03_timer_active_metadata_observed"])
         self.assertFalse(r["m03_timer_disabled_metadata_observed"])
         self.assert_not_promotion(r)
+        conflict = assess_v2_operations_readonly(
+            units_report=units(
+                m03_scanner_timer={"observed_active": "active",
+                                   "observed_enabled": "disabled"}),
+            status_document=safe_doc(), now_epoch=NOW)
+        self.assertIn(
+            "M03_TIMER_NOT_CONFIRMED_DISABLED", conflict["alert_codes"]
+        )
+        self.assert_not_promotion(conflict)
 
     def test_unknown_fragment_and_unknown_unit_lists_block_positive_metadata(self):
         r = assess_v2_operations_readonly(

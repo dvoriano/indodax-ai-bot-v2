@@ -153,18 +153,46 @@ def assess_v2_operations_readonly(
         return row
 
     btc = trusted_unit("btc_public_ws")
+    btc_timer = trusted_unit("btc_public_ws_timer")
     m05 = trusted_unit("m05_telegram_timer")
     receiver = classify_m05_receiver_metadata(units)
     m03 = trusted_unit("m03_scanner_timer")
     btc_active = bool(btc and btc.get("observed_active") == "active")
+    btc_timer_active = bool(
+        btc_timer and btc_timer.get("observed_active") == "active"
+        and btc_timer.get("observed_enabled") in ("enabled", "enabled-runtime")
+    )
+    # The original public collector is a bounded systemd timer batch, NOT
+    # a permanent connected WebSocket process. Between scheduled sessions,
+    # inactive/oneshot is expected only when a trusted enabled timer and a
+    # recent, clean completed 10/10 supervisor batch are both observed.
+    fresh_btc_batch = bool(
+        batch["last_batch_status"] == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
+        and batch["requested_sessions"] == 10
+        and batch["attempted_sessions"] == 10
+        and batch["completed_safe_sessions"] == 10
+        and batch["failure_code_observed"] is False
+        and batch["restart_only_after_clean_batch_observed"] is True
+        and batch["stream_disconnected_observed"] is True
+        and type(batch["last_batch_age_seconds"]) is int
+        and 0 <= batch["last_batch_age_seconds"] <= _MAX_BATCH_AGE_SECONDS
+    )
+    btc_scheduled_fresh = bool(
+        btc is not None and not btc_active and btc_timer_active
+        and fresh_btc_batch
+    )
     m05_active = receiver["m05_timer_active_enabled_metadata_only"]
     m05_receiver_active = receiver["m05_receiver_metadata_active"]
     m03_disabled = bool(m03 and m03.get("observed_active") == "inactive"
                          and m03.get("observed_enabled") == "disabled")
+    m03_scheduled = bool(
+        m03 and m03.get("observed_active") == "active"
+        and m03.get("observed_enabled") in ("enabled", "enabled-runtime")
+    )
 
     if btc is None:
         alerts.append("BTC_WS_UNIT_STATUS_UNVERIFIED")
-    elif not btc_active:
+    elif not (btc_active or btc_scheduled_fresh):
         alerts.append("BTC_WS_UNIT_NOT_ACTIVE")
     if not m05_receiver_active:
         if m05 is None:
@@ -173,7 +201,7 @@ def assess_v2_operations_readonly(
             alerts.append("M05_TIMER_NOT_ACTIVE")
     if m03 is None:
         alerts.append("M03_TIMER_STATUS_UNVERIFIED")
-    elif not m03_disabled:
+    elif not (m03_disabled or m03_scheduled):
         alerts.append("M03_TIMER_NOT_CONFIRMED_DISABLED")
 
     # A green-looking snapshot is NOT a heartbeat; output only warnings.
@@ -182,9 +210,12 @@ def assess_v2_operations_readonly(
         "status": "V2_OPERATIONS_READONLY_OBSERVATION",
         "alert_codes": sorted(set(alerts)),
         "btc_ws_unit_active_metadata_observed": btc_active,
+        "btc_ws_timer_active_metadata_observed": btc_timer_active,
+        "btc_ws_scheduled_fresh_metadata_observed": btc_scheduled_fresh,
         "m05_timer_active_metadata_observed": m05_active,
         "m05_receiver_metadata": receiver,
         "m03_timer_disabled_metadata_observed": m03_disabled,
+        "m03_timer_active_metadata_observed": m03_scheduled,
         "btc_ws_last_batch": batch,
         "continuous_24h_heartbeat_verified": False,
         "alerts_delivered_to_owner_verified": False,
@@ -242,12 +273,20 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
             labels.append(label)
     labels.sort()
 
-    state = ("AKTIF (metadata saja)"
-             if report.get("btc_ws_unit_active_metadata_observed") is True
-             else "TIDAK AKTIF/UNVERIFIED")
-    timer = ("DISABLED (metadata saja)"
-             if report.get("m03_timer_disabled_metadata_observed") is True
-             else "TIDAK TERVERIFIKASI DISABLED")
+    state = (
+        "AKTIF (metadata saja)"
+        if report.get("btc_ws_unit_active_metadata_observed") is True
+        else "TERJADWAL, BATCH TERAKHIR SEGAR (snapshot)"
+        if report.get("btc_ws_scheduled_fresh_metadata_observed") is True
+        else "TIDAK AKTIF/UNVERIFIED"
+    )
+    timer = (
+        "AKTIF TERJADWAL (metadata saja)"
+        if report.get("m03_timer_active_metadata_observed") is True
+        else "DISABLED (metadata saja)"
+        if report.get("m03_timer_disabled_metadata_observed") is True
+        else "BELUM TERVERIFIKASI"
+    )
     original = report.get("btc_ws_last_batch")
     original = original if isinstance(original, dict) else {}
     status = original.get("last_batch_status")

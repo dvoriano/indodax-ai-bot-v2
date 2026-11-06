@@ -60,6 +60,8 @@ def _compact_ops_auto_message(snap: dict) -> str:
     state = (
         "AKTIF (metadata)"
         if snap.get("btc_ws_unit_active_metadata_observed") is True
+        else "TERJADWAL · batch segar"
+        if snap.get("btc_ws_scheduled_fresh_metadata_observed") is True
         else "TIDAK AKTIF / belum valid"
     )
     codes = sorted(set(snap["alert_codes"]))

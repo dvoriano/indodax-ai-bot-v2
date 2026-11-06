@@ -54,14 +54,14 @@ class M10V2NamedUnitsTests(unittest.TestCase):
                 return shown(unit, home)
             result = inspect_named_v2_units(reader=read, home=home)
             self.assertEqual(seen, [name for _, name in _V2_UNITS])
-            self.assertEqual(len(result["units"]), 5)
+            self.assertEqual(len(result["units"]), 6)
             self.assertTrue(result["m03_timer_disabled_metadata_observed"])
             self.assertFalse(result["m03_timer_unexpected_activation_attention"])
             self.assertTrue(all(x["v2_user_fragment_path_matches"]
                                 for x in result["units"]))
             self.assert_no_ip_or_trading_claim(result)
 
-    def test_active_m03_timer_flags_attention_but_does_not_stop_or_go(self):
+    def test_active_standing_m03_timer_is_expected_but_does_not_go(self):
         with TemporaryDirectory() as td:
             home = Path(td)
             def read(unit):
@@ -72,7 +72,7 @@ class M10V2NamedUnitsTests(unittest.TestCase):
                              else "disabled")
             result = inspect_named_v2_units(reader=read, home=home)
             self.assertFalse(result["m03_timer_disabled_metadata_observed"])
-            self.assertTrue(result["m03_timer_unexpected_activation_attention"])
+            self.assertFalse(result["m03_timer_unexpected_activation_attention"])
             self.assert_no_ip_or_trading_claim(result)
 
     def test_missing_unit_never_proves_disabled(self):
