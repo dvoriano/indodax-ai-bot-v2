@@ -17,7 +17,9 @@ import time
 from typing import Callable
 from urllib.request import urlopen
 
-from indodax_ai_bot.btc_ops_gate import _journal_gap_count, _private_json
+from indodax_ai_bot.btc_ops_gate import (
+    AdmissionDenied, STANDING_MODE, _journal_gap_count, _private_json,
+)
 from indodax_ai_bot.m03_egress_admission import (
     M03SharedEgressAdmission, M03EgressAdmissionError,
 )
@@ -162,6 +164,152 @@ def prepare_nonlive_pilot(
     }
 
 
+def prepare_standing_public(
+    *, root: Path, policy_path: Path, epoch: int,
+    owner_confirmed: bool, ip_reader: Callable[[], str],
+) -> dict:
+    """One owner-approved PUBLIC-only 24/7 conversion in the original issuer.
+
+    Existing timers use the SAME files next tick; no worker, restart, private
+    exchange API, paid AI, additional Indodax HTTP or BUY/SELL. No TTL on
+    consent, but strict original per-minute rate cap and data checks remain.
+    """
+    if not owner_confirmed:
+        raise PilotDenied("M03_STANDING_EXPLICIT_OWNER_CONFIRMATION_REQUIRED")
+    if type(epoch) is not int or epoch <= 0:
+        raise PilotDenied("M03_INVALID_CLOCK")
+    if root != ROOT or root.is_symlink() or not root.is_dir():
+        raise PilotDenied("M03_ONLY_CANONICAL_V2")
+    directory = policy_path.parent
+    try:
+        st = directory.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid()
+                or st.st_mode & 0o077 or directory.is_symlink()):
+            raise PilotDenied("M03_POLICY_DIRECTORY_UNTRUSTED")
+        rt = root / "runtime"
+        rst = rt.lstat()
+        if (not stat.S_ISDIR(rst.st_mode) or rt.is_symlink()
+                or rst.st_uid != os.geteuid()):
+            raise PilotDenied("M03_STANDING_SOURCE_UNTRUSTED")
+    except OSError:
+        raise PilotDenied("M03_STANDING_SOURCE_UNTRUSTED") from None
+
+    previous_policy = _owner_policy_bytes(policy_path)
+    try:
+        old = json.loads(previous_policy)
+        if (not isinstance(old, dict) or old.get("schema_version") not in (1, 2)
+                or old.get("owner_approved_public_only") is not True
+                or old.get("all_shared_ip_consumers_accounted") is not True
+                or old.get("external_consumer_ids") != []
+                or old.get("external_peak_requests_rolling_60s") != 0
+                or not isinstance(old.get("egress_public_ip"), str)
+                or not ipaddress.ip_address(old["egress_public_ip"]).is_global):
+            raise ValueError("bad original owner declaration")
+        ip = ip_reader().strip()
+        if (ip != old["egress_public_ip"]
+                or not ipaddress.ip_address(ip).is_global):
+            raise PilotDenied("M03_PUBLIC_EGRESS_IP_CHANGED")
+    except PilotDenied:
+        raise
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        raise PilotDenied("M03_EXISTING_OWNER_DECLARATION_INVALID") from None
+
+    try:
+        btc, previous_go = _private_json(rt / "btc_public_ops.go.json", 2048)
+        status, _ = _private_json(rt / "public_ws_btc.status.json", 32768)
+        gaps = _journal_gap_count(rt / "public_ws_btc.sqlite3")
+    except (AdmissionDenied, OSError):
+        raise PilotDenied("M03_STANDING_BTC_SOURCE_UNAVAILABLE") from None
+    hold = rt / "btc_public_ops.hold.json"
+    if hold.exists() or hold.is_symlink():
+        raise PilotDenied("M03_STANDING_BTC_HOLD_BLOCKS")
+    gap_limit = btc.get("max_gap_count")
+    batch_epoch = status.get("last_completed_batch_epoch")
+    if (set(btc) - {"scope", "expires_at_epoch", "max_gap_count",
+                     "acknowledged_failure_sha256"}
+            or btc.get("scope") != "BTC_PUBLIC_MONITOR_ONLY"
+            or type(btc.get("expires_at_epoch")) is not int
+            or type(gap_limit) is not int or not 0 <= gap_limit <= 100000
+            or type(batch_epoch) is not int
+            or not 0 <= epoch - batch_epoch <= 24 * 3600
+            or status.get("status") != "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
+            or status.get("requested_sessions") != 10
+            or status.get("attempted_sessions") != 10
+            or status.get("completed_safe_sessions") != 10
+            or status.get("collector_failure_code") is not None
+            or status.get("restart_only_after_clean_batch") is not True
+            or status.get("g1_receipt_issuance_allowed") is not False
+            or status.get("g2_provider_call_allowed") is not False
+            or status.get("execution_allowed") is not False
+            or type(status.get("unrecoverable_gap_rebaseline_count")) is not int
+            or gaps != status["unrecoverable_gap_rebaseline_count"]
+            or gaps > gap_limit):
+        raise PilotDenied("M03_STANDING_BTC_PRECONDITIONS_NOT_MET")
+
+    new_go = {
+        "scope": "BTC_PUBLIC_MONITOR_ONLY",
+        "mode": STANDING_MODE,
+        "issued_at_epoch": epoch,
+        "max_gap_count": gap_limit,
+    }
+    new_policy = {
+        "schema_version": 3,
+        "owner_approved_public_only": True,
+        "all_shared_ip_consumers_accounted": True,
+        "egress_public_ip": ip,
+        "external_consumer_ids": [],
+        "external_peak_requests_rolling_60s": 0,
+        "issued_at_epoch": epoch,
+        "pilot_scope": "M03_STANDING_PUBLIC_ONLY",
+    }
+    tag = str(epoch) + "." + str(os.getpid())
+    btc_file = rt / "btc_public_ops.go.json"
+    go_backup = btc_file.with_name(btc_file.name + ".pre-standing." + tag + ".bak")
+    policy_backup = policy_path.with_name(
+        policy_path.name + ".pre-standing." + tag + ".bak")
+    go_new_bytes = (json.dumps(new_go, sort_keys=True) + "\n").encode()
+    policy_new_bytes = (json.dumps(new_policy, sort_keys=True) + "\n").encode()
+    if go_backup.exists() or policy_backup.exists():
+        raise PilotDenied("M03_STANDING_BACKUP_CONFLICT")
+    try:
+        _write_private_new(go_backup, previous_go)
+        _write_private_new(policy_backup, previous_policy)
+        # Refuse to overwrite an owner policy changed during preflight.
+        if (_owner_policy_bytes(policy_path) != previous_policy
+                or _private_json(btc_file, 2048)[1] != previous_go):
+            raise PilotDenied("M03_STANDING_SOURCE_CHANGED")
+        _write_atomic(btc_file, go_new_bytes, epoch=epoch)
+        _write_atomic(policy_path, policy_new_bytes, epoch=epoch)
+    except Exception:
+        # Restore the prior current policy, never blindly overwrite
+        # externally modified credentials or a concurrent owner update.
+        try:
+            if _owner_policy_bytes(policy_path) == policy_new_bytes:
+                _write_atomic(policy_path, previous_policy, epoch=epoch)
+            if _private_json(btc_file, 2048)[1] == go_new_bytes:
+                _write_atomic(btc_file, previous_go, epoch=epoch)
+        except (OSError, PilotDenied, AdmissionDenied):
+            raise PilotDenied("M03_STANDING_ROLLBACK_OWNER_REVIEW_REQUIRED") from None
+        raise PilotDenied("M03_STANDING_POLICY_INSTALL_FAILED") from None
+
+    return {
+        "status": "M03_BTC_STANDING_PUBLIC_ONLY_INSTALLED",
+        "btc_go_mode": STANDING_MODE,
+        "m03_scope": "M03_STANDING_PUBLIC_ONLY",
+        "consent_expiration_epoch": None,
+        "btc_gap_limit_unchanged": True,
+        "m03_local_public_rest_cap_60s": 90,
+        "previous_owner_policies_backed_up": True,
+        "btc_requires_new_clean_batch_for_m03": epoch - batch_epoch > 3600,
+        "m03_source_refresh_deferred_to_existing_timer": True,
+        "independent_shared_ip_traffic_measured": False,
+        "service_started_or_restarted": False,
+        "paid_ai_calls": 0,
+        "order_sent": False,
+        "trading_enabled": False,
+    }
+
+
 def _read_ip() -> str:
     with urlopen(EXTERNAL_IP_CHECK, timeout=10) as r:
         return r.read(64).decode("ascii")
@@ -169,15 +317,23 @@ def _read_ip() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Original V2 owner NONLIVE public pilot only")
-    parser.add_argument("--owner-confirm-v2-only-nonlive", action="store_true",
-                        help="Owner confirms no other active REST consumers on shared egress IP")
+    g = parser.add_mutually_exclusive_group(required=True)
+    g.add_argument("--owner-confirm-v2-only-nonlive", action="store_true",
+                   help="Original time-limited PUBLIC pilot (legacy)")
+    g.add_argument("--owner-confirm-v2-only-standing", action="store_true",
+                   help="Explicit standing 24/7 PUBLIC-only consent; confirms no external shared-IP REST peers")
     args = parser.parse_args()
     try:
-        report = prepare_nonlive_pilot(
-            root=ROOT, policy_path=POLICY, epoch=int(time.time()),
-            owner_confirmed=args.owner_confirm_v2_only_nonlive,
-            ip_reader=_read_ip,
-        )
+        if args.owner_confirm_v2_only_standing:
+            report = prepare_standing_public(
+                root=ROOT, policy_path=POLICY, epoch=int(time.time()),
+                owner_confirmed=True, ip_reader=_read_ip,
+            )
+        else:
+            report = prepare_nonlive_pilot(
+                root=ROOT, policy_path=POLICY, epoch=int(time.time()),
+                owner_confirmed=True, ip_reader=_read_ip,
+            )
     except (PilotDenied, OSError, ValueError, M03EgressAdmissionError) as exc:
         code = str(exc)
         print(json.dumps({"ok": False, "reason": code
