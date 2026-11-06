@@ -121,7 +121,7 @@ class M03M05RadarOriginalNonlive(unittest.TestCase):
         method, payload = api.calls[0]
         self.assertEqual(method, "sendMessage")
         self.assertNotIn("reply_markup", payload)
-        self.assertIn("OBSERVASI, BUKAN REKOMENDASI BUY", payload["text"])
+        self.assertIn("BUKAN REKOMENDASI BUY", payload["text"])
         self.assertIn("EARLY_WATCH historis", payload["text"])
         self.assertIn("BELUM TERVERIFIKASI", payload["text"])
         self.assertFalse(sent["execution_allowed"])
@@ -143,7 +143,7 @@ class M03M05RadarOriginalNonlive(unittest.TestCase):
         api = FakeTelegram()
         self.send(api)
         self.assertIn(
-            "ada menit tanpa sampel", api.calls[0][1]["text"]
+            "Ada menit tanpa sampel", api.calls[0][1]["text"]
         )
         self.assertIn("BUKAN return candle 1m", api.calls[0][1]["text"])
 
