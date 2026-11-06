@@ -26,6 +26,7 @@ _MAX_AGE_SECONDS = 900
 # declaration, not independent shared-IP telemetry or a trading permit.
 _MAX_NONLIVE_PILOT_SECONDS = 20 * 3600
 _V2_NONLIVE_SCOPE = "M03_NONLIVE_PUBLIC_PILOT"
+_STANDING_PUBLIC_SCOPE = "M03_STANDING_PUBLIC_ONLY"
 _V2_LOCAL_REST_CAP = 90
 _FIELDS = frozenset({
     "schema_version", "owner_approved_public_only",
@@ -34,6 +35,7 @@ _FIELDS = frozenset({
     "issued_at_epoch", "expires_at_epoch",
 })
 _V2_FIELDS = _FIELDS | frozenset({"pilot_scope"})
+_STANDING_FIELDS = (_FIELDS - {"expires_at_epoch"}) | {"pilot_scope"}
 _CONSUMER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 
 
@@ -45,13 +47,17 @@ class M03SharedEgressAdmission:
     """
 
     def __init__(self, path: str | Path | None = None, *,
-                 clock: Callable[[], float] | None = None) -> None:
+                 clock: Callable[[], float] | None = None,
+                 btc_runtime_dir: str | Path | None = None) -> None:
         self.path = Path(path) if path is not None else Path(
             os.environ.get("INDODAX_M03_EGRESS_ADMISSION_FILE")
             or str(Path.home() / ".config" / "indodax-ai-bot-v2"
                    / "m03-egress-admission.json")
         )
         self.clock = clock or time.time
+        self.btc_runtime_dir = (Path(btc_runtime_dir)
+            if btc_runtime_dir is not None else
+            Path.home() / "indodax-ai-bot-v2" / "runtime")
 
     def allowed_local_limit(self) -> int:
         try:
@@ -77,16 +83,19 @@ class M03SharedEgressAdmission:
             if not isinstance(policy, dict):
                 raise M03EgressAdmissionError("M03_EGRESS_POLICY_INVALID")
             version = policy.get("schema_version")
-            if (type(version) is not int or version not in (1, 2)
+            if (type(version) is not int or version not in (1, 2, 3)
                     or set(policy) != (_FIELDS if version == 1
-                                       else _V2_FIELDS)):
+                                       else _V2_FIELDS if version == 2
+                                       else _STANDING_FIELDS)):
                 raise M03EgressAdmissionError("M03_EGRESS_POLICY_INVALID")
             if (policy["owner_approved_public_only"] is not True
                     or policy["all_shared_ip_consumers_accounted"] is not True):
                 raise M03EgressAdmissionError("M03_EGRESS_UNACCOUNTED_PEERS")
             if version == 2 and policy["pilot_scope"] != _V2_NONLIVE_SCOPE:
                 raise M03EgressAdmissionError("M03_EGRESS_PILOT_SCOPE_INVALID")
-            if version == 2 and (
+            if version == 3 and policy["pilot_scope"] != _STANDING_PUBLIC_SCOPE:
+                raise M03EgressAdmissionError("M03_EGRESS_STANDING_SCOPE_INVALID")
+            if version in (2, 3) and (
                     policy["external_consumer_ids"] != []
                     or policy["external_peak_requests_rolling_60s"] != 0):
                 raise M03EgressAdmissionError("M03_EGRESS_PILOT_PEERS_PRESENT")
@@ -108,8 +117,15 @@ class M03SharedEgressAdmission:
             if (type(used) is not int or not 0 <= used < 168
                     or (used > 0 and not peers)):
                 raise M03EgressAdmissionError("M03_EGRESS_PEER_DEMAND_INVALID")
-            issued, expires = (policy["issued_at_epoch"],
-                               policy["expires_at_epoch"])
+            issued = policy["issued_at_epoch"]
+            if version == 3:
+                # No arbitrary consent expiry, but reject stale/corrupt BTC
+                # market evidence. All quota and identity rules still apply.
+                if type(issued) is not int or not 0 < issued <= now:
+                    raise M03EgressAdmissionError("M03_EGRESS_STANDING_INVALID")
+                self._check_standing_btc(now)
+                return min(_V2_LOCAL_REST_CAP, 168 - used)
+            expires = policy["expires_at_epoch"]
             if (type(issued) is not int or type(expires) is not int
                     or issued > now or expires <= now
                     or issued <= 0 or expires <= issued
@@ -121,3 +137,44 @@ class M03SharedEgressAdmission:
             raise
         except (OSError, ValueError, TypeError, UnicodeError, OverflowError):
             raise M03EgressAdmissionError("M03_EGRESS_POLICY_UNAVAILABLE") from None
+
+    def _check_standing_btc(self, now: float) -> None:
+        """Require fresh clean BTC source BEFORE each M03 public REST GET.
+
+        Freshness is a data-quality rule, NOT a time limit on owner consent.
+        Only existing local original V2 files/SQLite; no network or writes.
+        """
+        from .btc_ops_gate import (
+            AdmissionDenied, STANDING_MODE, _private_json, _journal_gap_count,
+        )
+        rt = self.btc_runtime_dir
+        try:
+            hold = rt / "btc_public_ops.hold.json"
+            if hold.exists() or hold.is_symlink():
+                raise M03EgressAdmissionError("M03_STANDING_BTC_SOURCE_UNHEALTHY")
+            go, _ = _private_json(rt / "btc_public_ops.go.json", 2048)
+            status, _ = _private_json(rt / "public_ws_btc.status.json", 32768)
+            gaps = _journal_gap_count(rt / "public_ws_btc.sqlite3")
+        except AdmissionDenied:
+            raise M03EgressAdmissionError("M03_STANDING_BTC_SOURCE_UNHEALTHY") from None
+        issued = go.get("issued_at_epoch")
+        limit = go.get("max_gap_count")
+        epoch = status.get("last_completed_batch_epoch")
+        observed = status.get("unrecoverable_gap_rebaseline_count")
+        if (set(go) != {"scope", "mode", "issued_at_epoch", "max_gap_count"}
+                or go.get("scope") != "BTC_PUBLIC_MONITOR_ONLY"
+                or go.get("mode") != STANDING_MODE
+                or type(issued) is not int or not 0 < issued <= now
+                or type(limit) is not int or not 0 <= limit <= 100000
+                or status.get("status") != "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
+                or status.get("requested_sessions") != 10
+                or status.get("attempted_sessions") != 10
+                or status.get("completed_safe_sessions") != 10
+                or status.get("collector_failure_code") is not None
+                or status.get("g1_receipt_issuance_allowed") is not False
+                or status.get("g2_provider_call_allowed") is not False
+                or status.get("execution_allowed") is not False
+                or type(epoch) is not int or not 0 <= now - epoch <= 3600
+                or type(observed) is not int or observed != gaps
+                or gaps > limit):
+            raise M03EgressAdmissionError("M03_STANDING_BTC_SOURCE_UNHEALTHY")
