@@ -251,6 +251,12 @@ def service_fast_loop_nonlive(
     client, ledger, bot_id, state_db, on_click = _prepare_tick_runtime(
         cfg, client_timeout_seconds=9,
     )
+    # Explicit opt-in only. The original running receiver stays unchanged
+    # until the owner deploys this source and configures this gate.
+    auto_ops_alert = None
+    if cfg.get("M10_OWNER_AUTO_ALERT_GO") == "YES":
+        from .m10_owner_ops_auto_alert import send_one_owner_ops_alert_nonlive
+        auto_ops_alert = send_one_owner_ops_alert_nonlive
     return dedicated_owner_fast_loop_nonlive(
         api=client, ledger=ledger, expected_bot_id=bot_id,
         lock_path=str(state_db) + ".dedicated-poller.lock",
@@ -258,6 +264,7 @@ def service_fast_loop_nonlive(
         wait_seconds=2,
         max_batches=max_batches, stop_requested=stop_requested,
         heartbeat=heartbeat,
+        auto_ops_alert=auto_ops_alert,
     )
 
 
