@@ -36,11 +36,54 @@ def _mean_str(rows: list[Decimal]) -> str | None:
     return str(round(mean(rows), 4)) if rows else None
 
 
+def _public_proxy_gate_flags(bars: tuple[Candle, ...], i: int) -> tuple[dict, dict]:
+    """Single predeclared predicate shared by OOS and read-only diagnostics."""
+    close = bars[i].close
+    ret5 = _bps(bars[i-5].close, close)
+    ret15 = _bps(bars[i-15].close, close)
+    prev10high = max(x.high for x in bars[i-10:i])
+    vol_avg = sum((x.volume for x in bars[i-10:i]), _ZERO) / Decimal(10)
+    volume_ratio = (bars[i].volume / vol_avg if vol_avg > 0 else _ZERO)
+    break_high = close > prev10high
+    proxy_surge = ret5 >= Decimal("80") and break_high
+    proxy_pullback = (ret15 >= Decimal("80")
+                      and close > bars[i-1].close
+                      and _bps(close, prev10high) >= Decimal("25"))
+    exhausted = ret5 >= Decimal("150") and volume_ratio >= Decimal("4")
+    flags = {
+        "ALL_HOURLY_CONTROL": True,
+        "SURGE_NO_VOLUME_ABLATION": proxy_surge and not exhausted,
+        "SURGE_WITH_VOLUME_PROXY": proxy_surge and volume_ratio >= 2 and not exhausted,
+        "PULLBACK_NO_VOLUME_ABLATION": proxy_pullback and not exhausted,
+        "PULLBACK_WITH_VOLUME_PROXY": proxy_pullback and volume_ratio >= 1 and not exhausted,
+        "EXHAUSTION_CAUTION_CONTROL": exhausted,
+    }
+    gates = {
+        "surge_5m_ge_80bps": ret5 >= Decimal("80"),
+        "surge_break_above_prior_10m_high": break_high,
+        "surge_price_setup": proxy_surge,
+        "surge_volume_ge_2x": volume_ratio >= 2,
+        "surge_price_and_volume": proxy_surge and volume_ratio >= 2,
+        "pullback_15m_ge_80bps": ret15 >= Decimal("80"),
+        "pullback_close_above_previous_minute": close > bars[i-1].close,
+        "pullback_prior_10m_high_ge_25bps_above_close":
+            _bps(close, prev10high) >= Decimal("25"),
+        "pullback_price_setup": proxy_pullback,
+        "pullback_volume_ge_1x": volume_ratio >= 1,
+        "pullback_price_and_volume": proxy_pullback and volume_ratio >= 1,
+        "not_exhausted": not exhausted,
+        "surge_final": flags["SURGE_WITH_VOLUME_PROXY"],
+        "pullback_final": flags["PULLBACK_WITH_VOLUME_PROXY"],
+    }
+    return flags, gates
+
+
 def evaluate_public_ohlc_proxy_ablation(
     history: PublicCandleHistory, *,
     min_holdout_independent_signals: int = 30,
     owner_assumed_roundtrip_friction_bps: Decimal | None = None,
     hypothetical_ticket_idr: Decimal | None = None,
+    diagnose_signal_gates: bool = False,
 ) -> dict:
     """Chronological holdout, purged 60m horizon, nonoverlapping 60m samples.
 
@@ -49,6 +92,8 @@ def evaluate_public_ohlc_proxy_ablation(
     not executions. NO optimized thresholds, walk-forward tuning or fitted
     strategy parameters. Train/holdout statistical estimates are descriptive.
     """
+    if type(diagnose_signal_gates) is not bool:
+        raise PublicDataError("INVALID_CALIBRATION_DIAGNOSTIC_MODE")
     if (not isinstance(history, PublicCandleHistory)
             or history.provenance != "INDODAX_PUBLIC_OHLC_V2_UNATTESTED"
             or history.source_trust_verified is not False
@@ -106,28 +151,7 @@ def evaluate_public_ohlc_proxy_ablation(
         if k < first_holdout_index and i + 60 >= first_holdout_bar:
             purged += 1
             continue
-        close = bars[i].close
-        ret5 = _bps(bars[i-5].close, close)
-        ret15 = _bps(bars[i-15].close, close)
-        prev10high = max(x.high for x in bars[i-10:i])
-        vol_avg = sum((x.volume for x in bars[i-10:i]), _ZERO) / Decimal(10)
-        volume_ratio = (bars[i].volume / vol_avg
-                        if vol_avg > 0 else _ZERO)
-        break_high = close > prev10high
-        proxy_surge = ret5 >= Decimal("80") and break_high
-        proxy_pullback = (ret15 >= Decimal("80")
-                          and close > bars[i-1].close
-                          and _bps(close, prev10high) >= Decimal("25"))
-        exhausted = ret5 >= Decimal("150") and volume_ratio >= Decimal("4")
-        # Inputs used are only <=i; no future response may alter the labels.
-        flags = {
-            "ALL_HOURLY_CONTROL": True,
-            "SURGE_NO_VOLUME_ABLATION": proxy_surge and not exhausted,
-            "SURGE_WITH_VOLUME_PROXY": proxy_surge and volume_ratio >= 2 and not exhausted,
-            "PULLBACK_NO_VOLUME_ABLATION": proxy_pullback and not exhausted,
-            "PULLBACK_WITH_VOLUME_PROXY": proxy_pullback and volume_ratio >= 1 and not exhausted,
-            "EXHAUSTION_CAUTION_CONTROL": exhausted,
-        }
+        flags, _ = _public_proxy_gate_flags(bars, i)
         entry = bars[i+1].open  # hypothetical, NOT observed fill
         record = {
             "signal_close_epoch": bars[i].start + 60,
@@ -189,8 +213,47 @@ def evaluate_public_ohlc_proxy_ablation(
             "SURGE_WITH_VOLUME_PROXY", "PULLBACK_WITH_VOLUME_PROXY",
         )
     ]
+    diagnostic = None
+    if diagnose_signal_gates:
+        # These exploratory per-minute frequencies are NOT independent
+        # OOS trades, exchange fills or threshold optimization.
+        def gate_funnel(sample_indices) -> dict:
+            counts = None
+            surge_bins: set[int] = set()
+            pullback_bins: set[int] = set()
+            inspected = 0
+            for j in sample_indices:
+                _, gates = _public_proxy_gate_flags(bars, j)
+                if counts is None:
+                    counts = {k: 0 for k in gates}
+                inspected += 1
+                for key, yes in gates.items():
+                    counts[key] += int(yes)
+                if gates["surge_final"]:
+                    surge_bins.add(j // 60)
+                if gates["pullback_final"]:
+                    pullback_bins.add(j // 60)
+            return {
+                "candidate_minutes_examined": inspected,
+                "gate_true_counts": counts or {},
+                "distinct_60m_archive_bins_with_surge": len(surge_bins),
+                "distinct_60m_archive_bins_with_pullback": len(pullback_bins),
+            }
+        diagnostic = {
+            "status": "EXPLORATORY_READONLY_GATE_FREQUENCY_NOT_OOS_EDGE",
+            "same_original_predeclared_thresholds": True,
+            "anchor_minute_offset_in_archive": 30,
+            "anchor_stride_minutes": 60,
+            "holdout_hourly_fixed_anchor": gate_funnel(
+                indices[first_holdout_index:]),
+            "holdout_all_eligible_minutes_not_independent_trades": gate_funnel(
+                range(first_holdout_bar, len(bars) - 60)),
+            "threshold_tuning_performed": False,
+            "market_source_g1_verified": False,
+        }
     return {
         "stage": "M03_PUBLIC_OHLC_PROXY_ABLATION_READONLY",
+        **({"signal_gate_diagnostic": diagnostic} if diagnostic is not None else {}),
         "status": "DESCRIPTIVE_OOS_ONLY_INSUFFICIENT_TRADE_EVIDENCE",
         "pair": history.pair,
         "source": "IMMUTABLE_AS_OBSERVED_PUBLIC_OHLC_NOT_EXCHANGE_SIGNED",
