@@ -180,6 +180,7 @@ else:
   sleep 3
 done
 [[ -n "$HEARTBEAT" ]] || fail NO_M05_HEARTBEAT_AFTER_RESTART
+[[ "$STATE" == RADAR_INVOKED ]] || fail RADAR_CALLBACK_NOT_OBSERVED
 printf 'RADAR_HEARTBEAT=%s\n' "$HEARTBEAT"
 printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
 printf 'BACKUP=%s\n' "$BACKUP"
