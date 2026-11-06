@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import patch
 import json
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 
-from indodax_ai_bot.btc_ops_gate import AdmissionDenied, admit, record_exit
+from indodax_ai_bot.btc_ops_gate import (
+    AdmissionDenied, admit, diagnose_once, main, record_exit,
+)
 
 NOW = 1793786400
 
@@ -59,6 +64,73 @@ class CanonicalBTCOpsGateTests(unittest.TestCase):
     def check(self):
         return admit(go=self.go, status=self.status, database=self.db,
                      hold=self.hold, state=self.state, epoch=NOW)
+
+    def diagnose(self):
+        return diagnose_once(
+            go=self.go, status=self.status, database=self.db,
+            hold=self.hold, state=self.state, epoch=NOW,
+        )
+
+    def test_readonly_diagnose_good_preconditions_never_admits(self):
+        paths = [self.go, self.status, self.db]
+        before = {p: p.read_bytes() for p in paths}
+        with patch("indodax_ai_bot.btc_ops_gate._atomic_json",
+                   side_effect=AssertionError("STATE_MUTATION_DENIED")):
+            out = self.diagnose()
+        self.assertEqual(out["status"],
+                         "BTC_PUBLIC_OPS_READONLY_EXEC_CONDITION_DIAGNOSIS")
+        self.assertEqual(out["first_blocker"], "NONE")
+        self.assertTrue(out["original_gate_preconditions_passed_at_snapshot"])
+        self.assertFalse(out["dynamic_admission_or_concurrent_lock_verified"])
+        self.assertFalse(out["service_started_or_restarted"])
+        self.assertFalse(out["live_trading_authorized"])
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.state.with_suffix(".json.lock").exists())
+        self.assertEqual(before, {p: p.read_bytes() for p in paths})
+
+    def test_readonly_diagnose_hold_expiry_and_ack_not_issued(self):
+        self._write(self.hold, {"scope": "BTC_PUBLIC_MONITOR_ONLY"})
+        self.assertEqual(self.diagnose()["first_blocker"],
+                         "PUBLIC_WS_OPERATOR_HOLD")
+        self.hold.unlink()
+        self.policy["expires_at_epoch"] = NOW
+        self._write(self.go, self.policy)
+        self.assertEqual(self.diagnose()["first_blocker"],
+                         "PUBLIC_WS_OWNER_GO_INVALID")
+        self.policy["expires_at_epoch"] = NOW + 900
+        self.policy.pop("acknowledged_failure_sha256")
+        self._write(self.go, self.policy)
+        self.assertEqual(self.diagnose()["first_blocker"],
+                         "PUBLIC_WS_FAILURE_NEEDS_NEW_OWNER_ACK")
+        self.assertFalse(self.state.exists())
+
+    def test_readonly_diagnose_existing_cooldown_does_not_renew(self):
+        self.assertEqual(self.check(), "BTC_PUBLIC_OPS_ADMITTED_UNATTESTED")
+        before = self.state.read_bytes()
+        with patch("indodax_ai_bot.btc_ops_gate._atomic_json",
+                   side_effect=AssertionError("REWRITE_DENIED")):
+            report = self.diagnose()
+        self.assertEqual(report["first_blocker"], "PUBLIC_WS_START_COOLDOWN")
+        self.assertEqual(self.state.read_bytes(), before)
+
+    def test_readonly_diagnose_cli_returns_safe_blocker_without_writes(self):
+        self.policy["expires_at_epoch"] = NOW - 1
+        self._write(self.go, self.policy)
+        args = [
+            "diagnose", "--go", str(self.go), "--status", str(self.status),
+            "--db", str(self.db), "--hold", str(self.hold),
+            "--state", str(self.state),
+        ]
+        with (patch("indodax_ai_bot.btc_ops_gate.time.time",
+                    return_value=NOW),
+              patch("indodax_ai_bot.btc_ops_gate._atomic_json",
+                    side_effect=AssertionError("MUTATION_DENIED")),
+              redirect_stdout(StringIO()) as stream):
+            self.assertEqual(main(args), 0)
+        out = json.loads(stream.getvalue())
+        self.assertEqual(out["first_blocker"], "PUBLIC_WS_OWNER_GO_INVALID")
+        self.assertFalse(out["service_started_or_restarted"])
+        self.assertFalse(self.state.exists())
 
     def test_operator_hold_blocks_even_valid_public_go(self):
         self._write(self.hold, {"scope": "BTC_PUBLIC_MONITOR_ONLY"})
