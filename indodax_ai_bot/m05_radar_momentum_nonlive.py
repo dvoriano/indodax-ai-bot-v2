@@ -329,7 +329,7 @@ def send_one_owner_radar_momentum_nonlive(
             candidate["observed_epoch"], wib
         ).strftime("%H:%M WIB")
         risk = (
-            "RISIKO: ada menit tanpa sampel harga; ini bukan return candle 1m."
+            "RISIKO: ada menit tanpa sampel harga; ini BUKAN return candle 1m."
             if candidate["missing_intermediate_minute_samples"]
             else "RISIKO: harga dapat berbalik; kualitas entry belum dinilai."
         )
@@ -342,7 +342,7 @@ def send_one_owner_radar_momentum_nonlive(
             "HARGA + PERUBAHAN VOLUME 24J"
             if candidate["price_watch"] and candidate["volume_watch"] else
             "MOMENTUM HARGA" if candidate["price_watch"] else
-            "KENAIKAN NETTO VOLUME 24J TERCATAT"
+            "PERUBAHAN VOLUME 24J (NETTO TERCATAT)"
         )
         volume_detail = (
             "Perubahan netto volume 24 jam: +Rp"
@@ -352,8 +352,14 @@ def send_one_owner_radar_momentum_nonlive(
             + " menit sampel berurutan.\n"
             if candidate["volume_watch"] else ""
         )
+        if not candidate["price_watch"]:
+            stage = (
+                "Perubahan netto volume 24 jam teramati; "
+                "arah harga dan transaksi aktual belum terkonfirmasi."
+            )
         message = (
-            "RADAR M03 | " + kind + " | BUKAN REKOMENDASI BUY\n"
+            "RADAR MOMENTUM M03 | OBSERVASI, BUKAN REKOMENDASI BUY\n"
+            "Jenis aktivitas: " + kind + "\n"
             f"Pair: {candidate['pair'].upper()}\n"
             f"Periode harga: {from_time} ke {to_time}\n"
             f"Harga tercatat: Rp{candidate['reference_price_idr']}"
