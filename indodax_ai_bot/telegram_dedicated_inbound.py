@@ -198,6 +198,11 @@ def dedicated_owner_fast_loop_nonlive(
     batches = handled = ignored = notices = 0
     radar_invocations = radar_send_acks = radar_uncertain = 0
     ops_alert_failures = 0
+    # A previously CLAIMED owner advisory has an uncertain delivery outcome.
+    # Quarantine ONLY this outbox for this worker lifetime, preserving the
+    # existing ledger's no-retry rule and keeping owner ingress/radar alive.
+    advisory_delivery_review_required = False
+    advisory_delivery_reason = "NONE"
     getupdates_transport_failures = 0
     getupdates_consecutive_failures = 0
     readonly_preflight_transport_failures = 0
@@ -271,9 +276,31 @@ def dedicated_owner_fast_loop_nonlive(
                 raise TelegramTransportError("M05_FAST_LOOP_EXECUTOR_CHANGED")
             # Flush the same original owner outboxes on each wakeup. During
             # idle periods getUpdates returns after <= wait_seconds.
-            outbound = _send_one_queued_market_advisory(
-                api=api, ledger=ledger,
-            )
+            if advisory_delivery_review_required:
+                outbound = {"delivery": "REVIEW_REQUIRED_NO_RETRY",
+                            "messages_sent": 0}
+            else:
+                try:
+                    outbound = _send_one_queued_market_advisory(
+                        api=api, ledger=ledger,
+                    )
+                except TelegramTransportError as error:
+                    code = str(error)
+                    if code not in (
+                        "M05_ADVISORY_DELIVERY_REVIEW_REQUIRED",
+                        "M05_ADVISORY_SEND_UNCERTAIN_REVIEW_REQUIRED",
+                        "M05_ADVISORY_ACK_UNCERTAIN_REVIEW_REQUIRED",
+                        "M05_TELEGRAM_API_TRANSPORT_FAILED",
+                    ):
+                        raise
+                    # The original SQLite CLAIMED row MUST NOT be reset,
+                    # resent, marked SENT or silently expired. Only this
+                    # advisory delivery lane pauses; owner Telegram updates,
+                    # manual preview and public radar remain available.
+                    advisory_delivery_review_required = True
+                    advisory_delivery_reason = code
+                    outbound = {"delivery": "REVIEW_REQUIRED_NO_RETRY",
+                                "messages_sent": 0}
             manual_preview = (
                 {"delivery": "DEFERRED_ONE_OWNER_CARD_PER_TICK",
                  "messages_sent": 0}
@@ -335,6 +362,8 @@ def dedicated_owner_fast_loop_nonlive(
                     "batches": batches, "handled": handled,
                     "ignored": ignored, "outbound_sent": notices,
                     "ops_alert_failures": ops_alert_failures,
+                    "advisory_delivery_review_required": advisory_delivery_review_required,
+                    "advisory_delivery_reason": advisory_delivery_reason,
                     "getupdates_transport_failures": getupdates_transport_failures,
                     "readonly_preflight_transport_failures": readonly_preflight_transport_failures,
                     "getupdates_consecutive_failures": getupdates_consecutive_failures,
@@ -354,6 +383,8 @@ def dedicated_owner_fast_loop_nonlive(
         "next_offset": ledger.telegram_next_offset(),
         "single_original_poller": True,
         "ops_alert_failures": ops_alert_failures,
+        "advisory_delivery_review_required": advisory_delivery_review_required,
+        "advisory_delivery_reason": advisory_delivery_reason,
         "getupdates_transport_failures": getupdates_transport_failures,
         "readonly_preflight_transport_failures": readonly_preflight_transport_failures,
         "getupdates_consecutive_failures": getupdates_consecutive_failures,
