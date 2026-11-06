@@ -203,6 +203,34 @@ def _replace_private(path: Path, data: bytes, tag: str) -> None:
         temp.unlink(missing_ok=True)
 
 
+def read_original_private_sources() -> tuple[
+    dict, bytes, dict, bytes, dict, bytes, int,
+]:
+    """Owner-private fail-closed reader with fixed diagnostic categories.
+
+    This returns only data to the already authorized SAME original recovery
+    routine. Exceptions are sanitized before any user-visible output.
+    Neither file permissions nor active user services are modified.
+    """
+    try:
+        old_go, go_bytes = _private_json(GO, 2048)
+    except AdmissionDenied:
+        deny("M10_BTC_PRIVATE_GO_UNAVAILABLE")
+    try:
+        status, status_bytes = _private_json(STATUS, 32768)
+    except AdmissionDenied:
+        deny("M10_BTC_PRIVATE_STATUS_UNAVAILABLE")
+    try:
+        hold, hold_bytes = _private_json(HOLD, 2048)
+    except AdmissionDenied:
+        deny("M10_BTC_PRIVATE_HOLD_UNAVAILABLE")
+    try:
+        gap_count = _journal_gap_count(WSDB)
+    except AdmissionDenied:
+        deny("M10_BTC_PRIVATE_WS_JOURNAL_UNAVAILABLE")
+    return old_go, go_bytes, status, status_bytes, hold, hold_bytes, gap_count
+
+
 def recover_public_btc_once(*, approve: bool, epoch: int | None = None,
                             dry_run: bool = False) -> dict:
     if not approve and not dry_run:
@@ -217,13 +245,12 @@ def recover_public_btc_once(*, approve: bool, epoch: int | None = None,
         deny("M10_BTC_ORIGINAL_SOURCE_UNTRUSTED")
     # No service/timer mutations, no alternate code imports.
     assess_original_btc_systemd(values=_units())
-    try:
-        old_go, go_bytes = _private_json(GO, 2048)
-        status, status_bytes = _private_json(STATUS, 32768)
-        hold, hold_bytes = _private_json(HOLD, 2048)
-        gap_count = _journal_gap_count(WSDB)
-    except AdmissionDenied:
-        deny("M10_BTC_PRIVATE_SOURCE_UNAVAILABLE")
+    # Classify the FIRST exact failed owner-private source instead of
+    # a generic unavailable code. No raw paths, payloads, access tokens or
+    # exception strings. All checks remain READ ONLY until owner approval.
+    old_go, go_bytes, status, status_bytes, hold, hold_bytes, gap_count = (
+        read_original_private_sources()
+    )
     new_go = assess_exact_failed_btc(
         old_go=old_go, status=status, status_bytes=status_bytes,
         hold=hold, gaps=gap_count, epoch=now,
