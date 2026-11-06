@@ -87,7 +87,11 @@ ok = (
     and flag("INDODAX_ALLOW_LIVE_EXECUTION", "NO")
     and flag("INDODAX_EXECUTION_MODE", "DRY_RUN")
     and flag("M05_TELEGRAM_FAST_LONGPOLL_GO", "YES")
-    and flag("M05_RADAR_MOMENTUM_ALERT_GO", expected)
+    and (
+        flag("M05_RADAR_MOMENTUM_ALERT_GO", "YES")
+        if expected == "YES"
+        else not flag("M05_RADAR_MOMENTUM_ALERT_GO", "YES")
+    )
 )
 print("POLICY_AND_RADAR_ENV_VERIFIED=" + str(ok))
 raise SystemExit(0 if ok else 2)
@@ -138,8 +142,8 @@ HEARTBEAT=""
 for iteration in $(seq 1 30); do
   [[ "$NEWPID" == "$(systemctl --user show "$UNIT" -p MainPID --value)" ]] ||
     fail M05_UNEXPECTED_RESTART
-  HEARTBEAT="$(M05_PID="$NEWPID" journalctl --user -u "$UNIT" -n 500 \
-    --no-pager -o json | python3 -c '
+  HEARTBEAT="$(journalctl --user -u "$UNIT" -n 500 \
+    --no-pager -o json | M05_PID="$NEWPID" python3 -c '
 import json,os,sys
 pid=os.environ["M05_PID"]
 last=None
