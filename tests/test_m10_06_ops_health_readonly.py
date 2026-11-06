@@ -154,6 +154,44 @@ class M10OpsReadonlyTests(unittest.TestCase):
                 last_completed_batch_epoch=NOW-3600), now_epoch=NOW)
         self.assertNotIn("BTC_WS_BATCH_STALE", recent["alert_codes"])
 
+    def test_longpoll_service_active_and_old_timer_disabled_no_false_alert(self):
+        present = units()
+        present["units"].append({
+            "role": "m05_telegram", "observed_load": "loaded",
+            "observed_active": "active", "observed_enabled": "enabled",
+            "v2_user_fragment_path_matches": True,
+            "unit_needs_daemon_reload": "no",
+        })
+        for row in present["units"]:
+            if row["role"] == "m05_telegram_timer":
+                row["observed_active"] = "inactive"
+                row["observed_enabled"] = "disabled"
+        result = assess_v2_operations_readonly(
+            units_report=present, status_document=safe_doc(),
+            now_epoch=NOW,
+        )
+        self.assertNotIn("M05_TIMER_NOT_ACTIVE", result["alert_codes"])
+        self.assertFalse(result["m05_timer_active_metadata_observed"])
+        self.assertTrue(result["m05_receiver_metadata"]["m05_receiver_metadata_active"])
+        self.assertFalse(result["m05_receiver_metadata"]["m05_receiver_type_simple_verified"])
+        self.assert_not_promotion(result)
+
+    def test_dual_m05_receiver_metadata_is_not_accepted(self):
+        present = units()
+        present["units"].append({
+            "role": "m05_telegram", "observed_load": "loaded",
+            "observed_active": "active", "observed_enabled": "enabled",
+            "v2_user_fragment_path_matches": True,
+            "unit_needs_daemon_reload": "no",
+        })
+        result = assess_v2_operations_readonly(
+            units_report=present, status_document=safe_doc(),
+            now_epoch=NOW,
+        )
+        self.assertIn("M05_TIMER_NOT_ACTIVE", result["alert_codes"])
+        self.assertFalse(result["m05_receiver_metadata"]["m05_receiver_metadata_active"])
+        self.assert_not_promotion(result)
+
     def test_unobserved_m03_or_m05_is_not_silent_success(self):
         r = assess_v2_operations_readonly(
             units_report=units(

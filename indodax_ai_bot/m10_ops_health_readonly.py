@@ -14,7 +14,9 @@ import stat
 import time
 from typing import Any
 
-from .m10_v2_units_readonly import inspect_named_v2_units
+from .m10_v2_units_readonly import (
+    inspect_named_v2_units, classify_m05_receiver_metadata,
+)
 
 
 _MAX_STATUS_BYTES = 32768
@@ -152,10 +154,11 @@ def assess_v2_operations_readonly(
 
     btc = trusted_unit("btc_public_ws")
     m05 = trusted_unit("m05_telegram_timer")
+    receiver = classify_m05_receiver_metadata(units)
     m03 = trusted_unit("m03_scanner_timer")
     btc_active = bool(btc and btc.get("observed_active") == "active")
-    m05_active = bool(m05 and m05.get("observed_active") == "active"
-                      and m05.get("observed_enabled") in ("enabled", "enabled-runtime"))
+    m05_active = receiver["m05_timer_active_enabled_metadata_only"]
+    m05_receiver_active = receiver["m05_receiver_metadata_active"]
     m03_disabled = bool(m03 and m03.get("observed_active") == "inactive"
                          and m03.get("observed_enabled") == "disabled")
 
@@ -163,10 +166,11 @@ def assess_v2_operations_readonly(
         alerts.append("BTC_WS_UNIT_STATUS_UNVERIFIED")
     elif not btc_active:
         alerts.append("BTC_WS_UNIT_NOT_ACTIVE")
-    if m05 is None:
-        alerts.append("M05_TIMER_STATUS_UNVERIFIED")
-    elif not m05_active:
-        alerts.append("M05_TIMER_NOT_ACTIVE")
+    if not m05_receiver_active:
+        if m05 is None:
+            alerts.append("M05_TIMER_STATUS_UNVERIFIED")
+        else:
+            alerts.append("M05_TIMER_NOT_ACTIVE")
     if m03 is None:
         alerts.append("M03_TIMER_STATUS_UNVERIFIED")
     elif not m03_disabled:
@@ -179,6 +183,7 @@ def assess_v2_operations_readonly(
         "alert_codes": sorted(set(alerts)),
         "btc_ws_unit_active_metadata_observed": btc_active,
         "m05_timer_active_metadata_observed": m05_active,
+        "m05_receiver_metadata": receiver,
         "m03_timer_disabled_metadata_observed": m03_disabled,
         "btc_ws_last_batch": batch,
         "continuous_24h_heartbeat_verified": False,

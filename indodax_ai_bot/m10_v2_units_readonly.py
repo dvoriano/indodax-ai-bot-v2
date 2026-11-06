@@ -148,6 +148,63 @@ def inspect_named_v2_units(
     }
 
 
+def classify_m05_receiver_metadata(units_report: dict) -> dict:
+    """Recognize either original timer or owner-switched same-service profile.
+
+    Fixed systemd unit metadata ONLY. Does not verify Type=simple, token,
+    network delivery, process SHA, heartbeat, or authorize scanner/trading.
+    A simultaneously enabled timer and persistent-looking service is rejected.
+    """
+    raw = units_report.get("units") if isinstance(units_report, dict) else None
+    rows = {}
+    if isinstance(raw, list):
+        for row in raw:
+            if (isinstance(row, dict)
+                    and row.get("role") in ("m05_telegram", "m05_telegram_timer")
+                    and row["role"] not in rows):
+                rows[row["role"]] = row
+
+    def trusted(row: dict | None) -> bool:
+        return bool(
+            isinstance(row, dict)
+            and row.get("observed_load") == "loaded"
+            and row.get("v2_user_fragment_path_matches") is True
+            and row.get("unit_needs_daemon_reload") == "no"
+        )
+
+    service = rows.get("m05_telegram")
+    timer = rows.get("m05_telegram_timer")
+    service_active = (
+        trusted(service) and service.get("observed_active") == "active"
+        and service.get("observed_enabled") in ("enabled", "enabled-runtime")
+    )
+    timer_active = (
+        trusted(timer) and timer.get("observed_active") == "active"
+        and timer.get("observed_enabled") in ("enabled", "enabled-runtime")
+    )
+    timer_disabled = (
+        trusted(timer) and timer.get("observed_active") == "inactive"
+        and timer.get("observed_enabled") == "disabled"
+    )
+    # A service can be momentarily active under the OLD oneshot timer;
+    # do not demand service inactive for that legitimate profile.
+    timer_mode = timer_active and not service_active
+    service_mode = service_active and timer_disabled
+    mode = ("TIMER_METADATA_ONLY" if timer_mode else
+            "SERVICE_ACTIVE_TIMER_DISABLED_METADATA_ONLY" if service_mode
+            else "UNVERIFIED_OR_CONFLICT")
+    return {
+        "m05_receiver_metadata_mode": mode,
+        "m05_receiver_metadata_active": bool(timer_mode or service_mode),
+        "m05_service_active_enabled_metadata_only": bool(service_active),
+        "m05_timer_active_enabled_metadata_only": bool(timer_active),
+        "m05_timer_disabled_metadata_only": bool(timer_disabled),
+        "m05_receiver_type_simple_verified": False,
+        "m05_one_poller_independently_verified": False,
+        "m05_telegram_delivery_verified": False,
+    }
+
+
 def main() -> int:
     report = inspect_named_v2_units()
     print(json.dumps(report, sort_keys=True, separators=(",", ":")))
