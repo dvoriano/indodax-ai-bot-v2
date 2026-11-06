@@ -194,6 +194,7 @@ def dedicated_owner_fast_loop_nonlive(
         raise ValueError("M05_AUTO_RADAR_ALERT_NOT_CALLABLE")
     batches = handled = ignored = notices = 0
     radar_invocations = radar_send_acks = radar_uncertain = 0
+    ops_alert_failures = 0
     radar_last_status = ("M05_RADAR_PENDING_FIRST_POLL"
                          if auto_radar_alert is not None else "M05_RADAR_OPTIN_OFF")
     radar_status_allowlist = frozenset((
@@ -247,7 +248,13 @@ def dedicated_owner_fast_loop_nonlive(
             # One bounded snapshot every ~60s, never blocking owner callbacks
             # with an additional poller or a separate Telegram service.
             if auto_ops_alert is not None and batches % 30 == 0:
-                auto_ops_alert(api=api, ledger=ledger)
+                try:
+                    auto_ops_alert(api=api, ledger=ledger)
+                except Exception:
+                    # Optional ops alert failures cannot terminate the
+                    # original owner receiver or starve this batch's radar.
+                    # Count only: never emit raw errors or credentials.
+                    ops_alert_failures += 1
             # Reuse the SAME original owner receiver and durable SQLite.
             # Optional owner radar notices have NO buttons/Final/order.
             # Any source/transport failure is handled by the radar helper.
@@ -285,6 +292,7 @@ def dedicated_owner_fast_loop_nonlive(
                     "status": "M05_FAST_LOOP_HEARTBEAT_NONLIVE",
                     "batches": batches, "handled": handled,
                     "ignored": ignored, "outbound_sent": notices,
+                    "ops_alert_failures": ops_alert_failures,
                     "radar_enabled": auto_radar_alert is not None,
                     "radar_invocations": radar_invocations,
                     "radar_send_acks": radar_send_acks,
@@ -300,6 +308,7 @@ def dedicated_owner_fast_loop_nonlive(
         "ignored": ignored, "outbound_sent": notices,
         "next_offset": ledger.telegram_next_offset(),
         "single_original_poller": True,
+        "ops_alert_failures": ops_alert_failures,
         "radar_enabled": auto_radar_alert is not None,
         "radar_invocations": radar_invocations,
         "radar_send_acks": radar_send_acks,
