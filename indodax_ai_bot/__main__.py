@@ -41,6 +41,7 @@ from .m11_04_release_risk_offline import review_m11_release_risk_offline
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError, inspect_provider_configuration_offline
 from .m04_owner_config import owner_provider_source
+from .m10_07_original_mainpath_readonly import inspect_m10_07_original_mainpath_readonly
 
 
 def _m03_compact_from_original(outcome) -> dict:
@@ -125,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default="runtime/decisions.sqlite3")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--health", action="store_true")
+    group.add_argument("--m10-07-mainpath-readiness-once", action="store_true",
+                       help="Original V2 M03 scanner + M04 three-role local config + M05 owner outbox READ ONLY; no extra worker, HTTP, orders or GO")
     group.add_argument("--m04-provider-readiness-once", action="store_true",
                        help="M04 original role/model/credential readiness only: no HTTP, provider billing, issuer or orders")
     group.add_argument("--m11-release-risk-offline-once", action="store_true",
@@ -289,6 +292,21 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+
+        if args.m10_07_mainpath_readiness_once:
+            # M10-07 diagnostic at the ORIGINAL V2 CLI boundary, before
+            # constructing any DecisionJournal, scanner or paid provider.
+            settings.require_m01_safety()
+            source, source_kind, key_status = _m04_original_provider_scope()
+            provider_report = inspect_provider_configuration_offline(source)
+            result = inspect_m10_07_original_mainpath_readonly(
+                provider_report=provider_report,
+            )
+            result["m04_provider_source_kind"] = source_kind
+            result["m04_key_file_status"] = key_status
+            print(json.dumps({"m10_07_original_mainpath": result},
+                             sort_keys=True))
+            return 0
         if args.m04_provider_readiness_once:
             # Direct original V2 CLI, BEFORE creating a DecisionJournal or
             # scanning or instantiating the paid provider. This only checks
