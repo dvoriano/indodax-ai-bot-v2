@@ -305,6 +305,65 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             [m for m, _ in self.calls].count("getUpdates"), 16,
         )
 
+
+    def test_radar_ack_accounted_for_in_original_existing_heartbeat(self):
+        events = []
+        radar_calls = []
+
+        def radar(*, api, ledger):
+            self.assertIs(api, self.bot_api)
+            self.assertIs(ledger, self.owner)
+            radar_calls.append(True)
+            return {
+                "status": "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
+                "messages_sent": 1,
+                "execution_allowed": False,
+            }
+
+        result = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=30, heartbeat=events.append,
+            auto_radar_alert=radar,
+        )
+        self.assertEqual(len(radar_calls), 1)
+        self.assertEqual(len(events), 3)
+        self.assertEqual(result["radar_send_acks"], 1)
+        self.assertEqual(result["radar_invocations"], 1)
+        self.assertEqual(result["radar_delivery_uncertain"], 0)
+        self.assertTrue(result["radar_enabled"])
+        self.assertEqual(
+            events[-1]["radar_last_status"],
+            "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
+        )
+        self.assertEqual(events[-1]["radar_send_acks"], 1)
+        self.assertEqual(events[-1]["execution_allowed"], False)
+        self.assertFalse(result["order_sent"])
+        self.assertNotIn(TOKEN, json.dumps(events))
+
+    def test_optional_radar_failure_does_not_terminate_original_receiver(self):
+        events = []
+
+        def broken_radar(**_):
+            raise RuntimeError("synthetic secret must never leak")
+
+        result = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=30, heartbeat=events.append,
+            auto_radar_alert=broken_radar,
+        )
+        self.assertEqual(result["batches"], 30)
+        self.assertEqual(result["radar_invocations"], 1)
+        self.assertEqual(result["radar_delivery_uncertain"], 1)
+        self.assertEqual(result["radar_send_acks"], 0)
+        self.assertEqual(
+            events[-1]["radar_last_status"], "M05_RADAR_CALLBACK_FAILED"
+        )
+        self.assertNotIn("synthetic secret", json.dumps(events))
+        self.assertFalse(result["order_sent"])
+        self.assertFalse(result["execution_allowed"])
+
     def test_fast_optin_dropin_does_not_modify_legacy_timer(self):
         root = Path(__file__).resolve().parents[1]
         original = (root / "systemd/user"
