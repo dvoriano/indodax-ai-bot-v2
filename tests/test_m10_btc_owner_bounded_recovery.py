@@ -3,6 +3,9 @@ from hashlib import sha256
 import unittest
 from unittest.mock import patch
 
+from indodax_ai_bot.btc_ops_gate import AdmissionDenied
+from scripts import m10_btc_owner_bounded_recovery as module
+
 from scripts.m10_btc_owner_bounded_recovery import (
     BtcRecoveryDenied, PILOT_SECONDS, ROOT, RT, UNIT, UNITDIR, DROP,
     assess_exact_failed_btc, assess_original_btc_systemd,
@@ -162,6 +165,44 @@ class M10BtcOneOriginalRecovery(unittest.TestCase):
     def test_owner_recovery_without_explicit_action_denied(self):
         with self.assertRaises(BtcRecoveryDenied):
             recover_public_btc_once(approve=False, dry_run=False, epoch=NOW)
+
+
+    def test_private_readers_classify_exact_missing_source_without_payloads(self):
+        sample = ({}, b"{}")
+        for path, expected in (
+            (module.GO, "M10_BTC_PRIVATE_GO_UNAVAILABLE"),
+            (module.STATUS, "M10_BTC_PRIVATE_STATUS_UNAVAILABLE"),
+            (module.HOLD, "M10_BTC_PRIVATE_HOLD_UNAVAILABLE"),
+        ):
+            def reader(candidate, _size, *, fail=path):
+                if candidate == fail:
+                    raise AdmissionDenied("PRIVATE_FILE_UNREADABLE")
+                return sample
+            with (self.subTest(path=path.name),
+                  patch.object(module, "_private_json", side_effect=reader),
+                  patch.object(module, "_journal_gap_count", return_value=7)):
+                with self.assertRaises(BtcRecoveryDenied) as error:
+                    module.read_original_private_sources()
+                self.assertEqual(str(error.exception), expected)
+
+    def test_private_readers_distinguish_sqlite_journal_error(self):
+        with (patch.object(module, "_private_json", return_value=({}, b"{}")),
+              patch.object(module, "_journal_gap_count",
+                           side_effect=AdmissionDenied("PUBLIC_WS_JOURNAL_INVALID"))):
+            with self.assertRaises(BtcRecoveryDenied) as error:
+                module.read_original_private_sources()
+        self.assertEqual(
+            str(error.exception),
+            "M10_BTC_PRIVATE_WS_JOURNAL_UNAVAILABLE",
+        )
+
+    def test_private_readers_success_is_readonly_and_no_authority(self):
+        with (patch.object(module, "_private_json", return_value=({}, b"{}")) as files,
+              patch.object(module, "_journal_gap_count", return_value=7) as gaps):
+            values = module.read_original_private_sources()
+        self.assertEqual(values, ({}, b"{}", {}, b"{}", {}, b"{}", 7))
+        self.assertEqual(files.call_count, 3)
+        gaps.assert_called_once_with(module.WSDB)
 
 
 if __name__ == "__main__":
