@@ -30,6 +30,11 @@ DEFAULT_DB = Path.home() / "indodax-ai-bot-v2" / "runtime" / "decisions.sqlite3"
 MIN_TURNOVER_IDR = Decimal("150000000")
 MIN_RISE_PCT = Decimal("8")
 MIN_EARLY_RISE_PCT = Decimal("5")
+# This is a positive NET difference in two rolling-24h ticker snapshots,
+# NOT actual one-minute trades, buy/sell pressure or complete trade flow.
+MIN_TURNOVER_NET_CHANGE_IDR = Decimal("20000000")
+MIN_TURNOVER_NET_CHANGE_PCT = Decimal("3")
+TURNOVER_MAX_WINDOW_SECONDS = 180
 MAX_SPREAD_BPS = Decimal("100")
 MAX_AGE_SECONDS = 90
 LOOKBACK_SECONDS = 300
@@ -150,16 +155,69 @@ def inspect_original_m03_radar_readonly(
             p == pair and latest[0] - 120 <= minute <= latest[0]
             for p, minute in watches
         )
-        if not (
+        price_watch = (
             rise_pct >= MIN_RISE_PCT or
             (early and rise_pct >= MIN_EARLY_RISE_PCT)
-        ):
+        )
+        # Require exact adjacent minute samples for a snapshot-delta watch.
+        # Rolling 24h turnover has an entering and an expiring edge: the
+        # POSITIVE net change is descriptive, NOT measured one-minute volume.
+        volume_prior = []
+        for offset in range(1, TURNOVER_MAX_WINDOW_SECONDS // 60 + 1):
+            older_at_minute = next(
+                (x for x in samples[1:]
+                 if x[0] == latest[0] - offset * 60), None
+            )
+            if older_at_minute is None:
+                break
+            volume_prior.append(older_at_minute)
+        volume_base = volume_prior[-1] if volume_prior else None
+        volume_delta = (
+            latest[3] - volume_base[3]
+            if volume_base is not None else None
+        )
+        volume_pct = (
+            volume_delta / volume_base[3] * Decimal(100)
+            if volume_delta is not None and volume_base[3] > 0 else None
+        )
+        volume_watch = (
+            volume_delta is not None and volume_pct is not None
+            and volume_delta >= MIN_TURNOVER_NET_CHANGE_IDR
+            and volume_pct >= MIN_TURNOVER_NET_CHANGE_PCT
+        )
+        if not price_watch and not volume_watch:
             continue
         actual_minutes = {x[0] for x in samples
                           if reference[0] <= x[0] <= latest[0]}
         expected = (latest[0] - reference[0]) // 60 + 1
+        watch_type = (
+            "PRICE_AND_ROLLING_TURNOVER_WATCH"
+            if price_watch and volume_watch else
+            "PRICE_MOMENTUM_WATCH" if price_watch else
+            "ROLLING_TURNOVER_CHANGE_WATCH"
+        )
         candidates.append({
             "pair": pair,
+            "watch_type": watch_type,
+            "price_watch": price_watch,
+            "volume_watch": volume_watch,
+            "volume_24h_net_change_idr": (
+                format(volume_delta, "f") if volume_watch else None
+            ),
+            "volume_24h_net_change_pct": (
+                format(volume_pct.quantize(Decimal("0.01")), "f")
+                if volume_watch else None
+            ),
+            "volume_reference_epoch": (
+                volume_base[1] if volume_watch else None
+            ),
+            "volume_comparison_seconds": (
+                latest[0] - volume_base[0] if volume_watch else None
+            ),
+            "volume_24h_previous_idr": (
+                str(volume_base[3]) if volume_watch else None
+            ),
+            "rolling_24h_turnover_not_1m_traded_volume": True,
             "observed_epoch": latest[1],
             "reference_epoch": reference[1],
             "latest_price_idr": str(latest[2]),
@@ -173,9 +231,15 @@ def inspect_original_m03_radar_readonly(
             "spread_bps": str(latest[4]),
             "no_g1_or_ai_or_order_authority": True,
         })
-    candidates.sort(
-        key=lambda x: (-Decimal(x["observed_rise_pct"]), x["pair"])
-    )
+    # Both price and volume change outrank either alone. This is NOT an
+    # executable ranking, backtested opportunity score or predicted ROI.
+    candidates.sort(key=lambda x: (
+        0 if x["price_watch"] and x["volume_watch"] else
+        1 if x["price_watch"] else 2,
+        -Decimal(x["observed_rise_pct"]) if x["price_watch"]
+        else -Decimal(x["volume_24h_net_change_idr"]),
+        x["pair"],
+    ))
     return {
         "status": "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
         "candidates": candidates[:5],
@@ -265,26 +329,45 @@ def send_one_owner_radar_momentum_nonlive(
             candidate["observed_epoch"], wib
         ).strftime("%H:%M WIB")
         risk = (
-            "RISIKO: ada menit tanpa sampel; ini BUKAN return candle 1m."
+            "RISIKO: ada menit tanpa sampel harga; ini bukan return candle 1m."
             if candidate["missing_intermediate_minute_samples"]
-            else "RISIKO: momentum dapat berbalik; kualitas entry belum dinilai."
+            else "RISIKO: harga dapat berbalik; kualitas entry belum dinilai."
         )
         stage = (
             "EARLY_WATCH historis teramati, BELUM terkalibrasi."
             if candidate["casebook_early_watch_observed"]
             else "Lonjakan harga antar-sampel teramati; setup belum diketahui."
         )
+        kind = (
+            "HARGA + PERUBAHAN VOLUME 24J"
+            if candidate["price_watch"] and candidate["volume_watch"] else
+            "MOMENTUM HARGA" if candidate["price_watch"] else
+            "KENAIKAN NETTO VOLUME 24J TERCATAT"
+        )
+        volume_detail = (
+            "Perubahan netto volume 24 jam: +Rp"
+            + candidate["volume_24h_net_change_idr"]
+            + " (+" + candidate["volume_24h_net_change_pct"] + "%)"
+            + " dalam " + str(candidate["volume_comparison_seconds"] // 60)
+            + " menit sampel berurutan.\n"
+            if candidate["volume_watch"] else ""
+        )
         message = (
-            "RADAR MOMENTUM M03 | OBSERVASI, BUKAN REKOMENDASI BUY\n"
+            "RADAR M03 | " + kind + " | BUKAN REKOMENDASI BUY\n"
             f"Pair: {candidate['pair'].upper()}\n"
-            f"Periode sampel: {from_time} ke {to_time}\n"
+            f"Periode harga: {from_time} ke {to_time}\n"
             f"Harga tercatat: Rp{candidate['reference_price_idr']}"
             f" ke Rp{candidate['latest_price_idr']}\n"
-            f"Kenaikan antar-sampel: +{candidate['observed_rise_pct']}%\n"
-            f"Volume 24 jam teramati: Rp{candidate['volume_24h_idr']}\n"
+            f"Perubahan harga antar-sampel: {candidate['observed_rise_pct']}%\n"
+            f"Volume 24 jam terakhir tercatat: Rp{candidate['volume_24h_idr']}\n"
+            f"{volume_detail}"
+            "PENTING: perubahan volume rolling 24 jam BUKAN jumlah "
+            "transaksi 1 menit ataupun bukti tekanan BUY/SELL.\n"
             f"{stage}\n{risk}\n"
-            "G1, AI MARKET/RISK/STRATEGY, akun dan order: BELUM TERVERIFIKASI.\n"
-            "Hanya WATCH. Tidak ada tombol PASS/REJECT atau BUY/SELL."
+            "Status maintenance/suspend tidak terverifikasi pada arsip radar; "
+            "periksa pengumuman Indodax.\n"
+            "AI MARKET/RISK/STRATEGY dan G1: BELUM TERVERIFIKASI. "
+            "Tidak ada perintah BUY/SELL atau tombol PASS/REJECT."
         )
         # Claim is durable BEFORE send; uncertainty must never replay it.
         try:
