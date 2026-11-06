@@ -16,6 +16,8 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from hashlib import sha256
+import json
 from pathlib import Path
 import os
 import re
@@ -66,8 +68,77 @@ def _finite_number(value, *, positive=False) -> Decimal | None:
     return n
 
 
+
+def classify_public_watch_pre_ai_nonlive(candidate: dict) -> dict:
+    """One-snapshot public-only evidence triage, NOT three actual AI calls.
+
+    Informational sorting/review metadata from the candidate's SAME cached
+    original M03 rows; no network, orderbook invention, new scanner, AI,
+    trading permissions or extra Telegram messages.
+    """
+    price = Decimal(candidate["observed_rise_pct"])
+    spread = Decimal(candidate["spread_bps"])
+    combined = candidate["price_watch"] and candidate["volume_watch"]
+    if price <= 0:
+        priority = "ACTIVITY_ONLY_PRICE_NOT_RISING"
+        rank = 4
+    elif combined:
+        priority = "PRICE_AND_ROLLING_DELTA_REVIEW"
+        rank = 1
+    elif candidate["price_watch"]:
+        priority = "PRICE_MOMENTUM_REVIEW"
+        rank = 2
+    else:
+        priority = "ROLLING_DELTA_PRICE_WEAK_REVIEW"
+        rank = 3
+    cautions = ["PUBLIC_SOURCE_UNATTESTED", "TRADE_TAPE_NOT_COMPLETE",
+                "ROLLING_24H_DELTA_NOT_EXECUTED_1M_VOLUME",
+                "ORDERBOOK_DEPTH_NEWS_AND_MAINTENANCE_UNVERIFIED"]
+    if candidate["missing_intermediate_minute_samples"]:
+        cautions.append("MISSING_INTERMEDIATE_MINUTE_SAMPLE")
+    if price <= 0:
+        cautions.append("PRICE_NONPOSITIVE_DO_NOT_INFER_BUY_PRESSURE")
+    if spread > Decimal("60"):
+        cautions.append("SPREAD_OVER_60_BPS_OBSERVED")
+    # Diagnostic fingerprint only. Local hash never authenticates Indodax,
+    # creates a G1 issuer receipt or authorizes paid M04 models.
+    fields = {
+        "pair": candidate["pair"],
+        "observed_epoch": candidate["observed_epoch"],
+        "reference_epoch": candidate["reference_epoch"],
+        "observed_rise_pct": candidate["observed_rise_pct"],
+        "volume_24h_idr": candidate["volume_24h_idr"],
+        "volume_24h_net_change_idr": candidate["volume_24h_net_change_idr"],
+        "spread_bps": candidate["spread_bps"],
+        "sample_gap": candidate["missing_intermediate_minute_samples"],
+        "watch_type": candidate["watch_type"],
+    }
+    digest = sha256(json.dumps(
+        fields, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")).hexdigest()
+    return {
+        "status": "PUBLIC_WATCH_PRE_AI_DIAGNOSTIC_ONLY",
+        "review_priority": priority,
+        "priority_rank_observational": rank,
+        "public_sample_fingerprint_sha256": digest,
+        "caution_codes": cautions,
+        "price_is_actual_closed_candle": False,
+        "delta_24h_is_actual_1m_trade_volume": False,
+        "trade_direction_buy_dominance_verified": False,
+        "g1_verified": False,
+        "market_risk_strategy_ai_calls": 0,
+        "ai_role_results": None,
+        "news_status": "UNAVAILABLE",
+        "strategy": "WATCH_NO_TRADE",
+        "execution_allowed": False,
+    }
+
+
+
 def inspect_original_m03_radar_readonly(
     *, db_path: Path = DEFAULT_DB, now_epoch: int | None = None,
+    explain_pairs: tuple[str, ...] = (),
+    replay_no_casebook: bool = False,
 ) -> dict:
     """Bounded factual top-candidate radar; not an order/entry signal.
 
@@ -79,6 +150,14 @@ def inspect_original_m03_radar_readonly(
     now = int(time.time()) if now_epoch is None else now_epoch
     if type(now) is not int or now <= 0:
         raise ValueError("M03_RADAR_INVALID_CLOCK")
+    if (type(explain_pairs) is not tuple or len(explain_pairs) > 10
+            or len(set(explain_pairs)) != len(explain_pairs)
+            or any(type(pair) is not str or not PAIR_ID.fullmatch(pair)
+                   for pair in explain_pairs)
+            or type(replay_no_casebook) is not bool):
+        raise ValueError("M03_RADAR_EXPLAIN_INVALID_ARGS")
+    requested = set(explain_pairs)
+    diagnostics = {}
     path = Path(db_path)
     if not _owned_private_regular(path):
         return {"status": "M03_RADAR_ORIGINAL_DB_NOT_TRUSTED", "candidates": []}
@@ -104,7 +183,7 @@ def inspect_original_m03_radar_readonly(
                 (now - LOOKBACK_SECONDS - 60, now),
             ).fetchall()
             watches = set()
-            if "public_surge_cases" in source_tables:
+            if "public_surge_cases" in source_tables and not replay_no_casebook:
                 for pair, minute, cohort in db.execute(
                     "SELECT pair,minute_epoch,cohort FROM public_surge_cases "
                     "WHERE minute_epoch BETWEEN ? AND ? LIMIT 1000",
@@ -137,19 +216,36 @@ def inspect_original_m03_radar_readonly(
     candidates = []
     for pair, samples in by_pair.items():
         latest = samples[0]  # ORDER BY minute_epoch DESC
-        if (now - latest[1] > MAX_AGE_SECONDS
-                or latest[3] < MIN_TURNOVER_IDR
-                or latest[4] > MAX_SPREAD_BPS):
+        if now - latest[1] > MAX_AGE_SECONDS:
+            if pair in requested:
+                diagnostics[pair] = {"reason": "STALE_LATEST_SAMPLE",
+                                     "latest_observed_epoch": latest[1]}
+            continue
+        if latest[3] < MIN_TURNOVER_IDR:
+            if pair in requested:
+                diagnostics[pair] = {"reason": "BELOW_DAILY_TURNOVER_FLOOR",
+                                     "latest_observed_epoch": latest[1]}
+            continue
+        if latest[4] > MAX_SPREAD_BPS:
+            if pair in requested:
+                diagnostics[pair] = {"reason": "SPREAD_OVER_WATCH_LIMIT",
+                                     "latest_observed_epoch": latest[1]}
             continue
         older = [
             x for x in samples[1:]
             if 60 <= latest[0] - x[0] <= LOOKBACK_SECONDS
         ]
         if not older:
+            if pair in requested:
+                diagnostics[pair] = {"reason": "MISSING_2_TO_5M_REFERENCE",
+                                     "latest_observed_epoch": latest[1]}
             continue
         reference = min(older, key=lambda x: x[0])
         rise_pct = (latest[2] / reference[2] - 1) * Decimal(100)
         if not rise_pct.is_finite() or rise_pct > Decimal("500"):
+            if pair in requested:
+                diagnostics[pair] = {"reason": "NONFINITE_OR_OUTLIER_PRICE_RISE",
+                                     "latest_observed_epoch": latest[1]}
             continue
         early = any(
             p == pair and latest[0] - 120 <= minute <= latest[0]
@@ -186,6 +282,13 @@ def inspect_original_m03_radar_readonly(
             and volume_pct >= MIN_TURNOVER_NET_CHANGE_PCT
         )
         if not price_watch and not volume_watch:
+            if pair in requested:
+                diagnostics[pair] = {
+                    "reason": "BELOW_PRICE_AND_ROLLING_DELTA_THRESHOLDS",
+                    "observed_rise_pct": str(rise_pct.quantize(Decimal("0.01"))),
+                    "rolling_24h_delta_observable": volume_delta is not None,
+                    "latest_observed_epoch": latest[1],
+                }
             continue
         actual_minutes = {x[0] for x in samples
                           if reference[0] <= x[0] <= latest[0]}
@@ -196,7 +299,7 @@ def inspect_original_m03_radar_readonly(
             "PRICE_MOMENTUM_WATCH" if price_watch else
             "ROLLING_TURNOVER_CHANGE_WATCH"
         )
-        candidates.append({
+        candidate = {
             "pair": pair,
             "watch_type": watch_type,
             "price_watch": price_watch,
@@ -230,7 +333,13 @@ def inspect_original_m03_radar_readonly(
             "volume_24h_idr": str(latest[3]),
             "spread_bps": str(latest[4]),
             "no_g1_or_ai_or_order_authority": True,
-        })
+        }
+        candidate["pre_ai_review"] = classify_public_watch_pre_ai_nonlive(candidate)
+        candidates.append(candidate)
+        if pair in requested:
+            diagnostics[pair] = {"reason": "QUALIFIED_BEFORE_TOP5",
+                                 "latest_observed_epoch": latest[1],
+                                 "watch_type": watch_type}
     # Both price and volume change outrank either alone. This is NOT an
     # executable ranking, backtested opportunity score or predicted ROI.
     candidates.sort(key=lambda x: (
@@ -240,7 +349,19 @@ def inspect_original_m03_radar_readonly(
         else -Decimal(x["volume_24h_net_change_idr"]),
         x["pair"],
     ))
-    return {
+    if requested:
+        for index, candidate in enumerate(candidates):
+            pair = candidate["pair"]
+            if pair in requested:
+                diagnostics[pair]["reason"] = (
+                    "IN_TOP5" if index < 5 else "QUALIFIED_OUTSIDE_TOP5"
+                )
+                diagnostics[pair]["rank"] = index + 1
+        for pair in requested:
+            diagnostics.setdefault(pair, {
+                "reason": "NO_VALID_SAMPLE_IN_REPLAY_WINDOW",
+            })
+    result = {
         "status": "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
         "candidates": candidates[:5],
         "source_authenticated_for_g1": False,
@@ -248,6 +369,11 @@ def inspect_original_m03_radar_readonly(
         "owner_order_specific_final_verified": False,
         "execution_allowed": False,
     }
+    if requested:
+        result["pair_diagnostics"] = {
+            pair: diagnostics[pair] for pair in explain_pairs
+        }
+    return result
 
 
 def _claim_once(ledger, pair: str, observed_epoch: int,
