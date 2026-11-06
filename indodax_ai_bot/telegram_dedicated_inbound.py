@@ -24,7 +24,7 @@ from .telegram_bot_api import (
 from .telegram_readonly_preflight import inspect_telegram_readonly
 
 LEGACY_CAIPITI_BOT_ID = 8827061554
-RADAR_CHECK_INTERVAL_SECONDS = 60
+RADAR_CHECK_INTERVAL_SECONDS = 30
 
 
 @contextmanager
@@ -250,7 +250,7 @@ def dedicated_owner_fast_loop_nonlive(
             batches += 1
             # Reuse the SAME original owner receiver and durable SQLite.
             # Check after the first successful poll, then by elapsed time:
-            # 30 completed longpoll batches are NOT a 60-second clock.
+            # Ten completed longpoll batches are NOT a 30-second clock.
             # No catch-up bursts after slow calls. The sender's persistent
             # per-pair/global cooldown and uncertain-delivery claims still
             # govern notices, including after process restart.

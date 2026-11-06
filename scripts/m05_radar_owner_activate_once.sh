@@ -138,7 +138,7 @@ NEWPID="$(systemctl --user show "$UNIT" -p MainPID --value)"
 check_env "$NEWPID" YES || fail RADAR_FLAG_NOT_IN_RUNNING_PROCESS
 
 # Observe the real callback heartbeat. The original receiver checks radar
-# after its first successful poll, then on a monotonic 60-second cadence.
+# after its first successful poll, then on a monotonic 30-second cadence.
 # Slow network/preflight/outbox calls can still delay that synchronous loop.
 # A failed observation still rolls back; this does NOT authorize a retry.
 # Only inspect allowlisted JSON heartbeat fields, never raw journal lines.
