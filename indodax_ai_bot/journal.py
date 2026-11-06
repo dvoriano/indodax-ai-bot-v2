@@ -2762,16 +2762,23 @@ class DecisionJournal:
         Replay is idempotent only for identical source-derived summaries.
         A conflicting record or trace with an existing Final fails closed.
         """
-        fields = {
+        base_fields = {
             "schema_version", "lane", "coverage_status",
             "attempted_count", "analyzed_count",
             "final_decision", "stage_disposition",
             "execution_allowed", "g1_verified", "paid_network_allowed",
         }
+        v2_fields = base_fields | {
+            "candidate_valid_count", "candidate_rejected_count",
+            "candidate_rejection_reason_counts", "eligible_cohort_status",
+            "scan_observed_epoch",
+        }
         if (type(trace_id) is not str or not 1 <= len(trace_id) <= 128
-                or type(summary) is not dict or set(summary) != fields
-                or type(summary["schema_version"]) is not int
-                or summary["schema_version"] != 1
+                or type(summary) is not dict
+                or type(summary.get("schema_version")) is not int
+                or summary["schema_version"] not in (1, 2)
+                or set(summary) != (base_fields if summary["schema_version"] == 1
+                                   else v2_fields)
                 or summary["lane"] != "DEEP20_EVERY_FIVE_MINUTES"
                 or summary["final_decision"] is not None
                 or summary["stage_disposition"] !=
@@ -2780,6 +2787,39 @@ class DecisionJournal:
                 or summary["g1_verified"] is not False
                 or summary["paid_network_allowed"] is not False):
             raise ValueError("M03_COMPACT_PRE_FINAL_ONLY")
+        if summary["schema_version"] == 2:
+            valid = summary["candidate_valid_count"]
+            rejected = summary["candidate_rejected_count"]
+            for count in (valid, rejected):
+                if count is not None and (
+                    type(count) is not int or not 0 <= count <= 40
+                ):
+                    raise ValueError("M03_COMPACT_V2_COUNT_INVALID")
+            if (type(valid) is int and type(rejected) is int
+                    and type(summary["analyzed_count"]) is int
+                    and valid + rejected != summary["analyzed_count"]):
+                raise ValueError("M03_COMPACT_V2_COUNT_MISMATCH")
+            reasons = summary["candidate_rejection_reason_counts"]
+            if (type(reasons) is not dict or len(reasons) > 6
+                    or any(type(k) is not str or not 3 <= len(k) <= 48
+                           or not all(c.isascii() and (c.isupper()
+                           or c.isdigit() or c == "_") for c in k)
+                           or type(v) is not int or not 1 <= v <= 40
+                           for k, v in reasons.items())
+                    or (type(rejected) is int
+                        and sum(reasons.values()) != rejected)
+                    or (rejected is None and reasons)):
+                raise ValueError("M03_COMPACT_V2_REJECTIONS_INVALID")
+            cohort = summary["eligible_cohort_status"]
+            if (type(cohort) is not str or not 1 <= len(cohort) <= 64
+                    or not all(c.isascii() and (c.isupper() or c.isdigit()
+                                                or c == "_") for c in cohort)):
+                raise ValueError("M03_COMPACT_V2_COHORT_INVALID")
+            observed = summary["scan_observed_epoch"]
+            if observed is not None and (
+                type(observed) is not int or not 0 < observed < 4102444800
+            ):
+                raise ValueError("M03_COMPACT_V2_EPOCH_INVALID")
         coverage = summary["coverage_status"]
         if (type(coverage) is not str or not 1 <= len(coverage) <= 64
                 or not all(c.isascii() and
