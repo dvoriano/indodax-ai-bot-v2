@@ -163,6 +163,44 @@ def admit(*, go: Path, status: Path, database: Path, hold: Path,
     return "BTC_PUBLIC_OPS_ADMITTED_UNATTESTED"
 
 
+def diagnose_once(*, go: Path, status: Path, database: Path, hold: Path,
+                  state: Path, epoch: int | None = None) -> dict:
+    """Read the SAME original ExecCondition gates without admitting/starting.
+
+    Never touches admission locks, writes GO/hold/cooldown, opens networks,
+    or authorizes a service. A snapshot cannot prove concurrent availability.
+    """
+    now = int(time.time()) if epoch is None else epoch
+    reason = "NONE"
+    try:
+        _policy_checks(go, status, database, hold, now)
+        lock = state.with_suffix(state.suffix + ".lock")
+        if state.is_symlink() or lock.is_symlink():
+            raise AdmissionDenied("PUBLIC_WS_STATE_SYMLINK_DENIED")
+        if state.exists():
+            prior, _ = _private_json(state, 512)
+            ts = prior.get("last_admission_epoch")
+            if type(ts) is not int or ts > now or now - ts < MIN_START_INTERVAL:
+                raise AdmissionDenied("PUBLIC_WS_START_COOLDOWN")
+    except AdmissionDenied as exc:
+        code = str(exc)
+        reason = code if SAFE_CODE.fullmatch(code) else "PUBLIC_WS_OPERATION_DENIED"
+    return {
+        "status": "BTC_PUBLIC_OPS_READONLY_EXEC_CONDITION_DIAGNOSIS",
+        "first_blocker": reason,
+        "original_gate_preconditions_passed_at_snapshot": reason == "NONE",
+        "dynamic_admission_or_concurrent_lock_verified": False,
+        "go_created_or_renewed": False,
+        "original_hold_modified": False,
+        "cooldown_state_modified": False,
+        "service_started_or_restarted": False,
+        "private_api_or_exchange_call_sent": False,
+        "paid_ai_calls": 0,
+        "order_sent": False,
+        "live_trading_authorized": False,
+    }
+
+
 def record_exit(*, hold: Path, service_result: str) -> str:
     """Persist a fail-stop latch on actual service failure; never leak logs."""
     if service_result in ("success", "exec-condition"):
@@ -176,7 +214,7 @@ def record_exit(*, hold: Path, service_result: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="PUBLIC BTC original systemd gate only")
-    p.add_argument("action", choices=("check", "exit-hook"))
+    p.add_argument("action", choices=("check", "exit-hook", "diagnose"))
     p.add_argument("--go", type=Path, default=ROOT / "btc_public_ops.go.json")
     p.add_argument("--status", type=Path, default=ROOT / "public_ws_btc.status.json")
     p.add_argument("--db", type=Path, default=ROOT / "public_ws_btc.sqlite3")
@@ -184,6 +222,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--state", type=Path, default=ROOT / "btc_public_ops.admission.json")
     args = p.parse_args(argv)
     try:
+        if args.action == "diagnose":
+            print(json.dumps(diagnose_once(
+                go=args.go, status=args.status, database=args.db,
+                hold=args.hold, state=args.state,
+            ), sort_keys=True))
+            return 0
         if args.action == "check":
             outcome = admit(go=args.go, status=args.status, database=args.db,
                             hold=args.hold, state=args.state)
