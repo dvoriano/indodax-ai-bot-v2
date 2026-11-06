@@ -88,6 +88,10 @@ def send_one_owner_ops_alert_nonlive(*, api, ledger, report=None,
     message = format_v2_ops_owner_message(snap)
     if "ALERT_DATA_UNVERIFIED" in message:
         return {"status": "M10_ALERT_FORMAT_UNVERIFIED", "messages_sent": 0}
+    message = message.replace(
+        "Peringatan belum terbukti terkirim otomatis; ",
+        "Pengiriman otomatis sedang dicoba; penerimaan owner belum terverifikasi; ",
+    )
     from .telegram_bot_api import TelegramTransportError
     try:
         api.call("sendMessage", {
