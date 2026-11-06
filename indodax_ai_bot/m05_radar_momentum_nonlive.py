@@ -335,7 +335,7 @@ def _pct(value: str) -> str:
     number = Decimal(value).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
-    return ("+" if number > 0 else "") + _idr_number(number) + "%"
+    return ("+" if number > 0 else "") + format(number, ".2f").replace(".", ",") + "%"
 
 
 def format_owner_radar_compact(candidate: dict) -> str:
