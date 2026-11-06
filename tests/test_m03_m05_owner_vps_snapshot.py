@@ -277,6 +277,51 @@ class OriginalV2M03M05RuntimeEvidenceTests(unittest.TestCase):
         self.assertFalse(report["scanner_canary_start_authorized"])
         self.assertFalse(report["live_trading_authorized"])
 
+    def test_active_longpoll_service_with_disabled_timer_is_valid_metadata_only(self):
+        def longpoll(unit):
+            raw = self.fake_show(unit)
+            if unit.endswith("m05-telegram.service"):
+                return raw.replace("ActiveState=inactive", "ActiveState=active").replace(
+                    "UnitFileState=static", "UnitFileState=enabled")
+            if unit.endswith("m05-telegram.timer"):
+                return raw.replace("ActiveState=active", "ActiveState=inactive").replace(
+                    "UnitFileState=enabled", "UnitFileState=disabled")
+            return raw
+        report = self.inspect(unit_reader=longpoll)
+        self.assertTrue(report["ready_for_nonlive_scanner_canary"])
+        self.assertFalse(report["m05_telegram_timer_active_metadata_only"])
+        self.assertEqual(report["m05_receiver"]["m05_receiver_metadata_mode"],
+                         "SERVICE_ACTIVE_TIMER_DISABLED_METADATA_ONLY")
+        self.assertFalse(report["m05_receiver"]["m05_receiver_type_simple_verified"])
+        self.assertFalse(report["scanner_canary_start_authorized"])
+        self.assertFalse(report["live_trading_authorized"])
+
+    def test_simultaneously_enabled_m05_timer_and_service_not_accepted(self):
+        def conflicting(unit):
+            raw = self.fake_show(unit)
+            if unit.endswith("m05-telegram.service"):
+                return raw.replace("ActiveState=inactive", "ActiveState=active").replace(
+                    "UnitFileState=static", "UnitFileState=enabled")
+            return raw
+        report = self.inspect(unit_reader=conflicting)
+        self.assertFalse(report["m05_receiver"]["m05_receiver_metadata_active"])
+        self.assertFalse(report["ready_for_nonlive_scanner_canary"])
+        self.assertIn("M05_TELEGRAM_TIMER_NOT_VERIFIED_ACTIVE",
+                      report["nonlive_canary_blocker_codes"])
+
+    def test_inactive_longpoll_and_disabled_timer_still_not_ready(self):
+        def stopped(unit):
+            raw = self.fake_show(unit)
+            if unit.endswith("m05-telegram.timer"):
+                return raw.replace("ActiveState=active", "ActiveState=inactive").replace(
+                    "UnitFileState=enabled", "UnitFileState=disabled")
+            if unit.endswith("m05-telegram.service"):
+                return raw.replace("UnitFileState=static", "UnitFileState=enabled")
+            return raw
+        report = self.inspect(unit_reader=stopped)
+        self.assertFalse(report["m05_receiver"]["m05_receiver_metadata_active"])
+        self.assertFalse(report["ready_for_nonlive_scanner_canary"])
+
     def test_inactive_m05_timer_cannot_be_called_canary_ready(self):
         def inactive(unit):
             row = self.fake_show(unit)
