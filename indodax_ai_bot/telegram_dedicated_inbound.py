@@ -197,6 +197,8 @@ def dedicated_owner_fast_loop_nonlive(
     batches = handled = ignored = notices = 0
     radar_invocations = radar_send_acks = radar_uncertain = 0
     ops_alert_failures = 0
+    getupdates_transport_failures = 0
+    getupdates_consecutive_failures = 0
     radar_next_due = None
     radar_last_status = ("M05_RADAR_PENDING_FIRST_POLL"
                          if auto_radar_alert is not None else "M05_RADAR_OPTIN_OFF")
@@ -232,7 +234,22 @@ def dedicated_owner_fast_loop_nonlive(
             # every owner press. Upstream getUpdates also rejects a webhook.
             if batches > 0 and batches % 15 == 0:
                 _preflight()
-            result = poller.poll_once(limit=10, wait_seconds=wait_seconds)
+            try:
+                result = poller.poll_once(limit=10, wait_seconds=wait_seconds)
+            except TelegramTransportError as error:
+                if str(error) != "M05_GETUPDATES_TRANSPORT_FAILED":
+                    raise
+                # Only a failed, non-mutating getUpdates read is retried.
+                # Owner sends and callbacks retain uncertain/no-replay rules.
+                getupdates_transport_failures += 1
+                getupdates_consecutive_failures += 1
+                if getupdates_consecutive_failures >= 3:
+                    raise TelegramTransportError(
+                        "M05_GETUPDATES_TRANSPORT_RETRY_EXHAUSTED"
+                    ) from None
+                time.sleep(getupdates_consecutive_failures)
+                continue
+            getupdates_consecutive_failures = 0
             if (result.get("execution_allowed") is not False
                     or result.get("final_decision") is not None):
                 raise TelegramTransportError("M05_FAST_LOOP_EXECUTOR_CHANGED")
@@ -302,6 +319,8 @@ def dedicated_owner_fast_loop_nonlive(
                     "batches": batches, "handled": handled,
                     "ignored": ignored, "outbound_sent": notices,
                     "ops_alert_failures": ops_alert_failures,
+                    "getupdates_transport_failures": getupdates_transport_failures,
+                    "getupdates_consecutive_failures": getupdates_consecutive_failures,
                     "radar_enabled": auto_radar_alert is not None,
                     "radar_invocations": radar_invocations,
                     "radar_send_acks": radar_send_acks,
@@ -318,6 +337,8 @@ def dedicated_owner_fast_loop_nonlive(
         "next_offset": ledger.telegram_next_offset(),
         "single_original_poller": True,
         "ops_alert_failures": ops_alert_failures,
+        "getupdates_transport_failures": getupdates_transport_failures,
+        "getupdates_consecutive_failures": getupdates_consecutive_failures,
         "radar_enabled": auto_radar_alert is not None,
         "radar_invocations": radar_invocations,
         "radar_send_acks": radar_send_acks,
