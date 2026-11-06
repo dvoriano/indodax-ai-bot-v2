@@ -20,6 +20,7 @@ import sys
 import time
 
 SCOPE = "BTC_PUBLIC_MONITOR_ONLY"
+STANDING_MODE = "OWNER_STANDING_PUBLIC_READONLY"
 MIN_START_INTERVAL = 600
 MAX_GO_LIFETIME = 86400
 ROOT = Path.home() / "indodax-ai-bot-v2" / "runtime"
@@ -80,14 +81,25 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
         raise AdmissionDenied("PUBLIC_WS_OPERATOR_HOLD")
 
     policy, _ = _private_json(go_path, 2048)
-    if set(policy) - {"scope", "expires_at_epoch", "max_gap_count",
-                      "acknowledged_failure_sha256"}:
+    standing = policy.get("mode") == STANDING_MODE
+    if standing:
+        # Explicit owner-signed 24/7 PUBLIC-only permission, no TTL.
+        # Strict distinct schema; never auto-ACK a failed BTC batch.
+        if set(policy) != {"scope", "mode", "issued_at_epoch",
+                           "max_gap_count"}:
+            raise AdmissionDenied("PUBLIC_WS_GO_UNKNOWN_FIELDS")
+        issued = policy["issued_at_epoch"]
+        if type(issued) is not int or not 0 < issued <= epoch:
+            raise AdmissionDenied("PUBLIC_WS_OWNER_GO_INVALID")
+    elif set(policy) - {"scope", "expires_at_epoch", "max_gap_count",
+                        "acknowledged_failure_sha256"}:
         raise AdmissionDenied("PUBLIC_WS_GO_UNKNOWN_FIELDS")
     expiration = policy.get("expires_at_epoch")
     maximum = policy.get("max_gap_count")
     if (policy.get("scope") != SCOPE
-            or type(expiration) is not int
-            or not epoch < expiration <= epoch + MAX_GO_LIFETIME
+            or (not standing and (
+                type(expiration) is not int
+                or not epoch < expiration <= epoch + MAX_GO_LIFETIME))
             or type(maximum) is not int or not 0 <= maximum <= 100000):
         raise AdmissionDenied("PUBLIC_WS_OWNER_GO_INVALID")
 
