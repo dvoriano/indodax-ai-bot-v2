@@ -257,6 +257,12 @@ def service_fast_loop_nonlive(
     if cfg.get("M10_OWNER_AUTO_ALERT_GO") == "YES":
         from .m10_owner_ops_auto_alert import send_one_owner_ops_alert_nonlive
         auto_ops_alert = send_one_owner_ops_alert_nonlive
+    auto_radar_alert = None
+    # Separate opt-in. Leave existing M05 fast receiver unchanged during
+    # the in-progress M10-06 24h audit; never restart here.
+    if cfg.get("M05_RADAR_MOMENTUM_ALERT_GO") == "YES":
+        from .m05_radar_momentum_nonlive import send_one_owner_radar_momentum_nonlive
+        auto_radar_alert = send_one_owner_radar_momentum_nonlive
     return dedicated_owner_fast_loop_nonlive(
         api=client, ledger=ledger, expected_bot_id=bot_id,
         lock_path=str(state_db) + ".dedicated-poller.lock",
@@ -265,6 +271,7 @@ def service_fast_loop_nonlive(
         max_batches=max_batches, stop_requested=stop_requested,
         heartbeat=heartbeat,
         auto_ops_alert=auto_ops_alert,
+        auto_radar_alert=auto_radar_alert,
     )
 
 
