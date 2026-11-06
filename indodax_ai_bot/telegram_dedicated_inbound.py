@@ -20,6 +20,7 @@ from typing import Any, Iterator
 from .owner_control import OwnerDecisionLedger
 from .telegram_bot_api import (
     TelegramBotApiClient, TelegramOwnerPoller, TelegramTransportError,
+    TelegramGetUpdatesTransportError,
 )
 from .telegram_readonly_preflight import inspect_telegram_readonly
 
@@ -236,9 +237,7 @@ def dedicated_owner_fast_loop_nonlive(
                 _preflight()
             try:
                 result = poller.poll_once(limit=10, wait_seconds=wait_seconds)
-            except TelegramTransportError as error:
-                if str(error) != "M05_GETUPDATES_TRANSPORT_FAILED":
-                    raise
+            except TelegramGetUpdatesTransportError:
                 # Only a failed, non-mutating getUpdates read is retried.
                 # Owner sends and callbacks retain uncertain/no-replay rules.
                 getupdates_transport_failures += 1
