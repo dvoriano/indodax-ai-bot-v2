@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime
+from pathlib import Path
 import json
 import time
 from zoneinfo import ZoneInfo
 
 from indodax_ai_bot.m05_radar_momentum_nonlive import (
-    PAIR_ID, inspect_original_m03_radar_readonly,
+    DEFAULT_DB, PAIR_ID, inspect_original_m03_radar_readonly,
 )
 
 WIB = ZoneInfo("Asia/Jakarta")
@@ -28,6 +29,7 @@ DEFAULT_PAIRS = (
 def replay_original_public_watch_readonly(
     *, start_epoch: int, end_epoch: int,
     pairs: tuple[str, ...] = DEFAULT_PAIRS,
+    db_path: Path = DEFAULT_DB,
 ) -> dict:
     """Bounded no-lookahead replay; never infer hypothetical BUY or profit."""
     if (type(start_epoch) is not int or type(end_epoch) is not int
@@ -45,7 +47,8 @@ def replay_original_public_watch_readonly(
     for minute in range(start_epoch, end_epoch + 1, 60):
         asof = minute + 59
         snap = inspect_original_m03_radar_readonly(
-            now_epoch=asof, explain_pairs=pairs, replay_no_casebook=True,
+            db_path=db_path, now_epoch=asof, explain_pairs=pairs,
+            replay_no_casebook=True,
         )
         if snap.get("status") != "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED":
             raise ValueError("M05_RADAR_REPLAY_ORIGINAL_SOURCE_NOT_VERIFIED")
