@@ -255,10 +255,12 @@ def dedicated_owner_fast_loop_nonlive(
                     # original owner receiver or starve this batch's radar.
                     # Count only: never emit raw errors or credentials.
                     ops_alert_failures += 1
-            # Reuse the SAME original owner receiver and durable SQLite.
-            # Optional owner radar notices have NO buttons/Final/order.
+            # Same original receiver: check every 10 COMPLETED batches
+            # (~30s on 6 Nov owner VPS). A slow network can still delay it.
+            # Radar uses existing 60s global / 15m per-pair claim cooldowns,
+            # emits only owner-private noninteractive WATCH and never orders.
             # Any source/transport failure is handled by the radar helper.
-            if auto_radar_alert is not None and batches % 30 == 0:
+            if auto_radar_alert is not None and batches % 10 == 0:
                 radar_invocations += 1
                 try:
                     radar = auto_radar_alert(api=api, ledger=ledger)
