@@ -364,6 +364,46 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         self.assertFalse(result["order_sent"])
         self.assertFalse(result["execution_allowed"])
 
+    def test_m10_optional_alert_crash_does_not_block_original_radar(self):
+        events = []
+        called = []
+
+        def broken_ops(*, api, ledger):
+            self.assertIs(api, self.bot_api)
+            self.assertIs(ledger, self.owner)
+            called.append("ops")
+            raise RuntimeError("synthetic confidential exception")
+
+        def working_radar(*, api, ledger):
+            self.assertIs(api, self.bot_api)
+            self.assertIs(ledger, self.owner)
+            called.append("radar")
+            return {
+                "status": "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
+                "messages_sent": 1,
+                "execution_allowed": False,
+            }
+
+        report = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=30, heartbeat=events.append,
+            auto_ops_alert=broken_ops,
+            auto_radar_alert=working_radar,
+        )
+        self.assertEqual(called, ["ops", "radar"])
+        self.assertEqual(report["batches"], 30)
+        self.assertEqual(report["ops_alert_failures"], 1)
+        self.assertEqual(report["radar_send_acks"], 1)
+        self.assertEqual(events[-1]["ops_alert_failures"], 1)
+        self.assertEqual(
+            events[-1]["radar_last_status"],
+            "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
+        )
+        self.assertNotIn("synthetic confidential exception", str(events))
+        self.assertFalse(report["execution_allowed"])
+        self.assertFalse(report["order_sent"])
+
     def test_fast_optin_dropin_does_not_modify_legacy_timer(self):
         root = Path(__file__).resolve().parents[1]
         original = (root / "systemd/user"
