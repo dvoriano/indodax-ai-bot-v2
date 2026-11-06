@@ -149,8 +149,8 @@ class OriginalRollingTickerRadarTests(unittest.TestCase):
         self.assertIn("PERUBAHAN VOLUME 24J", text)
         self.assertIn("BUKAN jumlah transaksi 1 menit", text)
         self.assertIn("maintenance/suspend", text)
-        self.assertIn("\nPair:", text)
-        self.assertNotIn("\\nPair:", text)
+        self.assertIn("RADAR | CYBER/IDR", text)
+        self.assertLess(len(text), 420)
         repeat = send_one_owner_radar_momentum_nonlive(
             api=api, ledger=ledger, now_epoch=NOW+10, db_path=self.path,
         )
