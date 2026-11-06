@@ -54,6 +54,64 @@ def nine_day_proxy(n: int = 12000) -> PublicCandleHistory:
 
 
 class M03OwnerAssumedFrictionOOS(unittest.TestCase):
+    def test_readonly_gate_diagnostic_preserves_original_results(self):
+        src = nine_day_proxy()
+        original = evaluate_public_ohlc_proxy_ablation(src)
+        report = evaluate_public_ohlc_proxy_ablation(
+            src, diagnose_signal_gates=True,
+        )
+        self.assertNotIn("signal_gate_diagnostic", original)
+        self.assertEqual(report["holdout"], original["holdout"])
+        self.assertEqual(report["train"], original["train"])
+        self.assertEqual(report["source_digest_sha256_local"],
+                         original["source_digest_sha256_local"])
+        d = report["signal_gate_diagnostic"]
+        hourly = d["holdout_hourly_fixed_anchor"]
+        minute = d["holdout_all_eligible_minutes_not_independent_trades"]
+        self.assertEqual(hourly["candidate_minutes_examined"],
+                         report["holdout"]["independent_hourly_windows"])
+        self.assertEqual(hourly["gate_true_counts"]["surge_final"],
+                         report["holdout"]["cohorts"][
+                             "SURGE_WITH_VOLUME_PROXY"]["independent_hourly_samples"])
+        self.assertEqual(hourly["gate_true_counts"]["pullback_final"],
+                         report["holdout"]["cohorts"][
+                             "PULLBACK_WITH_VOLUME_PROXY"]["independent_hourly_samples"])
+        self.assertGreater(minute["candidate_minutes_examined"],
+                           hourly["candidate_minutes_examined"])
+        self.assertGreaterEqual(minute["gate_true_counts"]["surge_final"],
+                                hourly["gate_true_counts"]["surge_final"])
+        self.assertTrue(d["same_original_predeclared_thresholds"])
+        self.assertFalse(d["threshold_tuning_performed"])
+        self.assertFalse(report["execution_allowed"])
+        self.assertFalse(report["market_source_g1_verified"])
+
+    def test_hourly_anchor_can_miss_actual_synthetic_minute_signals(self):
+        src = nine_day_proxy()
+        # Controlled timing shift in fully synthetic OHLC, NOT market tuning.
+        rotated = []
+        for base in range(0, len(src.candles), 60):
+            hour = src.candles[base:base + 60]
+            for minute, candle in enumerate(hour):
+                observed = hour[(minute - 7) % 60]
+                rotated.append(replace(observed, start=candle.start))
+        shifted = replace(src, candles=tuple(rotated))
+        d = evaluate_public_ohlc_proxy_ablation(
+            shifted, diagnose_signal_gates=True,
+        )["signal_gate_diagnostic"]
+        hourly = d["holdout_hourly_fixed_anchor"]["gate_true_counts"]
+        minute = d["holdout_all_eligible_minutes_not_independent_trades"][
+            "gate_true_counts"]
+        self.assertEqual(hourly["surge_final"], 0)
+        self.assertEqual(hourly["pullback_final"], 0)
+        self.assertGreater(minute["surge_final"], 0)
+        self.assertGreater(minute["pullback_final"], 0)
+
+    def test_diagnostic_rejects_invalid_nonboolean_flag(self):
+        with self.assertRaisesRegex(PublicDataError, "DIAGNOSTIC_MODE"):
+            evaluate_public_ohlc_proxy_ablation(
+                nine_day_proxy(360), diagnose_signal_gates="YES",
+            )
+
     def test_nine_days_can_meet_both_holdout_cohorts_without_trading(self):
         self.assertEqual(MAX_CALIBRATION_1M_ROWS, 20160)
         src = nine_day_proxy()
