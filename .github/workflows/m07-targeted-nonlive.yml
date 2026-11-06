@@ -6,6 +6,7 @@ on:
       - "indodax_ai_bot/**"
       - "scripts/m07_readonly_once.sh"
       - "scripts/m05_radar_owner_activate_once.sh"
+      - "scripts/m05_radar_postrollback_readonly.sh"
       - "tests/test_m07_*.py"
       - "tests/test_m03_scalping_evidence_continuation.py"
       - "tests/test_m08_original_exchange_buy_admission.py"
@@ -25,6 +26,7 @@ on:
       - "indodax_ai_bot/**"
       - "scripts/m07_readonly_once.sh"
       - "scripts/m05_radar_owner_activate_once.sh"
+      - "scripts/m05_radar_postrollback_readonly.sh"
       - "tests/test_m07_*.py"
       - "tests/test_m03_scalping_evidence_continuation.py"
       - "tests/test_m08_original_exchange_buy_admission.py"
@@ -60,6 +62,7 @@ jobs:
         run: |
           bash -n scripts/m07_readonly_once.sh
           bash -n scripts/m05_radar_owner_activate_once.sh
+          bash -n scripts/m05_radar_postrollback_readonly.sh
           grep -Fq 'export INDODAX_TRADING_ENABLED=NO' scripts/m05_radar_owner_activate_once.sh
           grep -Fq 'export INDODAX_ALLOW_LIVE_EXECUTION=NO' scripts/m05_radar_owner_activate_once.sh
           grep -Fq 'export INDODAX_EXECUTION_MODE=DRY_RUN' scripts/m05_radar_owner_activate_once.sh

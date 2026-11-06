@@ -137,9 +137,12 @@ NEWPID="$(systemctl --user show "$UNIT" -p MainPID --value)"
   fail ORIGINAL_PROCESS_NOT_REPLACED
 check_env "$NEWPID" YES || fail RADAR_FLAG_NOT_IN_RUNNING_PROCESS
 
+# Observe real batches, not wall-clock guesses: 30 long-poll batches may
+# exceed 90 seconds when getUpdates, preflight or outbox calls are slow.
+# A failed observation still rolls back; this does NOT authorize a retry.
 # Only inspect allowlisted JSON heartbeat fields, never raw journal lines.
 HEARTBEAT=""
-for iteration in $(seq 1 30); do
+for iteration in $(seq 1 140); do
   [[ "$NEWPID" == "$(systemctl --user show "$UNIT" -p MainPID --value)" ]] ||
     fail M05_UNEXPECTED_RESTART
   HEARTBEAT="$(journalctl --user -u "$UNIT" -n 500 \
@@ -158,7 +161,7 @@ for line in sys.stdin:
     except (ValueError,TypeError):
         continue
 if last:
-    safe=("radar_enabled","radar_invocations","radar_send_acks",
+    safe=("batches","radar_enabled","radar_invocations","radar_send_acks",
           "radar_delivery_uncertain","radar_last_status",
           "ops_alert_failures","execution_allowed")
     print(json.dumps({k:last.get(k) for k in safe},sort_keys=True))
@@ -180,7 +183,10 @@ else:
   sleep 3
 done
 [[ -n "$HEARTBEAT" ]] || fail NO_M05_HEARTBEAT_AFTER_RESTART
-[[ "$STATE" == RADAR_INVOKED ]] || fail RADAR_CALLBACK_NOT_OBSERVED
+if [[ "$STATE" != RADAR_INVOKED ]]; then
+  echo "M05_LAST_SANITIZED_HEARTBEAT=$HEARTBEAT" >&2
+  fail RADAR_CALLBACK_NOT_OBSERVED
+fi
 printf 'RADAR_HEARTBEAT=%s\n' "$HEARTBEAT"
 printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
 printf 'BACKUP=%s\n' "$BACKUP"
