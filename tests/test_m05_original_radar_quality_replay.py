@@ -184,8 +184,8 @@ class OriginalPublicRadarReviewReplayTests(unittest.TestCase):
         # negative, later price accelerates. Never project later price backward.
         values = (
             (100, "1000000000"),
-            (90, "1050000000"),
-            (85, "1100000000"),
+            (90, "1010000000"),
+            (85, "1020000000"),
             (80, "1300000000"),
             (80, "1300000000"),
             (80, "1300000000"),
