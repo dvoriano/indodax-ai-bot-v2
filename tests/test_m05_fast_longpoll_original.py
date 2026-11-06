@@ -316,6 +316,87 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         )
 
 
+    def test_readonly_identity_preflight_transport_retries_before_getupdates(self):
+        called = []
+        failure_budget = {"getMe": 1, "getWebhookInfo": 1}
+
+        def flaky(method, payload, _timeout):
+            called.append(method)
+            if method in failure_budget and failure_budget[method]:
+                failure_budget[method] -= 1
+                raise TimeoutError("synthetic private transport failure")
+            if method == "getMe":
+                return {"ok": True, "result": {
+                    "id": BOT, "is_bot": True, "username": "pitidenbot",
+                }}
+            if method == "getWebhookInfo":
+                return {"ok": True, "result": {
+                    "url": "", "pending_update_count": 0,
+                }}
+            if method == "getUpdates":
+                return {"ok": True, "result": []}
+            raise AssertionError("READONLY_PREFLIGHT_MUST_NOT_SEND")
+
+        api = TelegramBotApiClient(token=TOKEN, transport=flaky)
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleep:
+            out = dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner, expected_bot_id=BOT,
+                lock_path=self.lock, max_batches=1,
+            )
+        self.assertEqual(out["readonly_preflight_transport_failures"], 2)
+        self.assertEqual(out["batches"], 1)
+        self.assertEqual(called.count("getMe"), 3)
+        self.assertEqual(called.count("getWebhookInfo"), 2)
+        self.assertEqual(called.count("getUpdates"), 1)
+        self.assertEqual([x.args[0] for x in sleep.call_args_list], [1, 2])
+        self.assertFalse(out["execution_allowed"])
+        self.assertNotIn("sendMessage", called)
+
+    def test_readonly_preflight_three_transport_failures_abort_without_poll(self):
+        called = []
+
+        def unreachable(method, payload, _timeout):
+            called.append(method)
+            if method != "getMe":
+                raise AssertionError("PREFLIGHT_CANNOT_POLL_OR_SEND")
+            raise TimeoutError("synthetic transport secret")
+
+        api = TelegramBotApiClient(token=TOKEN, transport=unreachable)
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleep:
+            with self.assertRaisesRegex(
+                TelegramTransportError,
+                "M05_READONLY_PREFLIGHT_TRANSPORT_RETRY_EXHAUSTED",
+            ):
+                dedicated_owner_fast_loop_nonlive(
+                    api=api, ledger=self.owner, expected_bot_id=BOT,
+                    lock_path=self.lock, max_batches=1,
+                )
+        self.assertEqual(called, ["getMe"] * 3)
+        self.assertEqual([x.args[0] for x in sleep.call_args_list], [1, 2])
+
+    def test_invalid_bot_identity_never_retried(self):
+        called = []
+
+        def mismatch(method, payload, _timeout):
+            called.append(method)
+            if method == "getMe":
+                return {"ok": True, "result": {
+                    "id": BOT + 1, "is_bot": True, "username": "pitidenbot",
+                }}
+            raise AssertionError("IDENTITY_FAILURE_MUST_ABORT")
+
+        api = TelegramBotApiClient(token=TOKEN, transport=mismatch)
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleep:
+            with self.assertRaisesRegex(
+                TelegramTransportError, "BOT_ID_MISMATCH",
+            ):
+                dedicated_owner_fast_loop_nonlive(
+                    api=api, ledger=self.owner, expected_bot_id=BOT,
+                    lock_path=self.lock, max_batches=1,
+                )
+        self.assertEqual(called, ["getMe"])
+        sleep.assert_not_called()
+
     def test_getupdates_transport_transient_retry_does_not_send_or_ack(self):
         calls = []
 
