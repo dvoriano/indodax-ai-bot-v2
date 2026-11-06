@@ -16,6 +16,7 @@ from typing import Callable
 # Fixed allowlist. Do not discover or inspect other projects/services.
 _V2_UNITS = (
     ("btc_public_ws", "indodax-v2-public-ws-btc.service"),
+    ("btc_public_ws_timer", "indodax-v2-public-ws-btc.timer"),
     ("m05_telegram", "indodax-v2-m05-telegram.service"),
     ("m05_telegram_timer", "indodax-v2-m05-telegram.timer"),
     ("m03_scanner", "indodax-v2-m03-mainpath.service"),
