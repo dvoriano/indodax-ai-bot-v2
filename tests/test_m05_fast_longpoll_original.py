@@ -306,6 +306,98 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         )
 
 
+    def test_getupdates_transport_transient_retry_does_not_send_or_ack(self):
+        calls = []
+
+        def transient(method, payload, _timeout):
+            calls.append(method)
+            if method == "getMe":
+                return {"ok": True, "result": {
+                    "id": BOT, "is_bot": True, "username": "pitidenbot",
+                }}
+            if method == "getWebhookInfo":
+                return {"ok": True, "result": {
+                    "url": "", "pending_update_count": 0,
+                }}
+            if method == "getUpdates":
+                if calls.count("getUpdates") < 3:
+                    raise TimeoutError("transient simulated network outage")
+                return {"ok": True, "result": []}
+            raise AssertionError("UNEXPECTED_EFFECT_METHOD")
+
+        api = TelegramBotApiClient(token=TOKEN, transport=transient)
+        offset = self.owner.telegram_next_offset()
+        with patch(
+            "indodax_ai_bot.telegram_dedicated_inbound.time.sleep"
+        ) as sleeping:
+            report = dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner, expected_bot_id=BOT,
+                lock_path=self.lock, max_batches=1,
+            )
+        self.assertEqual(report["batches"], 1)
+        self.assertEqual(report["handled"], 0)
+        self.assertEqual(report["getupdates_transport_failures"], 2)
+        self.assertEqual(report["getupdates_consecutive_failures"], 0)
+        self.assertEqual(calls.count("getUpdates"), 3)
+        self.assertEqual([x.args[0] for x in sleeping.call_args_list], [1, 2])
+        self.assertEqual(self.owner.telegram_next_offset(), offset)
+        self.assertNotIn("sendMessage", calls)
+        self.assertNotIn("answerCallbackQuery", calls)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_getupdates_exhaustion_fails_closed_after_three_reads(self):
+        calls = []
+
+        def down(method, payload, _timeout):
+            calls.append(method)
+            if method == "getMe":
+                result = {"id": BOT, "is_bot": True, "username": "pitidenbot"}
+            elif method == "getWebhookInfo":
+                result = {"url": "", "pending_update_count": 0}
+            elif method == "getUpdates":
+                raise TimeoutError("simulated read failure")
+            else:
+                raise AssertionError("UNEXPECTED_EFFECT_METHOD")
+            return {"ok": True, "result": result}
+
+        api = TelegramBotApiClient(token=TOKEN, transport=down)
+        offset = self.owner.telegram_next_offset()
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleeper:
+            with self.assertRaisesRegex(
+                TelegramTransportError,
+                "M05_GETUPDATES_TRANSPORT_RETRY_EXHAUSTED",
+            ):
+                dedicated_owner_fast_loop_nonlive(
+                    api=api, ledger=self.owner, expected_bot_id=BOT,
+                    lock_path=self.lock, max_batches=1,
+                )
+        self.assertEqual(calls.count("getUpdates"), 3)
+        self.assertEqual(sleeper.call_count, 2)
+        self.assertEqual(self.owner.telegram_next_offset(), offset)
+        self.assertNotIn("sendMessage", calls)
+
+    def test_failed_owner_send_is_never_replayed_as_getupdates_retry(self):
+        calls = []
+
+        def failed_send(method, payload, _timeout):
+            calls.append(method)
+            if method == "sendMessage":
+                raise TimeoutError("uncertain synthetic send outcome")
+            return {"ok": True, "result": self.data(method, payload)}
+
+        api = TelegramBotApiClient(token=TOKEN, transport=failed_send)
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleeper:
+            with self.assertRaisesRegex(
+                TelegramTransportError, "M05_TELEGRAM_API_TRANSPORT_FAILED",
+            ):
+                dedicated_owner_fast_loop_nonlive(
+                    api=api, ledger=self.owner, expected_bot_id=BOT,
+                    lock_path=self.lock, max_batches=2,
+                )
+        self.assertEqual(calls.count("getUpdates"), 1)
+        self.assertEqual(calls.count("sendMessage"), 1)
+        self.assertEqual(sleeper.call_count, 0)
+
     def test_radar_starts_on_tenth_completed_batch_not_thirtieth(self):
         calls = []
         events = []
