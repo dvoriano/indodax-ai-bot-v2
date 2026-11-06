@@ -193,6 +193,17 @@ def dedicated_owner_fast_loop_nonlive(
     if auto_radar_alert is not None and not callable(auto_radar_alert):
         raise ValueError("M05_AUTO_RADAR_ALERT_NOT_CALLABLE")
     batches = handled = ignored = notices = 0
+    radar_invocations = radar_send_acks = radar_uncertain = 0
+    radar_last_status = ("M05_RADAR_PENDING_FIRST_POLL"
+                         if auto_radar_alert is not None else "M05_RADAR_OPTIN_OFF")
+    radar_status_allowlist = frozenset((
+        "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
+        "M05_RADAR_DELIVERY_UNCERTAIN_NO_RETRY",
+        "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
+        "M05_RADAR_THROTTLED",
+        "M05_RADAR_ORIGINAL_SOURCE_UNAVAILABLE",
+        "M05_RADAR_OWNER_LEDGER_UNVERIFIED",
+    ))
     # No new network behavior unless owner GO was granted upstream.
     with dedicated_poller_lock(lock_path):
         def _preflight() -> None:
@@ -241,7 +252,30 @@ def dedicated_owner_fast_loop_nonlive(
             # Optional owner radar notices have NO buttons/Final/order.
             # Any source/transport failure is handled by the radar helper.
             if auto_radar_alert is not None and batches % 30 == 0:
-                auto_radar_alert(api=api, ledger=ledger)
+                radar_invocations += 1
+                try:
+                    radar = auto_radar_alert(api=api, ledger=ledger)
+                    status = (radar.get("status")
+                              if isinstance(radar, dict) else None)
+                    sent = (radar.get("messages_sent")
+                            if isinstance(radar, dict) else None)
+                    if (status in radar_status_allowlist
+                            and type(sent) is int and sent in (0, 1)
+                            and (sent == 1) ==
+                            (status == "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT")):
+                        radar_last_status = status
+                        radar_send_acks += sent
+                        radar_uncertain += (
+                            status == "M05_RADAR_DELIVERY_UNCERTAIN_NO_RETRY"
+                        )
+                    else:
+                        radar_last_status = "M05_RADAR_UNTRUSTED_RESULT"
+                        radar_uncertain += 1
+                except Exception:
+                    # Radar opt-in cannot kill original owner callback poller.
+                    # Never place exception text/token/raw Bot API body in log.
+                    radar_last_status = "M05_RADAR_CALLBACK_FAILED"
+                    radar_uncertain += 1
             handled += result["handled"]
             ignored += result["ignored"]
             notices += (outbound["messages_sent"]
@@ -251,6 +285,11 @@ def dedicated_owner_fast_loop_nonlive(
                     "status": "M05_FAST_LOOP_HEARTBEAT_NONLIVE",
                     "batches": batches, "handled": handled,
                     "ignored": ignored, "outbound_sent": notices,
+                    "radar_enabled": auto_radar_alert is not None,
+                    "radar_invocations": radar_invocations,
+                    "radar_send_acks": radar_send_acks,
+                    "radar_delivery_uncertain": radar_uncertain,
+                    "radar_last_status": radar_last_status,
                     "execution_allowed": False,
                 })
             if max_batches is not None and batches >= max_batches:
@@ -261,6 +300,11 @@ def dedicated_owner_fast_loop_nonlive(
         "ignored": ignored, "outbound_sent": notices,
         "next_offset": ledger.telegram_next_offset(),
         "single_original_poller": True,
+        "radar_enabled": auto_radar_alert is not None,
+        "radar_invocations": radar_invocations,
+        "radar_send_acks": radar_send_acks,
+        "radar_delivery_uncertain": radar_uncertain,
+        "radar_last_status": radar_last_status,
         "bot_identity_pinned_and_matched": True,
         "owner_ledger_original": True,
         "order_sent": False, "execution_allowed": False,
