@@ -19,7 +19,9 @@ from typing import Callable
 from indodax_ai_bot.m03_egress_admission import (
     M03SharedEgressAdmission, M03EgressAdmissionError,
 )
-from indodax_ai_bot.m10_v2_units_readonly import inspect_named_v2_units
+from indodax_ai_bot.m10_v2_units_readonly import (
+    inspect_named_v2_units, classify_m05_receiver_metadata,
+)
 from indodax_ai_bot.m10_ops_health_readonly import (
     _read_v2_ws_supervisor_status, _batch_observation,
 )
@@ -227,6 +229,7 @@ def collect_original_v2_runtime_snapshot(
     by_role = {r["role"]: r for r in units["units"]}
     m03 = by_role["m03_scanner_timer"]
     m05 = by_role["m05_telegram_timer"]
+    receiver = classify_m05_receiver_metadata(units)
     ws = target / "runtime" / "public_ws_btc.sqlite3"
     try:
         ws_st = ws.lstat()
@@ -279,13 +282,8 @@ def collect_original_v2_runtime_snapshot(
         and m03["v2_user_fragment_path_matches"] is True
         and m03["unit_needs_daemon_reload"] == "no"
     )
-    telegram_metadata_active = (
-        m05["observed_load"] == "loaded"
-        and m05["observed_active"] == "active"
-        and m05["observed_enabled"] in ("enabled", "enabled-runtime")
-        and m05["v2_user_fragment_path_matches"] is True
-        and m05["unit_needs_daemon_reload"] == "no"
-    )
+    telegram_timer_metadata_active = receiver["m05_timer_active_enabled_metadata_only"]
+    telegram_metadata_active = receiver["m05_receiver_metadata_active"]
     # Deterministic blockers are observations, never authorization to start
     # a scanner, enable trading, or bypass independent source admission.
     blockers = []
@@ -320,7 +318,8 @@ def collect_original_v2_runtime_snapshot(
         "source_sha_is_running_process_attestation": False,
         "units": units,
         "m03_scanner_timer_active_metadata_only": scanner_metadata_active,
-        "m05_telegram_timer_active_metadata_only": telegram_metadata_active,
+        "m05_telegram_timer_active_metadata_only": telegram_timer_metadata_active,
+        "m05_receiver": receiver,
         "btc_ws_database_file_present": ws_present,
         "btc_ws_database_file_age_seconds_metadata_only": ws_file_age,
         "btc_ws_last_batch": batch,
