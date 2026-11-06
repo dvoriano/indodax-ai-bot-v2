@@ -163,7 +163,7 @@ def dedicated_owner_fast_loop_nonlive(
     on_manual_buy_preview_nonlive=None,
     stop_requested=None, max_batches: int | None = None,
     wait_seconds: int = 2,
-    heartbeat=None,
+    heartbeat=None, auto_ops_alert=None,
 ) -> dict[str, Any]:
     """Single original owner poller/ledger, always waiting at Telegram.
 
@@ -188,6 +188,8 @@ def dedicated_owner_fast_loop_nonlive(
         raise ValueError("M05_FAST_LOOP_STOP_HOOK_INVALID")
     if heartbeat is not None and not callable(heartbeat):
         raise ValueError("M05_FAST_LOOP_HEARTBEAT_INVALID")
+    if auto_ops_alert is not None and not callable(auto_ops_alert):
+        raise ValueError("M10_AUTO_OPS_ALERT_NOT_CALLABLE")
     batches = handled = ignored = notices = 0
     # No new network behavior unless owner GO was granted upstream.
     with dedicated_poller_lock(lock_path):
@@ -229,6 +231,10 @@ def dedicated_owner_fast_loop_nonlive(
                 else _send_one_manual_trade_preview(api=api, ledger=ledger)
             )
             batches += 1
+            # One bounded snapshot every ~60s, never blocking owner callbacks
+            # with an additional poller or a separate Telegram service.
+            if auto_ops_alert is not None and batches % 30 == 0:
+                auto_ops_alert(api=api, ledger=ledger)
             handled += result["handled"]
             ignored += result["ignored"]
             notices += (outbound["messages_sent"]
