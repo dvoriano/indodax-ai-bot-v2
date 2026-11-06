@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 import os
 import re
@@ -295,6 +295,100 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
         return False
 
 
+
+def _idr_number(value: Decimal) -> str:
+    """Readable Indonesian separators, preserving sub-rupiah precision."""
+    raw = format(value, "f")
+    negative = raw.startswith("-")
+    if negative:
+        raw = raw[1:]
+    integer, dot, fraction = raw.partition(".")
+    grouped = format(int(integer), ",").replace(",", ".")
+    fraction = fraction.rstrip("0")
+    return ("-" if negative else "") + grouped + (
+        "," + fraction if dot and fraction else ""
+    )
+
+
+def _idr_price(value: str) -> str:
+    return "Rp" + _idr_number(Decimal(value))
+
+
+def _idr_compact(value: str) -> str:
+    """Display approximate money units, never alter source or scoring."""
+    amount = Decimal(value)
+    magnitude = abs(amount)
+    if magnitude >= Decimal("1000000000"):
+        return ("Rp" + _idr_number(
+            (amount / Decimal("1000000000")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ) + " miliar")
+    if magnitude >= Decimal("1000000"):
+        return ("Rp" + _idr_number(
+            (amount / Decimal("1000000")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ) + " juta")
+    return _idr_price(value)
+
+
+def _pct(value: str) -> str:
+    number = Decimal(value).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return ("+" if number > 0 else "") + format(number, ".2f").replace(".", ",") + "%"
+
+
+def format_owner_radar_compact(candidate: dict) -> str:
+    """Phone-sized PUBLIC WATCH notice, same source and safety semantics.
+
+    Price is sample-to-sample, NEVER a fabricated candle. Rolling 24h ticker
+    change is NOT actual short-window executed turnover / BUY-SELL pressure.
+    No recommendation, provider/G1 promotion or executable proposal.
+    """
+    wib = ZoneInfo("Asia/Jakarta")
+    from_time = datetime.fromtimestamp(
+        candidate["reference_epoch"], wib
+    ).strftime("%H:%M")
+    to_time = datetime.fromtimestamp(
+        candidate["observed_epoch"], wib
+    ).strftime("%H:%M")
+    price_pct = Decimal(candidate["observed_rise_pct"])
+    direction = "🔺" if price_pct > 0 else "🔻" if price_pct < 0 else "➖"
+    pair = candidate["pair"].upper().replace("_IDR", "/IDR")
+    if candidate["casebook_early_watch_observed"]:
+        label = "EARLY_WATCH historis"
+    elif candidate["price_watch"] and candidate["volume_watch"]:
+        label = "HARGA + VOL 24J"
+    elif candidate["price_watch"]:
+        label = "MOMENTUM HARGA"
+    else:
+        label = "PERUBAHAN VOLUME 24J"
+
+    lines = [
+        f"📡 RADAR | {pair} · {label}",
+        f"{direction} Harga {from_time}→{to_time}: {_pct(candidate['observed_rise_pct'])}",
+        f"💰 {_idr_price(candidate['reference_price_idr'])}"
+        f" → {_idr_price(candidate['latest_price_idr'])}",
+        "📊 Vol 24j: " + _idr_compact(candidate["volume_24h_idr"]),
+    ]
+    if candidate["volume_watch"]:
+        mins = candidate["volume_comparison_seconds"] // 60
+        lines.extend((
+            f"📈 Δ Vol 24j ({mins}m): "
+            f"+{_idr_compact(candidate['volume_24h_net_change_idr'])}"
+            f" ({_pct(candidate['volume_24h_net_change_pct'])})",
+            "⚠️ Delta 24j BUKAN jumlah transaksi 1 menit atau tekanan BUY/SELL.",
+        ))
+    if candidate["missing_intermediate_minute_samples"]:
+        lines.append("⚠️ Ada menit tanpa sampel; BUKAN return candle 1m.")
+    lines.append(
+        "🔎 WATCH publik, BUKAN REKOMENDASI BUY. "
+        "AI/G1 & maintenance/suspend BELUM TERVERIFIKASI."
+    )
+    return "\n".join(lines)
+
+
+
 def send_one_owner_radar_momentum_nonlive(
     *, api, ledger, now_epoch: int | None = None,
     db_path: Path = DEFAULT_DB,
@@ -321,60 +415,7 @@ def send_one_owner_radar_momentum_nonlive(
             ledger, candidate["pair"], candidate["observed_epoch"], now
         ):
             continue
-        wib = ZoneInfo("Asia/Jakarta")
-        from_time = datetime.fromtimestamp(
-            candidate["reference_epoch"], wib
-        ).strftime("%H:%M WIB")
-        to_time = datetime.fromtimestamp(
-            candidate["observed_epoch"], wib
-        ).strftime("%H:%M WIB")
-        risk = (
-            "RISIKO: ada menit tanpa sampel harga; ini BUKAN return candle 1m."
-            if candidate["missing_intermediate_minute_samples"]
-            else "RISIKO: harga dapat berbalik; kualitas entry belum dinilai."
-        )
-        stage = (
-            "EARLY_WATCH historis teramati, BELUM terkalibrasi."
-            if candidate["casebook_early_watch_observed"]
-            else "Lonjakan harga antar-sampel teramati; setup belum diketahui."
-        )
-        kind = (
-            "HARGA + PERUBAHAN VOLUME 24J"
-            if candidate["price_watch"] and candidate["volume_watch"] else
-            "MOMENTUM HARGA" if candidate["price_watch"] else
-            "PERUBAHAN VOLUME 24J (NETTO TERCATAT)"
-        )
-        volume_detail = (
-            "Perubahan netto volume 24 jam: +Rp"
-            + candidate["volume_24h_net_change_idr"]
-            + " (+" + candidate["volume_24h_net_change_pct"] + "%)"
-            + " dalam " + str(candidate["volume_comparison_seconds"] // 60)
-            + " menit sampel berurutan.\n"
-            if candidate["volume_watch"] else ""
-        )
-        if not candidate["price_watch"]:
-            stage = (
-                "Perubahan netto volume 24 jam teramati; "
-                "arah harga dan transaksi aktual belum terkonfirmasi."
-            )
-        message = (
-            "RADAR MOMENTUM M03 | OBSERVASI, BUKAN REKOMENDASI BUY\n"
-            "Jenis aktivitas: " + kind + "\n"
-            f"Pair: {candidate['pair'].upper()}\n"
-            f"Periode harga: {from_time} ke {to_time}\n"
-            f"Harga tercatat: Rp{candidate['reference_price_idr']}"
-            f" ke Rp{candidate['latest_price_idr']}\n"
-            f"Perubahan harga antar-sampel: {candidate['observed_rise_pct']}%\n"
-            f"Volume 24 jam terakhir tercatat: Rp{candidate['volume_24h_idr']}\n"
-            f"{volume_detail}"
-            "PENTING: perubahan volume rolling 24 jam BUKAN jumlah "
-            "transaksi 1 menit ataupun bukti tekanan BUY/SELL.\n"
-            f"{stage}\n{risk}\n"
-            "Status maintenance/suspend tidak terverifikasi pada arsip radar; "
-            "periksa pengumuman Indodax.\n"
-            "AI MARKET/RISK/STRATEGY dan G1: BELUM TERVERIFIKASI. "
-            "Tidak ada perintah BUY/SELL atau tombol PASS/REJECT."
-        )
+        message = format_owner_radar_compact(candidate)
         # Claim is durable BEFORE send; uncertainty must never replay it.
         try:
             msg = api.call("sendMessage", {
