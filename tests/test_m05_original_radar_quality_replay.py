@@ -179,6 +179,80 @@ class OriginalPublicRadarReviewReplayTests(unittest.TestCase):
         self.assertEqual(report["pair_diagnostics"]["ff_idr"]["reason"], "IN_TOP5")
         self.assertEqual(report["pair_diagnostics"]["ff_idr"]["rank"], 1)
 
+    def test_volume_down_price_then_later_price_momentum_transition(self):
+        # Historical UAI-like shape: volume NET up while sampled price is
+        # negative, later price accelerates. Never project later price backward.
+        values = (
+            (100, "1000000000"),
+            (90, "1010000000"),
+            (85, "1020000000"),
+            (80, "1300000000"),
+            (80, "1300000000"),
+            (80, "1300000000"),
+            (80, "1300000000"),
+            (80, "1300000000"),
+            (80, "1300000000"),
+            (90, "1300000000"),
+        )
+        for minute, (price, volume) in enumerate(values):
+            self.sample("uai_idr", minute, price, volume)
+
+        before_price_rise = self.replay(end=8)["pairs"][0]
+        self.assertEqual(
+            before_price_rise["first_top5_falling_price_volume_only_wib"],
+            "2026-11-06 20:03:59 WIB",
+        )
+        self.assertIsNone(before_price_rise["first_top5_price_momentum_wib"])
+        self.assertEqual(
+            before_price_rise["top5_minute_counts_by_watch_type"].get(
+                "PRICE_MOMENTUM_WATCH", 0), 0,
+        )
+
+        result = self.replay(end=9)
+        row = result["pairs"][0]
+        self.assertEqual(
+            row["first_top5_price_momentum_wib"],
+            "2026-11-06 20:09:59 WIB",
+        )
+        self.assertEqual(
+            row["first_top5_by_watch_type_wib"]["PRICE_MOMENTUM_WATCH"],
+            "2026-11-06 20:09:59 WIB",
+        )
+        self.assertEqual(
+            row["first_top5_by_watch_type_wib"]["ROLLING_TURNOVER_CHANGE_WATCH"],
+            "2026-11-06 20:03:59 WIB",
+        )
+        self.assertEqual(
+            [event["phase"] for event in row["top5_observed_phase_transitions"]],
+            [
+                "ROLLING_TURNOVER_CHANGE_WATCH:PRICE_DOWN",
+                "PRICE_MOMENTUM_WATCH:PRICE_NONNEGATIVE",
+            ],
+        )
+        self.assertFalse(row["phase_transitions_are_actual_messages"])
+        self.assertTrue(
+            result["possible_top5_watch_not_proof_of_actual_telegram_send"]
+        )
+        self.assertTrue(
+            result["cooldowns_delivery_and_exact_process_poll_not_replayed"]
+        )
+        self.assertEqual(result["actual_three_role_ai_calls"], 0)
+        self.assertFalse(result["execution_allowed"])
+
+    def test_no_lookahead_first_price_rise_must_follow_actual_sample(self):
+        self.sample("fun_idr", 0, 100)
+        self.sample("fun_idr", 3, 120)
+        before = self.replay(pairs=("fun_idr",), end=2)["pairs"][0]
+        self.assertIsNone(before["first_top5_price_momentum_wib"])
+        after = self.replay(pairs=("fun_idr",), end=3)["pairs"][0]
+        self.assertEqual(
+            after["first_top5_price_momentum_wib"],
+            "2026-11-06 20:03:59 WIB"
+        )
+        self.assertEqual(after["top5_minute_counts_by_watch_type"], {
+            "PRICE_MOMENTUM_WATCH": 1,
+        })
+
     def test_replay_scope_restricts_large_or_invalid_windows(self):
         for kwargs in (
             {"end_epoch": BASE + 121 * 60, "start_epoch": BASE},
