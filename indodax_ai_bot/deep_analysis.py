@@ -14,6 +14,7 @@ from typing import Callable
 from .public_market import Candle, IndodaxPublicMarket, PublicCandleHistory, PublicDataError, PublicObservation
 from .scanner import ScannerResult
 from .source_coverage import public_coverage_report
+from .scalping_evidence import project_scalping_evidence_nonlive
 
 ZERO = Decimal("0")
 HUNDRED = Decimal("100")
@@ -65,7 +66,7 @@ class DeepCandidate:
     public_quote_observed_epoch: int | None = None
 
     def summary(self) -> dict:
-        return {
+        data = {
             "scalp_setup_stage": classify_candidate_entry_stage(self),
             "pair": self.pair, "score": self.score, "state": self.state,
             "rejection_reason": self.rejection_reason,
@@ -110,6 +111,8 @@ class DeepCandidate:
             "g1_verified": False,
             "trade_authorized": False,
         }
+        data["scalping_evidence"] = project_scalping_evidence_nonlive(data)
+        return data
 
 
 def _ema(values: tuple[Decimal, ...], period: int) -> Decimal:
