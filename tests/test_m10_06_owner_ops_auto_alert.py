@@ -71,6 +71,23 @@ class OwnerOpsAutoAlertOffline(unittest.TestCase):
         self.assertIn("Trading OFF", api.sent[0]["text"])
         self.assertIn("ALERT OTOMATIS M10-06", api.sent[0]["text"])
 
+    def test_automatic_alert_is_compact_and_details_remain_on_ops(self):
+        api = FakeApi()
+        snapshot = report([
+            "BTC_WS_BATCH_STALE",
+            "M03_TIMER_NOT_CONFIRMED_DISABLED",
+        ])
+        self.assertEqual(self.send(api, snapshot)["messages_sent"], 1)
+        message = api.sent[0]["text"]
+        self.assertIn("Data BTC lama", message)
+        self.assertIn("Timer M03 perlu review", message)
+        self.assertIn("Detail: /ops", message)
+        self.assertIn("Trading OFF", message)
+        self.assertIn("snapshot, bukan uptime 24 jam", message)
+        self.assertNotIn("Penerimaan owner belum terverifikasi", message)
+        self.assertLessEqual(len(message.splitlines()), 6)
+        self.assertLess(len(message), 275)
+
     def test_no_repeat_on_restart_even_after_hour(self):
         self.assertEqual(self.send(FakeApi())["messages_sent"], 1)
         api = FakeApi()
