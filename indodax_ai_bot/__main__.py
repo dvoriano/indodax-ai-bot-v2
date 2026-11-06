@@ -64,11 +64,64 @@ def _m03_compact_from_original(outcome) -> dict:
     for key in ("attempted_count", "analyzed_count"):
         val = raw.get(key)
         counts[key] = val if type(val) is int and 0 <= val <= 40 else None
+    # Persist ONLY bounded, sanitized pre-Final candidate failure aggregates.
+    # All values already exist in the same M03 bulk result: zero new GETs.
+    # The legacy v1 compact rows remain valid and readable in the same DB.
+    valid = raw.get("candidate_valid_count")
+    rejected = raw.get("candidate_rejected_count")
+    for value in (valid, rejected):
+        if value is not None and (type(value) is not int or not 0 <= value <= 40):
+            valid = rejected = None
+            break
+    if (type(valid) is int and type(rejected) is int
+            and type(counts["analyzed_count"]) is int
+            and valid + rejected != counts["analyzed_count"]):
+        valid = rejected = None
+
+    reason_counts = {}
+    source_reasons = raw.get("candidate_rejection_reason_counts")
+    if type(rejected) is int and rejected > 0:
+        if isinstance(source_reasons, dict) and len(source_reasons) <= 40:
+            for key, count in source_reasons.items():
+                if type(count) is not int or count <= 0 or count > 40:
+                    reason_counts = {}
+                    break
+                safe = (
+                    key if type(key) is str and 3 <= len(key) <= 48
+                    and all(c.isascii() and (c.isupper() or c.isdigit()
+                                             or c == "_") for c in key)
+                    else "UNCLASSIFIED_SOURCE_REASON"
+                )
+                reason_counts[safe] = reason_counts.get(safe, 0) + count
+        if sum(reason_counts.values()) != rejected:
+            reason_counts = {"UNCLASSIFIED_SOURCE_REASON": rejected}
+        if len(reason_counts) > 6:
+            frequent = sorted(
+                reason_counts.items(), key=lambda row: (-row[1], row[0])
+            )
+            reason_counts = dict(frequent[:5])
+            reason_counts["OTHER_REJECTIONS"] = sum(x[1] for x in frequent[5:])
+
+    cohort = raw.get("eligible_cohort")
+    cohort_status = (cohort.get("status") if isinstance(cohort, dict)
+                     else None)
+    if (type(cohort_status) is not str or not 1 <= len(cohort_status) <= 64
+            or not all(c.isascii() and (c.isupper() or c.isdigit()
+                                        or c == "_") for c in cohort_status)):
+        cohort_status = "UNAVAILABLE"
+    observed = raw.get("screening_observed_epoch")
+    if type(observed) is not int or not 0 < observed < 4102444800:
+        observed = None
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "lane": "DEEP20_EVERY_FIVE_MINUTES",
         "coverage_status": coverage,
         **counts,
+        "candidate_valid_count": valid,
+        "candidate_rejected_count": rejected,
+        "candidate_rejection_reason_counts": reason_counts,
+        "eligible_cohort_status": cohort_status,
+        "scan_observed_epoch": observed,
         "final_decision": None,
         "stage_disposition": "ADVISORY_ONLY_NO_OWNER_DECISION",
         "execution_allowed": False,
