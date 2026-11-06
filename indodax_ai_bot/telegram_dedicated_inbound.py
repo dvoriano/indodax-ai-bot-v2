@@ -200,6 +200,7 @@ def dedicated_owner_fast_loop_nonlive(
     ops_alert_failures = 0
     getupdates_transport_failures = 0
     getupdates_consecutive_failures = 0
+    readonly_preflight_transport_failures = 0
     radar_next_due = None
     radar_last_status = ("M05_RADAR_PENDING_FIRST_POLL"
                          if auto_radar_alert is not None else "M05_RADAR_OPTIN_OFF")
@@ -214,14 +215,30 @@ def dedicated_owner_fast_loop_nonlive(
     # No new network behavior unless owner GO was granted upstream.
     with dedicated_poller_lock(lock_path):
         def _preflight() -> None:
-            result = inspect_telegram_readonly(
-                api, expected_bot_id=expected_bot_id,
-            )
-            if result.get("status") == "WEBHOOK_PRESENT_POLLING_BLOCKED":
-                raise TelegramTransportError("M05_DEDICATED_WEBHOOK_PRESENT")
-            if result.get("status") != (
-                    "READONLY_PREFLIGHT_OK_POLLING_NOT_AUTHORIZED"):
-                raise TelegramTransportError("M05_DEDICATED_PREFLIGHT_UNSAFE")
+            nonlocal readonly_preflight_transport_failures
+            # getMe/getWebhookInfo are read-only. Retry ONLY network
+            # transport failures before owner updates or send effects.
+            for attempt in range(3):
+                try:
+                    result = inspect_telegram_readonly(
+                        api, expected_bot_id=expected_bot_id,
+                    )
+                except TelegramTransportError as error:
+                    if str(error) != "M05_TELEGRAM_API_TRANSPORT_FAILED":
+                        raise
+                    readonly_preflight_transport_failures += 1
+                    if attempt == 2:
+                        raise TelegramTransportError(
+                            "M05_READONLY_PREFLIGHT_TRANSPORT_RETRY_EXHAUSTED"
+                        ) from None
+                    time.sleep(attempt + 1)
+                    continue
+                if result.get("status") == "WEBHOOK_PRESENT_POLLING_BLOCKED":
+                    raise TelegramTransportError("M05_DEDICATED_WEBHOOK_PRESENT")
+                if result.get("status") != (
+                        "READONLY_PREFLIGHT_OK_POLLING_NOT_AUTHORIZED"):
+                    raise TelegramTransportError("M05_DEDICATED_PREFLIGHT_UNSAFE")
+                return
 
         _preflight()
         poller = TelegramOwnerPoller(
@@ -319,6 +336,7 @@ def dedicated_owner_fast_loop_nonlive(
                     "ignored": ignored, "outbound_sent": notices,
                     "ops_alert_failures": ops_alert_failures,
                     "getupdates_transport_failures": getupdates_transport_failures,
+                    "readonly_preflight_transport_failures": readonly_preflight_transport_failures,
                     "getupdates_consecutive_failures": getupdates_consecutive_failures,
                     "radar_enabled": auto_radar_alert is not None,
                     "radar_invocations": radar_invocations,
@@ -337,6 +355,7 @@ def dedicated_owner_fast_loop_nonlive(
         "single_original_poller": True,
         "ops_alert_failures": ops_alert_failures,
         "getupdates_transport_failures": getupdates_transport_failures,
+        "readonly_preflight_transport_failures": readonly_preflight_transport_failures,
         "getupdates_consecutive_failures": getupdates_consecutive_failures,
         "radar_enabled": auto_radar_alert is not None,
         "radar_invocations": radar_invocations,
