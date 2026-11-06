@@ -34,6 +34,10 @@ class TelegramTransportError(RuntimeError):
     """Stable error codes only, never print Bot API URLs or bearer tokens."""
 
 
+class TelegramGetUpdatesTransportError(TelegramTransportError):
+    """Read-only getUpdates network failure; stable legacy error text."""
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # The secret token appears in the request URL. Never follow redirects.
@@ -366,8 +370,8 @@ class TelegramOwnerPoller:
             # sendMessage/answerCallbackQuery MUST remain uncertain and
             # must never be retried under this code.
             if str(error) == "M05_TELEGRAM_API_TRANSPORT_FAILED":
-                raise TelegramTransportError(
-                    "M05_GETUPDATES_TRANSPORT_FAILED"
+                raise TelegramGetUpdatesTransportError(
+                    "M05_TELEGRAM_API_TRANSPORT_FAILED"
                 ) from None
             raise
         if not isinstance(updates, list) or len(updates) > limit:
