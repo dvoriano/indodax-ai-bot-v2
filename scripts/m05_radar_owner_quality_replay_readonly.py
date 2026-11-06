@@ -44,6 +44,12 @@ def replay_original_public_watch_readonly(
     first_top5 = {p: None for p in pairs}
     first_eligible = {p: None for p in pairs}
     example = {p: None for p in pairs}
+    first_top5_price = {p: None for p in pairs}
+    first_top5_falling_volume = {p: None for p in pairs}
+    first_by_type = {p: {} for p in pairs}
+    type_minute_counts = {p: Counter() for p in pairs}
+    phase_transitions = {p: [] for p in pairs}
+    previous_phase = {p: None for p in pairs}
     for minute in range(start_epoch, end_epoch + 1, 60):
         asof = minute + 59
         snap = inspect_original_m03_radar_readonly(
@@ -58,18 +64,44 @@ def replay_original_public_watch_readonly(
             counts[pair][reason] += 1
             if reason in ("IN_TOP5", "QUALIFIED_OUTSIDE_TOP5") and first_eligible[pair] is None:
                 first_eligible[pair] = asof
-            if reason == "IN_TOP5" and first_top5[pair] is None:
-                first_top5[pair] = asof
+            if reason == "IN_TOP5":
                 found = present[pair]
-                example[pair] = {
-                    "watch_type": found["watch_type"],
-                    "observed_rise_pct": found["observed_rise_pct"],
-                    "priority": found["pre_ai_review"]["review_priority"],
-                    "sample_age_seconds": found["sample_age_seconds"],
-                    "spread_bps": found["spread_bps"],
-                    "g1_verified": False,
-                    "market_risk_strategy_ai_calls": 0,
-                }
+                watch_type = found["watch_type"]
+                price = found["observed_rise_pct"]
+                type_minute_counts[pair][watch_type] += 1
+                first_by_type[pair].setdefault(watch_type, asof)
+                if first_top5[pair] is None:
+                    first_top5[pair] = asof
+                    example[pair] = {
+                        "watch_type": watch_type,
+                        "observed_rise_pct": price,
+                        "priority": found["pre_ai_review"]["review_priority"],
+                        "sample_age_seconds": found["sample_age_seconds"],
+                        "spread_bps": found["spread_bps"],
+                        "g1_verified": False,
+                        "market_risk_strategy_ai_calls": 0,
+                    }
+                if found["price_watch"] and first_top5_price[pair] is None:
+                    first_top5_price[pair] = asof
+                if (found["volume_watch"] and not found["price_watch"]
+                        and price.startswith("-")
+                        and first_top5_falling_volume[pair] is None):
+                    first_top5_falling_volume[pair] = asof
+                # Phase = observed WATCH type + sign of sampled price.
+                # This is not a risk score, closed candle, or Telegram send.
+                phase = (
+                    watch_type + (":PRICE_DOWN" if price.startswith("-")
+                                  else ":PRICE_NONNEGATIVE")
+                )
+                if phase != previous_phase[pair]:
+                    if len(phase_transitions[pair]) < 12:
+                        phase_transitions[pair].append({
+                            "asof_epoch": asof,
+                            "phase": phase,
+                            "observed_rise_pct": price,
+                            "spread_bps": found["spread_bps"],
+                        })
+                    previous_phase[pair] = phase
 
     def wib_time(epoch: int | None) -> str | None:
         return (datetime.fromtimestamp(epoch, WIB).strftime("%Y-%m-%d %H:%M:%S WIB")
@@ -84,6 +116,8 @@ def replay_original_public_watch_readonly(
         "historical_casebook_excluded_to_prevent_lookahead": True,
         "volume_24h_delta_not_actual_intraminute_trade_volume": True,
         "not_a_calibrated_profitability_or_trade_backtest": True,
+        "possible_top5_watch_not_proof_of_actual_telegram_send": True,
+        "cooldowns_delivery_and_exact_process_poll_not_replayed": True,
         "independent_issuer_verified": False,
         "actual_three_role_ai_calls": 0,
         "paid_provider_calls": 0,
@@ -94,6 +128,22 @@ def replay_original_public_watch_readonly(
             "pair": pair,
             "first_eligible_any_rank_wib": wib_time(first_eligible[pair]),
             "first_top5_watch_wib": wib_time(first_top5[pair]),
+            "first_top5_price_momentum_wib": wib_time(first_top5_price[pair]),
+            "first_top5_falling_price_volume_only_wib": (
+                wib_time(first_top5_falling_volume[pair])
+            ),
+            "first_top5_by_watch_type_wib": {
+                kind: wib_time(epoch)
+                for kind, epoch in sorted(first_by_type[pair].items())
+            },
+            "top5_minute_counts_by_watch_type": dict(
+                sorted(type_minute_counts[pair].items())
+            ),
+            "top5_observed_phase_transitions": [{
+                **{k: v for k, v in item.items() if k != "asof_epoch"},
+                "asof_wib": wib_time(item["asof_epoch"]),
+            } for item in phase_transitions[pair]],
+            "phase_transitions_are_actual_messages": False,
             "asof_minute_counts_by_reason": dict(sorted(counts[pair].items())),
             "first_top5_observed_evidence": example[pair],
         } for pair in pairs],
