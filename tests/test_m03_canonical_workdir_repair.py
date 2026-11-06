@@ -29,7 +29,7 @@ class OriginalM03CanonicalSource(unittest.TestCase):
 
     def classify(self, workdir=None, **overrides):
         kwargs = dict(
-            working_directory=(
+            working_directory=str(
                 self.home / "indodax-ai-bot-v2-m05-release"
                 if workdir is None else workdir
             ),
