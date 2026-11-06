@@ -22,7 +22,8 @@ from indodax_ai_bot.public_market import Candle, PublicCandleHistory, PublicData
 def evaluate_archive(
         path: Path, *, pair: str = "btc_idr",
         owner_assumed_roundtrip_friction_bps: Decimal | None = None,
-        hypothetical_ticket_idr: Decimal | None = None) -> dict:
+        hypothetical_ticket_idr: Decimal | None = None,
+        diagnose_signal_gates: bool = False) -> dict:
     if not re.fullmatch(r"[a-z0-9]+_idr", pair):
         raise PublicDataError("INVALID_CALIBRATION_PAIR")
     if not path.is_file():
@@ -67,6 +68,7 @@ def evaluate_archive(
         hist,
         owner_assumed_roundtrip_friction_bps=owner_assumed_roundtrip_friction_bps,
         hypothetical_ticket_idr=hypothetical_ticket_idr,
+        diagnose_signal_gates=diagnose_signal_gates,
     )
 
 
@@ -78,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Owner-entered combined fees+spread+slippage BPS, proxy only")
     parser.add_argument("--ticket-idr", default=None,
                         help="Owner-entered hypothetical BUY ticket IDR, NOT live capital")
+    parser.add_argument("--diagnose-signal-gates", action="store_true",
+                        help="Read-only fixed-hour vs every-minute gate frequency; no trades")
     args = parser.parse_args(argv)
     try:
         def optional_decimal(raw):
@@ -92,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             owner_assumed_roundtrip_friction_bps=optional_decimal(
                 args.roundtrip_friction_bps),
             hypothetical_ticket_idr=optional_decimal(args.ticket_idr),
+            diagnose_signal_gates=args.diagnose_signal_gates,
         )
     except PublicDataError as exc:
         print(json.dumps({
