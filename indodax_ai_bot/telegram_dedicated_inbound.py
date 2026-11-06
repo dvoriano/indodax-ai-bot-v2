@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import stat
 import time
+from time import monotonic
 from typing import Any, Iterator
 
 from .owner_control import OwnerDecisionLedger
@@ -23,6 +24,7 @@ from .telegram_bot_api import (
 from .telegram_readonly_preflight import inspect_telegram_readonly
 
 LEGACY_CAIPITI_BOT_ID = 8827061554
+RADAR_CHECK_INTERVAL_SECONDS = 30
 
 
 @contextmanager
@@ -195,6 +197,7 @@ def dedicated_owner_fast_loop_nonlive(
     batches = handled = ignored = notices = 0
     radar_invocations = radar_send_acks = radar_uncertain = 0
     ops_alert_failures = 0
+    radar_next_due = None
     radar_last_status = ("M05_RADAR_PENDING_FIRST_POLL"
                          if auto_radar_alert is not None else "M05_RADAR_OPTIN_OFF")
     radar_status_allowlist = frozenset((
@@ -245,22 +248,16 @@ def dedicated_owner_fast_loop_nonlive(
                 else _send_one_manual_trade_preview(api=api, ledger=ledger)
             )
             batches += 1
-            # One bounded snapshot every ~60s, never blocking owner callbacks
-            # with an additional poller or a separate Telegram service.
-            if auto_ops_alert is not None and batches % 30 == 0:
-                try:
-                    auto_ops_alert(api=api, ledger=ledger)
-                except Exception:
-                    # Optional ops alert failures cannot terminate the
-                    # original owner receiver or starve this batch's radar.
-                    # Count only: never emit raw errors or credentials.
-                    ops_alert_failures += 1
-            # Same original receiver: check every 10 COMPLETED batches
-            # (~30s on 6 Nov owner VPS). A slow network can still delay it.
-            # Radar uses existing 60s global / 15m per-pair claim cooldowns,
-            # emits only owner-private noninteractive WATCH and never orders.
-            # Any source/transport failure is handled by the radar helper.
-            if auto_radar_alert is not None and batches % 10 == 0:
+            # Reuse the SAME original owner receiver and durable SQLite.
+            # Check after the first successful poll, then by elapsed time:
+            # Ten completed longpoll batches are NOT a 30-second clock.
+            # No catch-up bursts after slow calls. The sender's persistent
+            # per-pair/global cooldown and uncertain-delivery claims still
+            # govern notices, including after process restart.
+            radar_checked = False
+            if auto_radar_alert is not None and (
+                    radar_next_due is None or monotonic() >= radar_next_due):
+                radar_checked = True
                 radar_invocations += 1
                 try:
                     radar = auto_radar_alert(api=api, ledger=ledger)
@@ -285,11 +282,21 @@ def dedicated_owner_fast_loop_nonlive(
                     # Never place exception text/token/raw Bot API body in log.
                     radar_last_status = "M05_RADAR_CALLBACK_FAILED"
                     radar_uncertain += 1
+                finally:
+                    radar_next_due = monotonic() + RADAR_CHECK_INTERVAL_SECONDS
+            # Ops retains its existing batch cadence, after the radar check.
+            # These synchronous callbacks cannot guarantee a wall-time SLA
+            # during network stalls; no extra thread/poller is introduced.
+            if auto_ops_alert is not None and batches % 30 == 0:
+                try:
+                    auto_ops_alert(api=api, ledger=ledger)
+                except Exception:
+                    ops_alert_failures += 1
             handled += result["handled"]
             ignored += result["ignored"]
             notices += (outbound["messages_sent"]
                         + manual_preview["messages_sent"])
-            if heartbeat is not None and batches % 10 == 0:
+            if heartbeat is not None and (radar_checked or batches % 10 == 0):
                 heartbeat({
                     "status": "M05_FAST_LOOP_HEARTBEAT_NONLIVE",
                     "batches": batches, "handled": handled,
@@ -391,3 +398,4 @@ def dedicated_owner_poll_once(
         "final_decision": None,
         "execution_allowed": False,
     }
+

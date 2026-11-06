@@ -137,8 +137,9 @@ NEWPID="$(systemctl --user show "$UNIT" -p MainPID --value)"
   fail ORIGINAL_PROCESS_NOT_REPLACED
 check_env "$NEWPID" YES || fail RADAR_FLAG_NOT_IN_RUNNING_PROCESS
 
-# Observe real batches, not wall-clock guesses: 30 long-poll batches may
-# exceed 90 seconds when getUpdates, preflight or outbox calls are slow.
+# Observe the real callback heartbeat. The original receiver checks radar
+# after its first successful poll, then on a monotonic 30-second cadence.
+# Slow network/preflight/outbox calls can still delay that synchronous loop.
 # A failed observation still rolls back; this does NOT authorize a retry.
 # Only inspect allowlisted JSON heartbeat fields, never raw journal lines.
 HEARTBEAT=""

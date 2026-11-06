@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 import tempfile
 import time
@@ -31,6 +32,14 @@ NOW = int(time.time())
 
 class M05OriginalFastLongpollTests(unittest.TestCase):
     def setUp(self):
+        self.loop_clock = 0.0
+        self.poll_elapsed = 2.0
+        clock = patch(
+            "indodax_ai_bot.telegram_dedicated_inbound.monotonic",
+            side_effect=lambda: self.loop_clock,
+        )
+        clock.start()
+        self.addCleanup(clock.stop)
         t = tempfile.TemporaryDirectory(prefix="original-m05-fast-")
         self.addCleanup(t.cleanup)
         root = Path(t.name)
@@ -75,6 +84,7 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         if method == "getWebhookInfo":
             return {"url": "", "pending_update_count": 0}
         if method == "getUpdates":
+            self.loop_clock += self.poll_elapsed
             self.assertEqual(payload["timeout"], 2)
             offset = payload["offset"]
             if offset <= 1:
@@ -306,7 +316,7 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         )
 
 
-    def test_radar_starts_on_tenth_completed_batch_not_thirtieth(self):
+    def test_radar_starts_on_first_completed_poll_not_tenth(self):
         calls = []
         events = []
 
@@ -317,26 +327,17 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             return {"status": "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
                     "messages_sent": 0}
 
-        first = dedicated_owner_fast_loop_nonlive(
+        report = dedicated_owner_fast_loop_nonlive(
             api=self.bot_api, ledger=self.owner,
             expected_bot_id=BOT, lock_path=self.lock,
-            max_batches=9, auto_radar_alert=radar,
+            max_batches=1, auto_radar_alert=radar,
             heartbeat=events.append,
         )
-        self.assertEqual(first["radar_invocations"], 0)
-        self.assertEqual(calls, [])
-        second = dedicated_owner_fast_loop_nonlive(
-            api=self.bot_api, ledger=self.owner,
-            expected_bot_id=BOT, lock_path=self.lock,
-            max_batches=10, auto_radar_alert=radar,
-            heartbeat=events.append,
-        )
-        self.assertEqual(second["radar_invocations"], 1)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(events[-1]["batches"], 10)
-        self.assertEqual(events[-1]["radar_invocations"], 1)
-        self.assertFalse(second["order_sent"])
-        self.assertFalse(second["execution_allowed"])
+        self.assertEqual(report["radar_invocations"], 1)
+        self.assertEqual(calls, [True])
+        self.assertEqual(events[0]["batches"], 1)
+        self.assertFalse(report["order_sent"])
+        self.assertFalse(report["execution_allowed"])
 
     def test_radar_ack_accounted_for_in_original_existing_heartbeat(self):
         events = []
@@ -346,8 +347,6 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             self.assertIs(api, self.bot_api)
             self.assertIs(ledger, self.owner)
             radar_calls.append(True)
-            # The first qualified event gets one ACK. Subsequent polls
-            # have no new watch, just as the original cooldown/ledger would.
             first = len(radar_calls) == 1
             return {
                 "status": ("M05_RADAR_OWNER_PRIVATE_NOTICE_SENT" if first
@@ -362,20 +361,20 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             max_batches=30, heartbeat=events.append,
             auto_radar_alert=radar,
         )
-        self.assertEqual(len(radar_calls), 3)
-        self.assertEqual(len(events), 3)
+        self.assertEqual(len(radar_calls), 2)
+        self.assertEqual(len(events), 5)
+        self.assertEqual(events[0]["batches"], 1)
+        self.assertEqual(events[0]["radar_send_acks"], 1)
         self.assertEqual(result["radar_send_acks"], 1)
-        self.assertEqual(result["radar_invocations"], 3)
+        self.assertEqual(result["radar_invocations"], 2)
         self.assertEqual(result["radar_delivery_uncertain"], 0)
         self.assertTrue(result["radar_enabled"])
         self.assertEqual(
             events[0]["radar_last_status"],
             "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
         )
-        self.assertEqual(
-            events[-1]["radar_last_status"],
-            "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
-        )
+        self.assertEqual(events[-1]["radar_last_status"],
+                         "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH")
         self.assertEqual(events[-1]["radar_send_acks"], 1)
         self.assertEqual(events[-1]["execution_allowed"], False)
         self.assertFalse(result["order_sent"])
@@ -394,8 +393,8 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             auto_radar_alert=broken_radar,
         )
         self.assertEqual(result["batches"], 30)
-        self.assertEqual(result["radar_invocations"], 3)
-        self.assertEqual(result["radar_delivery_uncertain"], 3)
+        self.assertEqual(result["radar_invocations"], 2)
+        self.assertEqual(result["radar_delivery_uncertain"], 2)
         self.assertEqual(result["radar_send_acks"], 0)
         self.assertEqual(
             events[-1]["radar_last_status"], "M05_RADAR_CALLBACK_FAILED"
@@ -429,12 +428,12 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         report = dedicated_owner_fast_loop_nonlive(
             api=self.bot_api, ledger=self.owner,
             expected_bot_id=BOT, lock_path=self.lock,
-            max_batches=30, heartbeat=events.append,
+            max_batches=31, heartbeat=events.append,
             auto_ops_alert=broken_ops,
             auto_radar_alert=working_radar,
         )
         self.assertEqual(called, ["radar", "radar", "ops", "radar"])
-        self.assertEqual(report["batches"], 30)
+        self.assertEqual(report["batches"], 31)
         self.assertEqual(report["ops_alert_failures"], 1)
         self.assertEqual(report["radar_invocations"], 3)
         self.assertEqual(report["radar_send_acks"], 1)
@@ -443,10 +442,8 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             events[0]["radar_last_status"],
             "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
         )
-        self.assertEqual(
-            events[-1]["radar_last_status"],
-            "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
-        )
+        self.assertEqual(events[-1]["radar_last_status"],
+                         "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH")
         self.assertNotIn("synthetic confidential exception", str(events))
         self.assertFalse(report["execution_allowed"])
         self.assertFalse(report["order_sent"])
@@ -471,6 +468,142 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
                       optin)
         self.assertNotIn(TOKEN, original + timer + optin)
 
+    def test_radar_slow_polls_use_elapsed_time_not_thirty_batches(self):
+        self.poll_elapsed = 45
+        checked = []
+        events = []
+
+        def radar(**_):
+            checked.append(self.loop_clock)
+            return {"status": "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
+                    "messages_sent": 0}
+
+        report = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=3, auto_radar_alert=radar, heartbeat=events.append,
+        )
+        self.assertEqual(checked, [45, 90, 135])
+        self.assertEqual([e["batches"] for e in events], [1, 2, 3])
+        self.assertEqual(report["radar_invocations"], 3)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_many_immediate_updates_do_not_accelerate_radar(self):
+        self.poll_elapsed = 0
+        checked = []
+
+        def radar(**_):
+            checked.append(self.loop_clock)
+            return {"status": "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
+                    "messages_sent": 0}
+
+        dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=100, auto_radar_alert=radar,
+        )
+        self.assertEqual(checked, [0])
+
+    def test_slow_failed_callback_waits_from_completion_without_catchup(self):
+        self.poll_elapsed = 20
+        checked = []
+
+        def radar(**_):
+            checked.append(self.loop_clock)
+            self.loop_clock += 180
+            raise RuntimeError("do not log this synthetic token")
+
+        events = []
+        report = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=4, auto_radar_alert=radar, heartbeat=events.append,
+        )
+        self.assertEqual(checked, [20, 240])
+        self.assertEqual(report["batches"], 4)
+        self.assertEqual(report["radar_delivery_uncertain"], 2)
+        self.assertEqual(report["radar_send_acks"], 0)
+        self.assertNotIn("synthetic token", json.dumps(events))
+
+    def test_stop_before_first_poll_prevents_radar_callback(self):
+        with patch("indodax_ai_bot.telegram_dedicated_inbound."
+                   "_send_one_queued_market_advisory") as outbox:
+            radar = unittest.mock.Mock()
+            report = dedicated_owner_fast_loop_nonlive(
+                api=self.bot_api, ledger=self.owner,
+                expected_bot_id=BOT, lock_path=self.lock,
+                stop_requested=lambda: True, auto_radar_alert=radar,
+            )
+        radar.assert_not_called()
+        outbox.assert_not_called()
+        self.assertEqual(report["radar_invocations"], 0)
+
+    def test_original_service_radar_optin_off_makes_no_callback(self):
+        with patch.object(TelegramBotApiClient, "call", side_effect=self.data), \
+                patch("indodax_ai_bot.m05_radar_momentum_nonlive."
+                      "send_one_owner_radar_momentum_nonlive") as radar:
+            report = service_fast_loop_nonlive(env=self.env, max_batches=31)
+        radar.assert_not_called()
+        self.assertFalse(report["radar_enabled"])
+        self.assertEqual(report["radar_invocations"], 0)
+
+    def test_original_service_first_poll_real_sender_and_restart_dedup(self):
+        # Real original M03-shaped SQLite -> real radar -> original owner
+        # ledger -> fake Bot API ACK. Only network and source path/time are
+        # substituted; no duplicate sender or invented LIVE acceptance.
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            send_one_owner_radar_momentum_nonlive,
+        )
+        source = self.state / "decisions.sqlite3"
+        with sqlite3.connect(source) as db:
+            db.executescript("""
+                CREATE TABLE public_ticker_minute_samples (
+                    pair TEXT, minute_epoch INTEGER, observed_epoch INTEGER,
+                    ticker_epoch INTEGER, last_idr TEXT,
+                    volume_24h_idr TEXT, spread_bps TEXT,
+                    PRIMARY KEY(pair, minute_epoch));
+                CREATE TABLE public_surge_cases (
+                    pair TEXT, minute_epoch INTEGER, cohort TEXT);
+            """)
+            for i in range(6):
+                db.execute("INSERT INTO public_ticker_minute_samples "
+                           "VALUES (?,?,?,?,?,?,?)", (
+                               "uai_idr", NOW // 60 * 60 - i * 60,
+                               NOW - i * 60, NOW - i * 60,
+                               str(120 - i * 4), "500000000", "20"))
+        source.chmod(0o600)
+        events = []
+
+        def original_sender(*, api, ledger):
+            return send_one_owner_radar_momentum_nonlive(
+                api=api, ledger=ledger, db_path=source, now_epoch=NOW,
+            )
+
+        with patch.object(TelegramBotApiClient, "call", side_effect=self.data), \
+                patch("indodax_ai_bot.m05_radar_momentum_nonlive."
+                      "send_one_owner_radar_momentum_nonlive",
+                      side_effect=original_sender):
+            first = service_fast_loop_nonlive(
+                env={**self.env, "M05_RADAR_MOMENTUM_ALERT_GO": "YES"},
+                max_batches=1, heartbeat=events.append,
+            )
+            restarted = service_fast_loop_nonlive(
+                env={**self.env, "M05_RADAR_MOMENTUM_ALERT_GO": "YES"},
+                max_batches=1, heartbeat=events.append,
+            )
+        radar_messages = [m for m in self.sent if "RADAR" in m["text"]]
+        self.assertEqual(len(radar_messages), 1)
+        self.assertEqual(radar_messages[0]["chat_id"], OWNER)
+        self.assertNotIn("reply_markup", radar_messages[0])
+        self.assertEqual(first["radar_send_acks"], 1)
+        self.assertEqual(restarted["radar_send_acks"], 0)
+        self.assertEqual(events[0]["batches"], 1)
+        self.assertEqual(events[0]["radar_send_acks"], 1)
+        self.assertFalse(first["execution_allowed"])
+        self.assertFalse(restarted["execution_allowed"])
+        self.assertNotIn(TOKEN, json.dumps(events))
+
 
 if __name__ == "__main__":
     unittest.main()
+
