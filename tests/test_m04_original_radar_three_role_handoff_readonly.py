@@ -139,7 +139,7 @@ class M04OriginalRadarHandoffReadonlyTests(unittest.TestCase):
         self.assertEqual(result["candidates"][1]["public_evidence"][
             "volume_24h_rolling_net_delta_idr"], "30000000")
         self.assertEqual(result["candidates"][1]["public_evidence"][
-            "observed_rise_pct"], "-1.0")
+            "observed_rise_pct"], "-1.00")
         self.assert_nonlive(result)
 
     def test_one_original_read_only_inspector_call_and_no_provider_call(self):
