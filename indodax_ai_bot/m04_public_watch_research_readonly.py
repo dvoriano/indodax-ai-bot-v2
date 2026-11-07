@@ -299,7 +299,8 @@ def prepare_public_watch_research_readonly(
         _STATUS if handoff["candidate_count"] else
         "M04_PUBLIC_WATCH_RESEARCH_NO_CURRENT_CANDIDATE"
     )
-    result["original_m03_inspections"] = 1
+    # A pure provided snapshot is not independently an actual DB read.
+    # Only the wrapper that invokes the original inspector can attest one.
     prepared = []
     seen_pairs: set[str] = set()
     for index, row in enumerate(handoff["candidates"], start=1):
@@ -328,9 +329,11 @@ def inspect_original_public_watch_research_readonly(
     handoff = inspect_original_radar_three_role_handoff_readonly(
         now_epoch=now, db_path=db_path,
     )
-    return prepare_public_watch_research_readonly(
+    result = prepare_public_watch_research_readonly(
         handoff=handoff, now_epoch=now,
     )
+    result["original_m03_inspections"] = 1
+    return result
 
 
 def main() -> int:
