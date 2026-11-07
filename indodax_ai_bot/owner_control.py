@@ -1240,11 +1240,14 @@ class OwnerDecisionLedger:
         if type(now_epoch) is not int or now_epoch <= 0:
             raise ValueError("M05_ADVISORY_INVALID_CLOCK")
         with self._tx() as db:
-            if db.execute(
-                """SELECT 1 FROM m05_market_advisory_outbox
-                   WHERE delivery_state='CLAIMED' LIMIT 1"""
-            ).fetchone():
-                raise ValueError("M05_ADVISORY_INCOMPLETE_DELIVERY_REVIEW")
+            # A previous CLAIMED send is never retried or given a fabricated
+            # ACK. Its unknown delivery outcome remains visibly CLAIMED even
+            # when the 90s owner-review TTL has passed. Only *unexpired*
+            # uncertain sends block a subsequent unrelated advisory.
+            #
+            # Perform local expiry maintenance BEFORE checking the blocking
+            # claim so one stale CLAIMED row cannot freeze all QUEUED rows.
+            # This is expiry metadata, never an owner Final decision.
             # Expire unsent review-only items atomically in BOTH existing
             # M05 tables, so /status cannot report old PENDING proposals.
             # This is expiry metadata, NOT a human Final REJECT.
@@ -1263,6 +1266,25 @@ class OwnerDecisionLedger:
                    WHERE delivery_state='QUEUED' AND expires_epoch<=?""",
                 (now_epoch,),
             )
+            # Do NOT mark the uncertain delivery as SENT or EXPIRED.
+            # Its corresponding review can expire administratively without
+            # asserting whether Telegram received the message.
+            db.execute(
+                """UPDATE m05_proposals
+                   SET state='REJECT',reason='EXPIRED_UNCERTAIN_DELIVERY',
+                       decision_epoch=?
+                   WHERE state='PENDING' AND proposal_id IN (
+                       SELECT proposal_id FROM m05_market_advisory_outbox
+                       WHERE delivery_state='CLAIMED' AND expires_epoch<=?
+                   )""",
+                (now_epoch, now_epoch),
+            )
+            if db.execute(
+                """SELECT 1 FROM m05_market_advisory_outbox
+                   WHERE delivery_state='CLAIMED' AND expires_epoch>?
+                   LIMIT 1""", (now_epoch,),
+            ).fetchone():
+                raise ValueError("M05_ADVISORY_INCOMPLETE_DELIVERY_REVIEW")
             mode = db.execute(
                 "SELECT mode FROM m05_config WHERE singleton=1"
             ).fetchone()[0]
