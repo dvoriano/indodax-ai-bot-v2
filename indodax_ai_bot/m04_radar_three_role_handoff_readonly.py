@@ -211,15 +211,23 @@ def prepare_original_radar_three_role_handoff_readonly(
 
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
-    # Validate every candidate in selected top-N; fail closed rather than
-    # silently dropping malformed evidence from an otherwise good cohort.
-    for candidate in snapshot["candidates"][:max_candidates]:
+    validated: list[tuple[int, int, dict[str, Any], str]] = []
+    # Verify the WHOLE original Top5 before prioritizing any AI slot.
+    # Public volume-only WATCH with falling price must not displace a
+    # higher-quality rising quote just because its rolling-24h delta is
+    # larger. Reuse the EXISTING deterministic pre-AI priority, never
+    # infer BUY pressure, profitability, G1, or model authority.
+    for original_index, candidate in enumerate(snapshot["candidates"]):
         try:
             packet = _source_packet(candidate, now_epoch)
             canonical = json.dumps(
                 packet, sort_keys=True, separators=(",", ":"),
                 ensure_ascii=True, allow_nan=False,
             ).encode("ascii")
+            review = candidate["pre_ai_review"]
+            priority = review["priority_rank_observational"]
+            if type(priority) is not int or not 1 <= priority <= 4:
+                raise ValueError("M04_RADAR_INVALID_PRE_AI_PRIORITY")
         except (ValueError, KeyError, TypeError, UnicodeError,
                 OverflowError, InvalidOperation):
             return _blocked("M04_RADAR_INVALID_CANDIDATE_PACKET")
@@ -227,7 +235,15 @@ def prepare_original_radar_three_role_handoff_readonly(
         if pair in seen:
             return _blocked("M04_RADAR_DUPLICATE_PAIR")
         seen.add(pair)
-        digest = sha256(canonical).hexdigest()
+        validated.append((priority, original_index, packet,
+                          sha256(canonical).hexdigest()))
+    # Original Top5 ranking is preserved as the deterministic tie-break.
+    # This is only an M04 *unexecuted* AI-input priority; M05 radar alerts
+    # and M03 scanner order are not touched.
+    validated.sort(key=lambda item: (item[0], item[1]))
+    for selection_index, (priority, original_index, packet, digest) in enumerate(
+            validated[:max_candidates], start=1):
+        pair = packet["pair"]
         slots = [{
             "role": role,
             "evidence_digest_sha256": digest,
@@ -237,6 +253,9 @@ def prepare_original_radar_three_role_handoff_readonly(
         results.append({
             "pair": pair,
             "evidence_digest_sha256": digest,
+            "radar_original_top5_rank": original_index + 1,
+            "handoff_selection_rank": selection_index,
+            "pre_ai_priority_rank_observational": priority,
             "public_evidence": packet,
             "source_missing": list(_MISSING_FACTS),
             "role_slots": slots,
@@ -260,6 +279,10 @@ def prepare_original_radar_three_role_handoff_readonly(
     base["candidates"] = results
     base["three_role_input_slots_prepared"] = 3 * len(results)
     base["max_candidates_per_pass"] = 2
+    base["selection_policy"] = (
+        "VALIDATE_ALL_ORIGINAL_TOP5_THEN_PRE_AI_PRIORITY_ASC"
+        "_TIE_ORIGINAL_RADAR_RANK"
+    )
     base["source_digest_is_g1_receipt"] = False
     return base
 
