@@ -148,7 +148,7 @@ class PublicWatchPaidOnceOwnerGatedTests(unittest.TestCase):
             {"owner_confirmation": None},
             {"owner_confirmation": "GO"},
             {"owner_pricing_reviewed": False},
-            {"budget": None},
+            {"budget": False},
             {"api_key": ""},
             {"owner_models": {"MARKET": "glm-5.3-flash"}},
         ):
