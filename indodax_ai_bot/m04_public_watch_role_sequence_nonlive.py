@@ -158,6 +158,14 @@ def simulate_public_watch_role_sequence_offline(
                                "actual_prior_role_responses"
                            ]))):
                 return _base("M04_PUBLIC_WATCH_SEQUENCE_LINEAGE_MISMATCH")
+            # Materialize the exact user-message JSON that a future
+            # sequential caller would send, then HASH ONLY its test context.
+            # Never dispatch it or save any secret/provider payload.
+            context_bytes = json.dumps(
+                source, sort_keys=True, separators=(",", ":"),
+                allow_nan=False, ensure_ascii=True,
+            ).encode("ascii")
+            request["messages"][1]["content"] = context_bytes.decode("ascii")
             raw = fixture_response_json_by_pair[pair][role]
             validation = validate_public_watch_provider_response_shape_offline(
                 raw_response_json=raw, request_preview=entry,
@@ -178,6 +186,8 @@ def simulate_public_watch_role_sequence_offline(
                 "role": role,
                 "stance": parsed["stance"],
                 "test_fixture_response_sha256": sha256(canonical).hexdigest(),
+                "test_request_context_sha256": sha256(context_bytes).hexdigest(),
+                "prior_fixture_role_count": role_index,
             })
         all_reports.append({
             "pair": pair,
