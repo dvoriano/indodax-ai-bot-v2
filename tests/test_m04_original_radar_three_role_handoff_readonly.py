@@ -129,7 +129,7 @@ class M04OriginalRadarHandoffReadonlyTests(unittest.TestCase):
         c1 = candidate("uai_idr")
         c2 = candidate("eth_idr", volume_watch=True, price_watch=False,
                        after="99", before="100")
-        result = self.prepare([c1, c2, candidate("sol_idr")])
+        result = self.prepare([c1, c2])
         self.assertEqual(result["candidate_count"], 2)
         self.assertEqual(result["three_role_input_slots_prepared"], 6)
         self.assertNotEqual(result["candidates"][0]["evidence_digest_sha256"],
@@ -140,6 +140,64 @@ class M04OriginalRadarHandoffReadonlyTests(unittest.TestCase):
             "volume_24h_rolling_net_delta_idr"], "30000000")
         self.assertEqual(result["candidates"][1]["public_evidence"][
             "observed_rise_pct"], "-1.00")
+        self.assert_nonlive(result)
+
+    def test_public_volume_only_rising_price_outprioritizes_falling_price(self):
+        # Original PUBLIC radar orders volume-only watches by rolling delta,
+        # which need not imply rising price. The role handoff must preserve
+        # the better existing pre-AI price direction priority and original
+        # order only as tie-break, without mutating original M03 or M05.
+        falling_a = candidate(
+            "eth_idr", price_watch=False, volume_watch=True,
+            after="99", before="100"
+        )
+        falling_b = candidate(
+            "btc_idr", price_watch=False, volume_watch=True,
+            after="98", before="100"
+        )
+        rising = candidate(
+            "sol_idr", price_watch=False, volume_watch=True,
+            after="101", before="100"
+        )
+        result = self.prepare([falling_a, falling_b, rising])
+        self.assertEqual(
+            [c["pair"] for c in result["candidates"]],
+            ["sol_idr", "eth_idr"],
+        )
+        self.assertEqual(
+            [c["radar_original_top5_rank"] for c in result["candidates"]],
+            [3, 1],
+        )
+        self.assertEqual(
+            [c["pre_ai_priority_rank_observational"]
+             for c in result["candidates"]],
+            [3, 4],
+        )
+        self.assertEqual(result["three_role_input_slots_prepared"], 6)
+        self.assertFalse(result["candidates"][0]["public_evidence"][
+            "rolling_delta_is_closed_1m_volume"])
+        self.assert_nonlive(result)
+
+    def test_equal_quality_preserves_original_radar_order(self):
+        a = candidate("eth_idr", price_watch=False,
+                      volume_watch=True, after="99")
+        b = candidate("sol_idr", price_watch=False,
+                      volume_watch=True, after="98")
+        r = self.prepare([a, b])
+        self.assertEqual([c["pair"] for c in r["candidates"]],
+                         ["eth_idr", "sol_idr"])
+        self.assert_nonlive(r)
+
+    def test_invalid_unselected_top5_candidate_blocks_entire_handoff(self):
+        first = candidate("uai_idr")
+        second = candidate("sol_idr")
+        tampered = candidate("eth_idr", price_watch=False,
+                             volume_watch=True, after="99")
+        tampered["pre_ai_review"]["priority_rank_observational"] = 1
+        result = self.prepare([first, second, tampered])
+        self.assertEqual(
+            result["status"], "M04_RADAR_INVALID_CANDIDATE_PACKET")
+        self.assertEqual(result["candidate_count"], 0)
         self.assert_nonlive(result)
 
     def test_one_original_read_only_inspector_call_and_no_provider_call(self):
