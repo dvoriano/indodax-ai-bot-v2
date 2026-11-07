@@ -116,8 +116,11 @@ def _research_candidate(row: dict, *, now_epoch: int) -> dict[str, Any]:
             or type(packet["reference_interval_seconds"]) is not int
             or not 0 < packet["reference_epoch"] < packet["observed_epoch"]
             or not 0 <= now_epoch - packet["observed_epoch"] <= 90
-            or packet["observed_epoch"] - packet["reference_epoch"] !=
-                packet["reference_interval_seconds"]
+            # The original window span is measured from minute buckets,
+            # while these two epoch fields are ACTUAL observation times.
+            # Their within-minute offsets can differ by up to 59s.
+            or abs(packet["observed_epoch"] - packet["reference_epoch"] -
+                   packet["reference_interval_seconds"]) > 60
             or not 60 <= packet["reference_interval_seconds"] <= 300
             or packet["rolling_delta_is_closed_1m_volume"] is not False
             or packet["source_is_actual_closed_candle"] is not False
