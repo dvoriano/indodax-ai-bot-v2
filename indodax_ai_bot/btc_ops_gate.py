@@ -26,6 +26,14 @@ MAX_GO_LIFETIME = 86400
 ROOT = Path.home() / "indodax-ai-bot-v2" / "runtime"
 SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,90}$")
 
+# Original installed ExecCondition executes THIS FILE directly, not -m.
+# Put its OWN canonical repository root on sys.path for the optional
+# self-heal package import. Never import from an external/V1 repository.
+if __name__ == "__main__" and not __package__:
+    project_root = str(Path(__file__).resolve().parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 
 class AdmissionDenied(Exception):
     """A stable safe denial, not an exception string or network log."""
