@@ -4,6 +4,9 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import os
+import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 import stat
 import tempfile
@@ -313,6 +316,36 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         with patch("sys.argv", ["m10_btc_self_heal_owner",
                                  "--owner-enable-standing-transient"]):
             self.assertEqual(m10_btc_self_heal_owner.main(), 2)
+
+    def test_original_execcondition_direct_python_file_imports_optional_guard(self):
+        # The deployed drop-in calls this PATH as a Python file, not -m.
+        # -I excludes cwd/PYTHONPATH and catches package import failures.
+        self.hold.unlink()
+        self.db.unlink()
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("CREATE TABLE ws_stream_discontinuities (pair TEXT)")
+            conn.executemany(
+                "INSERT INTO ws_stream_discontinuities (pair) VALUES (?)",
+                [("btc_idr",)] * 5
+            )
+        script = Path(h.__file__).with_name("btc_ops_gate.py")
+        proc = subprocess.run(
+            [
+                sys.executable, "-I", "-B", str(script), "diagnose",
+                "--go", str(self.go),
+                "--status", str(self.status),
+                "--db", str(self.db),
+                "--hold", str(self.hold),
+                "--state", str(self.state),
+            ],
+            cwd=self.db.parent, capture_output=True,
+            text=True, timeout=10, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[:300])
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["first_blocker"],
+                         "PUBLIC_WS_FAILURE_NEEDS_NEW_OWNER_ACK")
+        self.assertFalse(report["service_started_or_restarted"])
 
     def test_existing_gate_without_optin_still_denies_hold(self):
         self.consent.unlink()
