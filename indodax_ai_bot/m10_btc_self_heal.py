@@ -371,6 +371,16 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
         "first_blocker": "NONE" if eligible else reason,
         "transient_public_source_allowlisted": source_allowlisted,
         "source_first_blocker": source_reason,
+        # Non-sensitive booleans let original VPS distinguish a normal
+        # Ubuntu 0755 ~/.config from a dangerously writable/symlink path,
+        # without printing private source filenames or file contents.
+        "config_private_leaf_permissions_ok": _owned_dir(CONSENT.parent),
+        "config_parent_ancestor_permissions_ok": (
+            _owned_safe_ancestor_dir(CONSENT.parent.parent)
+        ),
+        "runtime_owner_ancestor_permissions_ok": (
+            _owned_safe_ancestor_dir(ROOT)
+        ),
         "eligible_transient_recovery_snapshot": eligible,
         "next_attempt_count_24h": attempts,
         "owner_intentional_hold_preserved": True,
