@@ -59,7 +59,7 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
             "failed_session_number": 4,
             "last_completed_batch_epoch": NOW - 1200,
             "collector_failure_code":
-                "WS_SESSION_REJECTED:PUBLIC_WS_CONNECTION_OR_FRAME_FAILED",
+                "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_CONNECTION_RESET",
             "stream_status": "DISCONNECTED",
             "unrecoverable_gap_rebaseline_count": 5,
             "restart_only_after_clean_batch": False,
@@ -178,6 +178,9 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
             "WS_CONTINUITY_OR_DISCONNECT_REJECTED",
             "PUBLIC_WS_SESSION_UNAVAILABLE",
             "WS_HEARTBEAT_NOT_CONFIRMED",
+            "WS_SESSION_UNAVAILABLE",
+            "WS_SESSION_REJECTED:PUBLIC_WS_CONNECTION_OR_FRAME_FAILED",
+            "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_TLS_ERROR",
         ):
             with self.subTest(reason=reason):
                 self.s["collector_failure_code"] = reason
