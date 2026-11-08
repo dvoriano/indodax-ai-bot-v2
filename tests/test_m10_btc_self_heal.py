@@ -311,6 +311,34 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         self.assertFalse(r["service_started_or_restarted"])
         self.assertFalse(r["order_sent"])
 
+    def test_owner_enable_is_only_local_optin_no_service_start(self):
+        from scripts import m10_btc_self_heal_owner as cli
+        self.consent.unlink()
+        drop = self.db.parent / "known-dropin.conf"
+        templ = self.db.parent / "reviewed-source.conf"
+        drop.write_text("[Service]\nRestart=no\n", encoding="ascii")
+        templ.write_text("[Service]\nRestart=no\n", encoding="ascii")
+        with patch.object(cli, "ROOT", self.db.parent), patch.object(
+            cli, "DROP", drop
+        ), patch.object(cli, "TEMPLATE", templ), patch.object(
+            cli, "_units", return_value={"fixture": "original"}
+        ), patch.object(
+            cli, "assess_original_btc_systemd"
+        ) as systemd:
+            r = cli.enable_owner_optin(
+                now=NOW, consent=self.consent, go=self.go,
+            )
+        systemd.assert_called_once()
+        self.assertEqual(r["status"], "M10_PUBLIC_AUTO_HEAL_OPTED_IN")
+        self.assertTrue(self.consent.exists())
+        self.assertEqual(
+            stat.S_IMODE(self.consent.stat().st_mode), 0o600
+        )
+        self.assertTrue(self.hold.exists())
+        self.assertFalse(self.lease.exists())
+        self.assertFalse(r["service_started_or_restarted"])
+        self.assertFalse(r["order_sent"])
+
     def test_owner_script_requires_flag_no_mutations(self):
         from scripts import m10_btc_self_heal_owner
         with patch("sys.argv", ["m10_btc_self_heal_owner",
