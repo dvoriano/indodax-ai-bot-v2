@@ -121,9 +121,22 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
             raise AdmissionDenied("PUBLIC_WS_PREVIOUS_BATCH_UNSAFE")
     elif sidecar.get("status") == "REJECT":
         digest = policy.get("acknowledged_failure_sha256")
-        if (not isinstance(digest, str)
-                or not re.fullmatch(r"[a-f0-9]{64}", digest)
-                or digest != sha256(sidecar_bytes).hexdigest()):
+        legacy_ack = (
+            isinstance(digest, str)
+            and re.fullmatch(r"[a-f0-9]{64}", digest) is not None
+            and digest == sha256(sidecar_bytes).hexdigest()
+        )
+        # Existing standing owner consent stays unchanged. An optional
+        # short-lived recovery receipt covers only an EXACT rejected batch
+        # under opt-in and a preserved durable self-heal audit.
+        transient_ack = False
+        if not legacy_ack and standing:
+            from .m10_btc_self_heal import validated_standing_failure_lease
+            transient_ack = validated_standing_failure_lease(
+                now=epoch, policy_bytes=policy_bytes,
+                status_bytes=sidecar_bytes,
+            )
+        if not legacy_ack and not transient_ack:
             raise AdmissionDenied("PUBLIC_WS_FAILURE_NEEDS_NEW_OWNER_ACK")
     else:
         raise AdmissionDenied("PUBLIC_WS_PREVIOUS_STATUS_UNKNOWN")
