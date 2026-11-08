@@ -64,18 +64,35 @@ def _sha(data: bytes) -> str:
 
 
 def _owned_dir(path: Path) -> bool:
+    """Private leaf directory (0700 or stricter), never a symlink."""
     try:
         s = path.lstat()
-        return stat.S_ISDIR(s.st_mode) and s.st_uid == os.geteuid() and (
-            stat.S_IMODE(s.st_mode) & 0o077
-        ) == 0
+        return (stat.S_ISDIR(s.st_mode)
+                and s.st_uid == os.geteuid()
+                and (stat.S_IMODE(s.st_mode) & 0o077) == 0)
+    except OSError:
+        return False
+
+
+def _owned_safe_ancestor_dir(path: Path) -> bool:
+    """An owner-controlled non-writable-by-peers ancestor (0700/0755).
+
+    ~/.config on Ubuntu commonly has 0755 permissions. That does not
+    weaken the 0700 protected child or 0600 opt-in. But group/world
+    WRITE on an ancestor could allow component replacement and is denied.
+    """
+    try:
+        s = path.lstat()
+        return (stat.S_ISDIR(s.st_mode)
+                and s.st_uid == os.geteuid()
+                and (stat.S_IMODE(s.st_mode) & 0o022) == 0)
     except OSError:
         return False
 
 
 def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
     if not (_owned_dir(path.parent)
-            and _owned_dir(path.parent.parent)):
+            and _owned_safe_ancestor_dir(path.parent.parent)):
         _deny("AUTO_HEAL_OWNER_CONFIG_DIRECTORY_UNTRUSTED")
     try:
         v, _ = _private_json(path, 2048)
@@ -354,6 +371,16 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
         "first_blocker": "NONE" if eligible else reason,
         "transient_public_source_allowlisted": source_allowlisted,
         "source_first_blocker": source_reason,
+        # Non-sensitive booleans let original VPS distinguish a normal
+        # Ubuntu 0755 ~/.config from a dangerously writable/symlink path,
+        # without printing private source filenames or file contents.
+        "config_private_leaf_permissions_ok": _owned_dir(CONSENT.parent),
+        "config_parent_ancestor_permissions_ok": (
+            _owned_safe_ancestor_dir(CONSENT.parent.parent)
+        ),
+        "runtime_owner_ancestor_permissions_ok": (
+            _owned_safe_ancestor_dir(ROOT)
+        ),
         "eligible_transient_recovery_snapshot": eligible,
         "next_attempt_count_24h": attempts,
         "owner_intentional_hold_preserved": True,

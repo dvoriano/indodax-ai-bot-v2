@@ -1,7 +1,9 @@
 """M10 same-original BTC ExecCondition transient self-heal, offline only."""
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from copy import deepcopy
+import io
 import json
 import os
 import sqlite3
@@ -165,6 +167,35 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
                 self, NOW, self.go.read_bytes(), self.status.read_bytes()
             ))
 
+    def test_standard_owned_0755_dotconfig_parent_is_accepted(self):
+        # Typical Ubuntu ~/.config may be 0755; private V2 child stays 0700.
+        os.chmod(self.consent.parent.parent, 0o755)
+        self.assertEqual(
+            self.ready()["status"],
+            "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+        )
+        self.assertTrue(self.make_attempt())
+        self.assertEqual(
+            stat.S_IMODE(self.consent.stat().st_mode), 0o600,
+        )
+
+    def test_writable_dotconfig_parent_is_rejected_without_hold_change(self):
+        for mode in (0o775, 0o777):
+            with self.subTest(mode=mode):
+                os.chmod(self.consent.parent.parent, mode)
+                self.assert_denied_untouched()
+
+    def test_public_private_child_directory_is_still_denied(self):
+        os.chmod(self.consent.parent, 0o755)
+        self.assert_denied_untouched()
+
+    def test_symlink_dotconfig_parent_is_still_denied(self):
+        original = self.consent.parent.parent
+        renamed = original.with_name("real-config")
+        original.rename(renamed)
+        original.symlink_to(renamed, target_is_directory=True)
+        self.assert_denied_untouched()
+
     def test_missing_optin_leaves_machine_hold(self):
         self.consent.unlink()
         self.assert_denied_untouched()
@@ -314,6 +345,9 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
     def test_owner_enable_is_only_local_optin_no_service_start(self):
         from scripts import m10_btc_self_heal_owner as cli
         self.consent.unlink()
+        # Original runtime and ~/.config can be safe 0755 ancestors.
+        os.chmod(self.db.parent, 0o755)
+        os.chmod(self.consent.parent.parent, 0o755)
         drop = self.db.parent / "known-dropin.conf"
         templ = self.db.parent / "reviewed-source.conf"
         drop.write_text("[Service]\nRestart=no\n", encoding="ascii")
@@ -374,6 +408,79 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         self.assertEqual(report["first_blocker"],
                          "PUBLIC_WS_FAILURE_NEEDS_NEW_OWNER_ACK")
         self.assertFalse(report["service_started_or_restarted"])
+
+    def test_readonly_diagnostic_exposes_safe_permission_flags_only(self):
+        os.chmod(self.consent.parent.parent, 0o755)
+        os.chmod(self.db.parent, 0o755)
+        with patch.object(h, "CONSENT", self.consent), patch.object(
+            h, "ROOT", self.db.parent
+        ), patch.object(
+            h, "_source", side_effect=h.AutoHealDenied(
+                "AUTO_HEAL_FAILURE_NOT_ALLOWLISTED"
+            )
+        ), patch.object(
+            h, "ready_for_transient_recovery",
+            return_value={
+                "status": "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+                "next_attempt_count_24h": 1,
+            },
+        ):
+            r = h.diagnose_self_heal_readonly(now=NOW)
+            self.assertTrue(r["config_private_leaf_permissions_ok"])
+            self.assertTrue(r["config_parent_ancestor_permissions_ok"])
+            self.assertTrue(r["runtime_owner_ancestor_permissions_ok"])
+            os.chmod(self.consent.parent, 0o755)
+            bad_leaf = h.diagnose_self_heal_readonly(now=NOW)
+            self.assertFalse(bad_leaf["config_private_leaf_permissions_ok"])
+            os.chmod(self.consent.parent, 0o700)
+            os.chmod(self.consent.parent.parent, 0o775)
+            bad_parent = h.diagnose_self_heal_readonly(now=NOW)
+            self.assertFalse(
+                bad_parent["config_parent_ancestor_permissions_ok"]
+            )
+            os.chmod(self.consent.parent.parent, 0o755)
+            os.chmod(self.db.parent, 0o777)
+            bad_runtime = h.diagnose_self_heal_readonly(now=NOW)
+            self.assertFalse(
+                bad_runtime["runtime_owner_ancestor_permissions_ok"]
+            )
+            self.assertFalse(r["hold_or_policy_modified"])
+
+    def test_owner_cli_provides_fixed_safe_reason_not_secret(self):
+        from scripts import m10_btc_self_heal_owner as cli
+        for reason in (
+            "AUTO_HEAL_RUNTIME_DIRECTORY_UNTRUSTED",
+            "AUTO_HEAL_ORIGINAL_SYSTEMD_UNVERIFIED",
+            "AUTO_HEAL_OWNER_CONFIG_DIRECTORY_UNTRUSTED",
+        ):
+            with self.subTest(reason=reason):
+                out = io.StringIO()
+                with patch("sys.argv", [
+                    "m10_btc_self_heal_owner",
+                    "--owner-enable-standing-transient",
+                    "--owner-confirm", cli.OWNER_TOKEN,
+                ]), patch.object(
+                    cli, "enable_owner_optin",
+                    side_effect=h.AutoHealDenied(reason),
+                ), redirect_stdout(out):
+                    self.assertEqual(cli.main(), 2)
+                parsed = json.loads(out.getvalue())
+                self.assertEqual(parsed, {"status": "DENIED",
+                                          "reason": reason})
+        out = io.StringIO()
+        with patch("sys.argv", [
+            "m10_btc_self_heal_owner",
+            "--owner-enable-standing-transient",
+            "--owner-confirm", cli.OWNER_TOKEN,
+        ]), patch.object(
+            cli, "enable_owner_optin",
+            side_effect=h.AutoHealDenied("leak /home/secret/key"),
+        ), redirect_stdout(out):
+            self.assertEqual(cli.main(), 2)
+        self.assertEqual(
+            json.loads(out.getvalue())["reason"],
+            "AUTO_HEAL_OWNER_SOURCE_OR_SYSTEMD_NOT_READY",
+        )
 
     def test_existing_gate_without_optin_still_denies_hold(self):
         self.consent.unlink()

@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import time
 
@@ -18,7 +19,8 @@ from indodax_ai_bot.btc_ops_gate import (
 )
 from indodax_ai_bot.m10_btc_self_heal import (
     CONSENT, CONSENT_SCOPE, GO, MAX_PER_24H, MIN_INTERVAL,
-    AutoHealDenied, _consent, _owned_dir, diagnose_self_heal_readonly,
+    AutoHealDenied, _consent, _owned_dir, _owned_safe_ancestor_dir,
+    diagnose_self_heal_readonly,
 )
 from scripts.m10_btc_owner_bounded_recovery import (
     _units, assess_original_btc_systemd,
@@ -33,8 +35,13 @@ def enable_owner_optin(*, now: int | None = None,
     now = int(time.time()) if now is None else now
     if type(now) is not int or now <= 0:
         raise AutoHealDenied("AUTO_HEAL_CLOCK_INVALID")
-    if (not _owned_dir(ROOT) or not _owned_dir(consent.parent)
-            or not _owned_dir(consent.parent.parent)
+    # The runtime and ~/.config are owner-controlled ancestors; on Linux
+    # they may be 0755. They must never be writable by another user.
+    # The final consent directory remains 0700 and file remains 0600.
+    if not _owned_safe_ancestor_dir(ROOT):
+        raise AutoHealDenied("AUTO_HEAL_RUNTIME_DIRECTORY_UNTRUSTED")
+    if (not _owned_dir(consent.parent)
+            or not _owned_safe_ancestor_dir(consent.parent.parent)
             or consent.is_symlink()):
         raise AutoHealDenied("AUTO_HEAL_OWNER_CONFIG_DIRECTORY_UNTRUSTED")
     try:
@@ -123,7 +130,17 @@ def main() -> int:
         return 2
     try:
         report = enable_owner_optin()
-    except (AutoHealDenied, OSError, ValueError):
+    except AutoHealDenied as exc:
+        # Only expose fixed local diagnostic codes, never private paths,
+        # policy contents, HTTP errors or model credentials.
+        code = str(exc)
+        reason = code if re.fullmatch(r"AUTO_HEAL_[A-Z0-9_]{1,90}", code) else (
+            "AUTO_HEAL_OWNER_SOURCE_OR_SYSTEMD_NOT_READY"
+        )
+        print(json.dumps({"status": "DENIED", "reason": reason},
+                         sort_keys=True))
+        return 2
+    except (OSError, ValueError):
         print(json.dumps({"status": "DENIED",
             "reason": "AUTO_HEAL_OWNER_SOURCE_OR_SYSTEMD_NOT_READY"}, sort_keys=True))
         return 2
