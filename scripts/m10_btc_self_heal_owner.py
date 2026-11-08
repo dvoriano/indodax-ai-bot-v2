@@ -1,0 +1,135 @@
+"""Original V2 owner opt-in for bounded BTC PUBLIC transient self-heal.
+
+Staging consent does not remove a HOLD, start service, renew a policy, place
+an exchange order or spawn an extra timer. The original ExecCondition
+performs only source-qualified recovery at a naturally scheduled run.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import stat
+import time
+
+from indodax_ai_bot.btc_ops_gate import (
+    AdmissionDenied, ROOT, SCOPE, STANDING_MODE, _private_json,
+)
+from indodax_ai_bot.m10_btc_self_heal import (
+    CONSENT, CONSENT_SCOPE, GO, MAX_PER_24H, MIN_INTERVAL,
+    AutoHealDenied, _consent, _owned_dir, diagnose_self_heal_readonly,
+)
+from scripts.m10_btc_owner_bounded_recovery import (
+    _units, assess_original_btc_systemd,
+    BtcRecoveryDenied, DROP, TEMPLATE,
+)
+
+OWNER_TOKEN = "OWNER_ENABLE_ORIGINAL_V2_PUBLIC_TRANSIENT_SELF_HEAL"
+
+
+def enable_owner_optin(*, now: int | None = None,
+                       consent: Path = CONSENT, go: Path = GO) -> dict:
+    now = int(time.time()) if now is None else now
+    if type(now) is not int or now <= 0:
+        raise AutoHealDenied("AUTO_HEAL_CLOCK_INVALID")
+    if (not _owned_dir(ROOT) or not _owned_dir(consent.parent)
+            or not _owned_dir(consent.parent.parent)
+            or consent.is_symlink()):
+        raise AutoHealDenied("AUTO_HEAL_OWNER_CONFIG_DIRECTORY_UNTRUSTED")
+    try:
+        approval, _ = _private_json(go, 2048)
+    except AdmissionDenied:
+        raise AutoHealDenied("AUTO_HEAL_STANDING_GO_UNAVAILABLE") from None
+    if (set(approval) != {"scope", "mode", "issued_at_epoch",
+                         "max_gap_count"}
+            or approval.get("scope") != SCOPE
+            or approval.get("mode") != STANDING_MODE
+            or type(approval.get("issued_at_epoch")) is not int
+            or not 0 < approval["issued_at_epoch"] <= now
+            or type(approval.get("max_gap_count")) is not int
+            or not 0 <= approval["max_gap_count"] <= 100000):
+        raise AutoHealDenied("AUTO_HEAL_STANDING_GO_NOT_APPROVED")
+    try:
+        if (DROP.is_symlink() or TEMPLATE.is_symlink()
+                or not DROP.is_file() or not TEMPLATE.is_file()
+                or DROP.read_bytes() != TEMPLATE.read_bytes()):
+            raise AutoHealDenied("AUTO_HEAL_EXISTING_DROPIN_UNVERIFIED")
+        # Confirms a SINGLE original BTC collector, original owner
+        # ExecCondition+ExecStopPost, unchanged capped drop-in, NO restarts,
+        # existing timer active and same M05 service still active.
+        assess_original_btc_systemd(values=_units())
+    except BtcRecoveryDenied:
+        raise AutoHealDenied("AUTO_HEAL_ORIGINAL_SYSTEMD_UNVERIFIED") from None
+    if consent.exists():
+        _consent(now, consent)
+        return {
+            "status": "M10_PUBLIC_AUTO_HEAL_OWNER_OPTIN_ALREADY_PRESENT",
+            "max_attempts_per_24h": MAX_PER_24H,
+            "minimum_interval_seconds": MIN_INTERVAL,
+            "service_started_or_restarted": False,
+            "hold_removed": False,
+            "order_sent": False,
+        }
+    data = {
+        "schema_version": 1,
+        "scope": CONSENT_SCOPE,
+        "owner_authorized": True,
+        "issued_at_epoch": now,
+        "max_attempts_per_24h": MAX_PER_24H,
+        "minimum_interval_seconds": MIN_INTERVAL,
+    }
+    fd = -1
+    try:
+        fd = os.open(consent, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as output:
+            fd = -1
+            json.dump(data, output, sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+    except OSError:
+        raise AutoHealDenied("AUTO_HEAL_OPTIN_PRIVATE_WRITE_DENIED") from None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return {
+        "status": "M10_PUBLIC_AUTO_HEAL_OPTED_IN",
+        "scope": "ONE_EXISTING_ORIGINAL_BTC_PUBLIC_TIMER",
+        "max_attempts_per_24h": MAX_PER_24H,
+        "minimum_interval_seconds": MIN_INTERVAL,
+        "new_timers_or_scanners_installed": False,
+        "service_started_or_restarted": False,
+        "hold_removed": False,
+        "trading_enabled": False,
+        "order_sent": False,
+    }
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Original V2 BTC PUBLIC safe self-heal")
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--diagnose-readonly", action="store_true")
+    group.add_argument("--owner-enable-standing-transient", action="store_true")
+    p.add_argument("--owner-confirm", type=str)
+    args = p.parse_args()
+    if args.diagnose_readonly:
+        print(json.dumps(diagnose_self_heal_readonly(), sort_keys=True))
+        return 0
+    if args.owner_confirm != OWNER_TOKEN:
+        print(json.dumps({"status": "DENIED",
+            "reason": "AUTO_HEAL_EXPLICIT_OWNER_OPTIN_REQUIRED"}, sort_keys=True))
+        return 2
+    try:
+        report = enable_owner_optin()
+    except (AutoHealDenied, OSError, ValueError):
+        print(json.dumps({"status": "DENIED",
+            "reason": "AUTO_HEAL_OWNER_SOURCE_OR_SYSTEMD_NOT_READY"}, sort_keys=True))
+        return 2
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

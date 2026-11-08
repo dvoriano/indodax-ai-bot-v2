@@ -26,6 +26,14 @@ MAX_GO_LIFETIME = 86400
 ROOT = Path.home() / "indodax-ai-bot-v2" / "runtime"
 SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,90}$")
 
+# Original installed ExecCondition executes THIS FILE directly, not -m.
+# Put its OWN canonical repository root on sys.path for the optional
+# self-heal package import. Never import from an external/V1 repository.
+if __name__ == "__main__" and not __package__:
+    project_root = str(Path(__file__).resolve().parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 
 class AdmissionDenied(Exception):
     """A stable safe denial, not an exception string or network log."""
@@ -80,7 +88,7 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
     if hold_path.exists() or hold_path.is_symlink():
         raise AdmissionDenied("PUBLIC_WS_OPERATOR_HOLD")
 
-    policy, _ = _private_json(go_path, 2048)
+    policy, policy_bytes = _private_json(go_path, 2048)
     standing = policy.get("mode") == STANDING_MODE
     if standing:
         # Explicit owner-signed 24/7 PUBLIC-only permission, no TTL.
@@ -121,9 +129,22 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
             raise AdmissionDenied("PUBLIC_WS_PREVIOUS_BATCH_UNSAFE")
     elif sidecar.get("status") == "REJECT":
         digest = policy.get("acknowledged_failure_sha256")
-        if (not isinstance(digest, str)
-                or not re.fullmatch(r"[a-f0-9]{64}", digest)
-                or digest != sha256(sidecar_bytes).hexdigest()):
+        legacy_ack = (
+            isinstance(digest, str)
+            and re.fullmatch(r"[a-f0-9]{64}", digest) is not None
+            and digest == sha256(sidecar_bytes).hexdigest()
+        )
+        # Existing standing owner consent stays unchanged. An optional
+        # short-lived recovery receipt covers only an EXACT rejected batch
+        # under opt-in and a preserved durable self-heal audit.
+        transient_ack = False
+        if not legacy_ack and standing:
+            from indodax_ai_bot.m10_btc_self_heal import validated_standing_failure_lease
+            transient_ack = validated_standing_failure_lease(
+                now=epoch, policy_bytes=policy_bytes,
+                status_bytes=sidecar_bytes,
+            )
+        if not legacy_ack and not transient_ack:
             raise AdmissionDenied("PUBLIC_WS_FAILURE_NEEDS_NEW_OWNER_ACK")
     else:
         raise AdmissionDenied("PUBLIC_WS_PREVIOUS_STATUS_UNKNOWN")
@@ -152,6 +173,17 @@ def admit(*, go: Path, status: Path, database: Path, hold: Path,
           state: Path, epoch: int | None = None) -> str:
     """Fail-closed authorization and durable 600s cooldown for systemd starts."""
     now = int(time.time()) if epoch is None else epoch
+    # The SAME original ExecCondition (no new scanner/worker) may clear
+    # only a known transient machine-failure HOLD on explicit owner opt-in.
+    # Without opt-in, legacy fail-stop behavior is unchanged.
+    if hold.exists() or hold.is_symlink():
+        from indodax_ai_bot.m10_btc_self_heal import (
+            CONSENT, maybe_auto_heal_original_gate,
+        )
+        if CONSENT.exists() or CONSENT.is_symlink():
+            maybe_auto_heal_original_gate(
+                now=now, go=go, status=status, hold=hold, db=database,
+            )
     _policy_checks(go, status, database, hold, now)
     lock = state.with_suffix(state.suffix + ".lock")
     if state.is_symlink() or lock.is_symlink():
