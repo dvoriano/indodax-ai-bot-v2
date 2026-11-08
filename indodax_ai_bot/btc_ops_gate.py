@@ -131,7 +131,7 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
         # under opt-in and a preserved durable self-heal audit.
         transient_ack = False
         if not legacy_ack and standing:
-            from .m10_btc_self_heal import validated_standing_failure_lease
+            from indodax_ai_bot.m10_btc_self_heal import validated_standing_failure_lease
             transient_ack = validated_standing_failure_lease(
                 now=epoch, policy_bytes=policy_bytes,
                 status_bytes=sidecar_bytes,
@@ -169,7 +169,7 @@ def admit(*, go: Path, status: Path, database: Path, hold: Path,
     # only a known transient machine-failure HOLD on explicit owner opt-in.
     # Without opt-in, legacy fail-stop behavior is unchanged.
     if hold.exists() or hold.is_symlink():
-        from .m10_btc_self_heal import (
+        from indodax_ai_bot.m10_btc_self_heal import (
             CONSENT, maybe_auto_heal_original_gate,
         )
         if CONSENT.exists() or CONSENT.is_symlink():
