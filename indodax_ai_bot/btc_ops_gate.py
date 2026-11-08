@@ -165,6 +165,17 @@ def admit(*, go: Path, status: Path, database: Path, hold: Path,
           state: Path, epoch: int | None = None) -> str:
     """Fail-closed authorization and durable 600s cooldown for systemd starts."""
     now = int(time.time()) if epoch is None else epoch
+    # The SAME original ExecCondition (no new scanner/worker) may clear
+    # only a known transient machine-failure HOLD on explicit owner opt-in.
+    # Without opt-in, legacy fail-stop behavior is unchanged.
+    if hold.exists() or hold.is_symlink():
+        from .m10_btc_self_heal import (
+            CONSENT, maybe_auto_heal_original_gate,
+        )
+        if CONSENT.exists() or CONSENT.is_symlink():
+            maybe_auto_heal_original_gate(
+                now=now, go=go, status=status, hold=hold, db=database,
+            )
     _policy_checks(go, status, database, hold, now)
     lock = state.with_suffix(state.suffix + ".lock")
     if state.is_symlink() or lock.is_symlink():
