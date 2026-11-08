@@ -80,7 +80,7 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
     if hold_path.exists() or hold_path.is_symlink():
         raise AdmissionDenied("PUBLIC_WS_OPERATOR_HOLD")
 
-    policy, _ = _private_json(go_path, 2048)
+    policy, policy_bytes = _private_json(go_path, 2048)
     standing = policy.get("mode") == STANDING_MODE
     if standing:
         # Explicit owner-signed 24/7 PUBLIC-only permission, no TTL.
