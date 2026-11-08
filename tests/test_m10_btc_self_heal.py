@@ -165,6 +165,35 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
                 self, NOW, self.go.read_bytes(), self.status.read_bytes()
             ))
 
+    def test_standard_owned_0755_dotconfig_parent_is_accepted(self):
+        # Typical Ubuntu ~/.config may be 0755; private V2 child stays 0700.
+        os.chmod(self.consent.parent.parent, 0o755)
+        self.assertEqual(
+            self.ready()["status"],
+            "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+        )
+        self.assertTrue(self.make_attempt())
+        self.assertEqual(
+            stat.S_IMODE(self.consent.stat().st_mode), 0o600,
+        )
+
+    def test_writable_dotconfig_parent_is_rejected_without_hold_change(self):
+        for mode in (0o775, 0o777):
+            with self.subTest(mode=mode):
+                os.chmod(self.consent.parent.parent, mode)
+                self.assert_denied_untouched()
+
+    def test_public_private_child_directory_is_still_denied(self):
+        os.chmod(self.consent.parent, 0o755)
+        self.assert_denied_untouched()
+
+    def test_symlink_dotconfig_parent_is_still_denied(self):
+        original = self.consent.parent.parent
+        renamed = original.with_name("real-config")
+        original.rename(renamed)
+        original.symlink_to(renamed, target_is_directory=True)
+        self.assert_denied_untouched()
+
     def test_missing_optin_leaves_machine_hold(self):
         self.consent.unlink()
         self.assert_denied_untouched()
@@ -314,6 +343,9 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
     def test_owner_enable_is_only_local_optin_no_service_start(self):
         from scripts import m10_btc_self_heal_owner as cli
         self.consent.unlink()
+        # Original runtime and ~/.config can be safe 0755 ancestors.
+        os.chmod(self.db.parent, 0o755)
+        os.chmod(self.consent.parent.parent, 0o755)
         drop = self.db.parent / "known-dropin.conf"
         templ = self.db.parent / "reviewed-source.conf"
         drop.write_text("[Service]\nRestart=no\n", encoding="ascii")
