@@ -327,6 +327,13 @@ def maybe_auto_heal_original_gate(
 def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
     """Source-based offline diagnostic, never manipulates HOLD/GO/WS/timers."""
     epoch = int(time.time()) if now is None else now
+    source_allowlisted = False
+    source_reason = "NONE"
+    try:
+        _source(epoch, go=GO, status=STATUS, hold=HOLD, db=WSDB)
+        source_allowlisted = True
+    except AutoHealDenied as exc:
+        source_reason = str(exc)
     try:
         r = ready_for_transient_recovery(now=epoch)
         reason = r["status"]
@@ -339,6 +346,8 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
     return {
         "status": "M10_PUBLIC_BTC_SELF_HEAL_READONLY",
         "first_blocker": "NONE" if eligible else reason,
+        "transient_public_source_allowlisted": source_allowlisted,
+        "source_first_blocker": source_reason,
         "eligible_transient_recovery_snapshot": eligible,
         "next_attempt_count_24h": attempts,
         "owner_intentional_hold_preserved": True,
