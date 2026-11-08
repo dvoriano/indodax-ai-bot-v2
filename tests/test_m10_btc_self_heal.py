@@ -138,7 +138,10 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
 
     def test_successful_10_10_still_required_for_m03(self):
         self.assertTrue(self.make_attempt())
-        with patch.object(h, "_journal_gap_count", return_value=5), patch.object(
+        with patch.object(h, "_journal_gap_count", return_value=5), patch(
+            "indodax_ai_bot.btc_ops_gate._journal_gap_count",
+            return_value=5
+        ), patch.object(
             h, "validated_standing_failure_lease",
             side_effect=lambda **kw: h_real_validate(
                 self, kw["now"], kw["policy_bytes"],
