@@ -120,9 +120,11 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or s.get("status") != "REJECT"
             or s.get("pair") != "btc_idr"
             or s.get("requested_sessions") != 10
-            or s.get("attempted_sessions") != 10
+            or type(s.get("attempted_sessions")) is not int
+            or not 1 <= s["attempted_sessions"] <= 10
             or type(s.get("completed_safe_sessions")) is not int
-            or not 0 <= s["completed_safe_sessions"] < 10
+            or not 0 <= s["completed_safe_sessions"] < s["attempted_sessions"]
+            or s.get("failed_session_number") != s["attempted_sessions"]
             or s.get("collector_failure_code") not in _TRANSIENT
             or s.get("stream_status") != "DISCONNECTED"
             or s.get("restart_only_after_clean_batch") is not False
