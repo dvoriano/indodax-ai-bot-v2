@@ -64,18 +64,35 @@ def _sha(data: bytes) -> str:
 
 
 def _owned_dir(path: Path) -> bool:
+    """Private leaf directory (0700 or stricter), never a symlink."""
     try:
         s = path.lstat()
-        return stat.S_ISDIR(s.st_mode) and s.st_uid == os.geteuid() and (
-            stat.S_IMODE(s.st_mode) & 0o077
-        ) == 0
+        return (stat.S_ISDIR(s.st_mode)
+                and s.st_uid == os.geteuid()
+                and (stat.S_IMODE(s.st_mode) & 0o077) == 0)
+    except OSError:
+        return False
+
+
+def _owned_safe_ancestor_dir(path: Path) -> bool:
+    """An owner-controlled non-writable-by-peers ancestor (0700/0755).
+
+    ~/.config on Ubuntu commonly has 0755 permissions. That does not
+    weaken the 0700 protected child or 0600 opt-in. But group/world
+    WRITE on an ancestor could allow component replacement and is denied.
+    """
+    try:
+        s = path.lstat()
+        return (stat.S_ISDIR(s.st_mode)
+                and s.st_uid == os.geteuid()
+                and (stat.S_IMODE(s.st_mode) & 0o022) == 0)
     except OSError:
         return False
 
 
 def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
     if not (_owned_dir(path.parent)
-            and _owned_dir(path.parent.parent)):
+            and _owned_safe_ancestor_dir(path.parent.parent)):
         _deny("AUTO_HEAL_OWNER_CONFIG_DIRECTORY_UNTRUSTED")
     try:
         v, _ = _private_json(path, 2048)
