@@ -36,6 +36,8 @@ STATE = ROOT / "btc_public_self_heal.state.json"
 LEASE = ROOT / "btc_public_self_heal.lease.json"
 MAX_PER_24H = 2
 MIN_INTERVAL = 1800
+# Historical 24-hour REJECT freshness is not a PUBLIC reconnect admission TTL.
+# The 24-hour window is still enforced on recovery ATTEMPTS, never on market evidence.
 MAX_REJECT_AGE = 86400
 LEASE_LIFETIME = 3600
 # Actual 2026 original trade_stream._safe_ws_receive_failure classes:
@@ -47,6 +49,19 @@ _TRANSIENT = frozenset((
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_CONNECTION_ABORTED",
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_BROKEN_PIPE",
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EOF",
+    # PUBLIC-only connect / auth transport failures (not authorization errors).
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CLOSED_OR_LOST",
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CONNECTION_RESET",
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CONNECTION_ABORTED",
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CONNECTION_REFUSED",
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_BROKEN_PIPE",
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_TIMEOUT",
+    "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_HTTP_UNAVAILABLE",
+    "WS_SESSION_REJECTED:PUBLIC_WS_AUTH_RECEIVE_CLOSED_OR_LOST",
+    "WS_SESSION_REJECTED:PUBLIC_WS_AUTH_RECEIVE_CONNECTION_RESET",
+    "WS_SESSION_REJECTED:PUBLIC_WS_AUTH_RECEIVE_CONNECTION_ABORTED",
+    "WS_SESSION_REJECTED:PUBLIC_WS_AUTH_RECEIVE_BROKEN_PIPE",
+    "WS_SESSION_REJECTED:PUBLIC_WS_AUTH_RECEIVE_TIMEOUT",
 ))
 _HEX = re.compile(r"[a-f0-9]{64}\Z")
 
@@ -117,7 +132,7 @@ def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
 
 
 def _source(now: int, *, go: Path, status: Path, hold: Path,
-            db: Path) -> dict[str, Any]:
+            db: Path, max_reject_age: int | None = MAX_REJECT_AGE) -> dict[str, Any]:
     try:
         h, hbytes = _private_json(hold, 2048)
         g, gbytes = _private_json(go, 2048)
@@ -139,7 +154,9 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or not 0 <= g["max_gap_count"] <= 100000):
         _deny("AUTO_HEAL_STANDING_PUBLIC_GO_UNVERIFIED")
     if (type(s.get("last_completed_batch_epoch")) is not int
-            or not 0 <= now - s["last_completed_batch_epoch"] <= MAX_REJECT_AGE
+            or not (g["issued_at_epoch"] <= s["last_completed_batch_epoch"] <= now
+                    and (max_reject_age is None or
+                         now - s["last_completed_batch_epoch"] <= max_reject_age))
             or s.get("status") != "REJECT"
             or s.get("pair") != "btc_idr"
             or s.get("requested_sessions") != 10
@@ -215,7 +232,10 @@ def ready_for_transient_recovery(
     if type(now) is not int or now <= 0:
         _deny("AUTO_HEAL_CLOCK_INVALID")
     _consent(now, consent)
-    src = _source(now, go=go, status=status, hold=hold, db=db)
+    # Aged REJECT is never promoted to current market data. It is only
+    # historic evidence for one bounded PUBLIC network reconnection attempt.
+    src = _source(now, go=go, status=status, hold=hold, db=db,
+                  max_reject_age=None)
     history = _state(state)
     _existing_lease(lease)
     recent = [a for a in history if now - 86400 < a["epoch"] <= now]
@@ -353,7 +373,8 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
     source_allowlisted = False
     source_reason = "NONE"
     try:
-        _source(epoch, go=GO, status=STATUS, hold=HOLD, db=WSDB)
+        _source(epoch, go=GO, status=STATUS, hold=HOLD, db=WSDB,
+                max_reject_age=None)
         source_allowlisted = True
     except AutoHealDenied as exc:
         source_reason = str(exc)
@@ -370,6 +391,7 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
         "status": "M10_PUBLIC_BTC_SELF_HEAL_READONLY",
         "first_blocker": "NONE" if eligible else reason,
         "transient_public_source_allowlisted": source_allowlisted,
+        "aged_rejected_batch_is_not_market_data": True,
         "source_first_blocker": source_reason,
         # Non-sensitive booleans let original VPS distinguish a normal
         # Ubuntu 0755 ~/.config from a dangerously writable/symlink path,

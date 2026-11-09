@@ -257,10 +257,51 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         self.go.unlink()
         self.assert_denied_untouched()
 
-    def test_source_too_old_is_manual_owner_review(self):
+    def test_aged_machine_reject_does_not_block_fresh_public_reconnect(self):
+        # A 42-hour old rejected transport snapshot may open ONE NEW probe.
+        # The aged snapshot remains REJECT and is never promoted to G1/AI.
+        self.g["issued_at_epoch"] = NOW - 48 * 3600
+        self.put(self.go, self.g)
+        self.s["last_completed_batch_epoch"] = NOW - 42 * 3600
+        self.put(self.status, self.s)
+        self.assertEqual(
+            self.ready()["status"],
+            "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+        )
+        self.assertTrue(self.make_attempt())
+        self.assertEqual(json.loads(self.status.read_text())["status"], "REJECT")
+        self.assertEqual(json.loads(self.status.read_text())[
+            "completed_safe_sessions"], 3)
+        self.assertTrue(h.validated_standing_failure_lease(
+            now=NOW, policy_bytes=self.go.read_bytes(),
+            status_bytes=self.status.read_bytes(),
+            lease=self.lease, state=self.state, consent=self.consent,
+        ))
+
+    def test_reject_predating_standing_go_is_not_reused(self):
         self.s["last_completed_batch_epoch"] = NOW - 90000
         self.put(self.status, self.s)
         self.assert_denied_untouched()
+
+    def test_long_maintenance_keeps_daily_cap_and_manual_hold_lock(self):
+        self.g["issued_at_epoch"] = NOW - 5 * 86400
+        self.put(self.go, self.g)
+        self.s["last_completed_batch_epoch"] = NOW - 4 * 86400
+        self.put(self.status, self.s)
+        self.assertTrue(self.make_attempt())
+        self.s["last_completed_batch_epoch"] += 1
+        self.put(self.status, self.s)
+        self.put(self.hold, self.hold_val)
+        self.assertTrue(self.make_attempt(NOW + 1801))
+        self.s["last_completed_batch_epoch"] += 1
+        self.put(self.status, self.s)
+        self.put(self.hold, self.hold_val)
+        self.assertFalse(self.make_attempt(NOW + 3602))
+        self.put(self.hold, {
+            "reason": "OPERATOR_MANUAL_HOLD",
+            "scope": "BTC_PUBLIC_MONITOR_ONLY",
+        })
+        self.assertFalse(self.make_attempt(NOW + 90000))
 
     def test_sqlite_gap_mismatch_denied_before_release(self):
         with patch.object(h, "_journal_gap_count", return_value=6):
@@ -488,6 +529,62 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
             with self.assertRaises(AdmissionDenied) as result:
                 _policy_checks(self.go, self.status, self.db, self.hold, NOW)
         self.assertEqual(str(result.exception), "PUBLIC_WS_OPERATOR_HOLD")
+
+
+
+class M10TypedPublicOutageClassificationTests(unittest.TestCase):
+    def test_maintenance_502_503_504_only_is_recoverable_public_handshake(self):
+        from indodax_ai_bot.trade_stream import _safe_ws_transport_failure
+        class BadStatus(Exception):
+            def __init__(self, status_code):
+                self.status_code = status_code
+        class Closed(Exception):
+            pass
+        from types import SimpleNamespace
+        ws = SimpleNamespace(
+            WebSocketBadStatusException=BadStatus,
+            WebSocketConnectionClosedException=Closed,
+        )
+        for code in (502, 503, 504):
+            self.assertEqual(
+                _safe_ws_transport_failure(BadStatus(code), ws, "CONNECT"),
+                "PUBLIC_WS_CONNECT_HTTP_UNAVAILABLE",
+            )
+        for code in (401, 403, 429, 500, 418):
+            self.assertEqual(
+                _safe_ws_transport_failure(BadStatus(code), ws, "CONNECT"),
+                "PUBLIC_WS_CONNECT_FAILED",
+            )
+        self.assertEqual(
+            _safe_ws_transport_failure(TimeoutError(), ws, "CONNECT"),
+            "PUBLIC_WS_CONNECT_TIMEOUT",
+        )
+        self.assertEqual(
+            _safe_ws_transport_failure(ConnectionResetError(), ws, "CONNECT"),
+            "PUBLIC_WS_CONNECT_CONNECTION_RESET",
+        )
+        self.assertEqual(
+            _safe_ws_transport_failure(Closed(), ws, "AUTH_RECEIVE"),
+            "PUBLIC_WS_AUTH_RECEIVE_CLOSED_OR_LOST",
+        )
+        self.assertEqual(
+            _safe_ws_transport_failure(ValueError("unknown"), ws, "CONNECT"),
+            "PUBLIC_WS_CONNECT_FAILED",
+        )
+
+    def test_tls_failure_never_enters_public_reconnect_allowlist(self):
+        import ssl
+        from types import SimpleNamespace
+        from indodax_ai_bot.trade_stream import _safe_ws_transport_failure
+        reason = _safe_ws_transport_failure(
+            ssl.SSLError("bad"), SimpleNamespace(), "CONNECT"
+        )
+        self.assertEqual(reason, "PUBLIC_WS_CONNECT_TLS_ERROR")
+        self.assertNotIn("WS_SESSION_REJECTED:" + reason, h._TRANSIENT)
+        self.assertIn(
+            "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_HTTP_UNAVAILABLE",
+            h._TRANSIENT,
+        )
 
 
 def h_real_validate(testcase, now, policy_bytes, status_bytes):
