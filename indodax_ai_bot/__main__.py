@@ -37,6 +37,7 @@ from .telegram_dedicated_inbound import (
     LEGACY_CAIPITI_BOT_ID, dedicated_owner_poll_once,
 )
 from .public_ws_health import public_ws_health
+from .public_ws_continuous import supervised_public_ws_continuous
 from .m11_04_release_risk_offline import review_m11_release_risk_offline
 from .public_ws_unit_status import inspect_public_ws_systemd_unit
 from .sumopod_provider import SumopodChatAdapter, SumopodProviderError, inspect_provider_configuration_offline
@@ -257,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Bounded multi-session PUBLIC WS collection; durable SQLite, never trades")
     group.add_argument("--public-ws-supervised-once", action="store_true",
                        help="One public WS service batch with file lock and fail-stop; NO automatic deployment")
+    group.add_argument("--public-ws-supervised-continuous", action="store_true",
+                       help="One original BTC PUBLIC socket across rolling 4x30s reports; no G1/AI/order")
     group.add_argument("--public-ws-health", action="store_true",
                        help="READ-ONLY last-batch public WS SQLite/status diagnostic; no journal writes")
     group.add_argument("--public-ws-unit-status", action="store_true",
@@ -348,6 +351,27 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+
+        if args.public_ws_supervised_continuous:
+            # A single owner-controlled, PUBLIC-only systemd service.
+            # Dispatch BEFORE any DecisionJournal, scanner, AI or account API.
+            settings.require_m01_safety()
+            if (args.pair != "btc_idr" or args.collector_sessions != 4
+                    or args.stream_seconds != 30
+                    or args.collector_pause_seconds != 0
+                    or not args.public_ws_reconnect_until_recovered
+                    or not args.supervisor_status_file):
+                raise ConfigurationError("M04W_FOUR_30S_CONTINUOUS_BOUNDS_REQUIRED")
+            report = supervised_public_ws_continuous(
+                args.db, pair=args.pair, sessions=args.collector_sessions,
+                seconds=args.stream_seconds,
+                pause_seconds=args.collector_pause_seconds,
+                status_file=args.supervisor_status_file,
+            )
+            print(json.dumps({"public_ws_continuous": report,
+                              "execution_allowed": False,
+                              "live_trading_authorized": False}, sort_keys=True))
+            return 0
 
         if args.m10_07_mainpath_readiness_once:
             # M10-07 diagnostic at the ORIGINAL V2 CLI boundary, before
