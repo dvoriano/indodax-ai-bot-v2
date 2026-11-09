@@ -128,17 +128,18 @@ class M04RReceiveFailureClassTests(unittest.TestCase):
         self.check_code("", "PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
         self.check_code(None, "PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
 
-    def test_subtype_survives_same_supervisor_and_failstops_without_retry(self):
+    def test_subtype_survives_same_supervisor_and_failstops_after_one_immediate_retry(self):
         with TemporaryDirectory() as td:
             root=Path(td)
             db=root/"public.sqlite3"
             sidecar=root/"batch.json"
-            sock=FakeSocket([AUTH,SUBSCRIBE,ClosedException("private-no-logging")])
-            called=[]
+            sockets=[]
             def connect(*_args,**_kwargs):
-                called.append(1)
+                sock=FakeSocket([AUTH,SUBSCRIBE,
+                                 ClosedException("private-no-logging")])
+                sockets.append(sock)
                 return sock
-            fake=module_for(sock)
+            fake=module_for(None)
             fake.create_connection=connect
             def collector(journal, **kwargs):
                 return collect_official_public_ws(
@@ -154,7 +155,8 @@ class M04RReceiveFailureClassTests(unittest.TestCase):
                     db,sessions=2,seconds=3,pause_seconds=0,
                     collector=collector,status_file=sidecar,
                 )
-            self.assertEqual(len(called),1)
+            self.assertEqual(len(sockets),2)
+            self.assertTrue(all(sock.closed for sock in sockets))
             self.assertEqual(result["status"],"REJECT")
             self.assertEqual(result["attempted_sessions"],1)
             self.assertEqual(result["completed_safe_sessions"],0)
