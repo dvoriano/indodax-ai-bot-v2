@@ -326,6 +326,119 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         })
         self.assertFalse(self.make_attempt(NOW + 90000))
 
+    def test_continuous_owner_consent_has_no_daily_attempt_count_limit(self):
+        consent = {
+            "schema_version": h.CONTINUOUS_TRANSIENT_SCHEMA,
+            "scope": h.CONSENT_SCOPE,
+            "owner_authorized": True,
+            "issued_at_epoch": NOW - 60,
+            "reconnect_mode": h.CONTINUOUS_TRANSIENT_MODE,
+            "minimum_interval_seconds": h.CONTINUOUS_TRANSIENT_MIN_INTERVAL,
+        }
+        self.put(self.consent, consent)
+        self.assertEqual(h._consent(NOW, self.consent), consent)
+        prior = [
+            {"epoch": NOW - 7200 + i * 601,
+             "status_sha256": f"{i+1:064x}"}
+            for i in range(11)
+        ]
+        self.put(self.state, {
+            "schema_version": 1, "scope": h.CONSENT_SCOPE,
+            "attempts": prior,
+        })
+        # More than legacy 2/day is deliberately permitted; 600s still applies.
+        self.assertIsNone(self.ready()["retry_count_cap"])
+        self.assertTrue(self.make_attempt())
+        self.assertFalse(self.hold.exists())
+        self.assertEqual(len(json.loads(
+            self.state.read_text())["attempts"]), 12)
+        self.put(self.hold, self.hold_val)
+        self.assertFalse(self.make_attempt(NOW + 601))  # Same batch hash.
+
+    def test_continuous_mode_recovers_exact_empty_close_but_not_unknown(self):
+        consent = {
+            "schema_version": h.CONTINUOUS_TRANSIENT_SCHEMA,
+            "scope": h.CONSENT_SCOPE,
+            "owner_authorized": True,
+            "issued_at_epoch": NOW - 60,
+            "reconnect_mode": h.CONTINUOUS_TRANSIENT_MODE,
+            "minimum_interval_seconds": 600,
+        }
+        self.put(self.consent, consent)
+        self.s["collector_failure_code"] = (
+            "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED"
+        )
+        self.put(self.status, self.s)
+        self.assertTrue(self.make_attempt())
+        self.assertEqual(json.loads(self.status.read_text())["status"], "REJECT")
+        self.assertFalse(json.loads(self.status.read_text())["execution_allowed"])
+        self.put(self.hold, self.hold_val)
+        self.s["collector_failure_code"] = (
+            "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_TLS_ERROR"
+        )
+        self.put(self.status, self.s)
+        hold_before = self.hold.read_bytes()
+        lease_before = self.lease.read_bytes()
+        self.assertFalse(self.make_attempt(NOW + 601))
+        self.assertEqual(self.hold.read_bytes(), hold_before)
+        self.assertEqual(self.lease.read_bytes(), lease_before)
+        self.put(self.hold, {"reason": "OPERATOR_MANUAL_HOLD",
+                             "scope": "BTC_PUBLIC_MONITOR_ONLY"})
+        self.assertFalse(self.make_attempt(NOW + 1202))
+        self.assertEqual(self.lease.read_bytes(), lease_before)
+
+    def test_continuous_consent_must_be_exact_and_legacy_is_unchanged(self):
+        for invalid in (
+            {**self.consent_val, "schema_version": 2},
+            {**self.consent_val, "schema_version": 2,
+             "reconnect_mode": h.CONTINUOUS_TRANSIENT_MODE},
+            {"schema_version": 2, "scope": h.CONSENT_SCOPE,
+             "owner_authorized": True, "issued_at_epoch": NOW - 1,
+             "reconnect_mode": h.CONTINUOUS_TRANSIENT_MODE,
+             "minimum_interval_seconds": 0},
+        ):
+            with self.subTest(invalid=invalid):
+                self.put(self.consent, invalid)
+                self.assert_denied_untouched()
+        self.put(self.consent, self.consent_val)
+        self.assertEqual(self.ready()["retry_count_cap"], 2)
+
+    def test_owner_continuous_upgrade_backs_up_private_consent_no_restart(self):
+        from scripts import m10_btc_self_heal_owner as cli
+        os.chmod(self.db.parent, 0o755)
+        os.chmod(self.consent.parent.parent, 0o755)
+        drop = self.db.parent / "reviewed-dropin.conf"
+        template = self.db.parent / "reviewed-template.conf"
+        drop.write_text("[Service]\\nRestart=no\\n", encoding="ascii")
+        template.write_text("[Service]\\nRestart=no\\n", encoding="ascii")
+        previous = self.consent.read_bytes()
+        with patch.object(cli, "ROOT", self.db.parent), patch.object(
+            cli, "DROP", drop
+        ), patch.object(cli, "TEMPLATE", template), patch.object(
+            cli, "_units", return_value={
+                "execstart": "--public-ws-reconnect-until-recovered",
+            }
+        ), patch.object(
+            cli, "assess_original_btc_systemd"
+        ) as original:
+            result = cli.enable_owner_optin(
+                now=NOW, consent=self.consent, go=self.go,
+                continuous_reconnect=True,
+            )
+        original.assert_called_once()
+        self.assertEqual(result["status"],
+                         "M10_CONTINUOUS_TRANSIENT_CONSENT_UPGRADED")
+        self.assertIsNone(result["retry_attempt_count_cap"])
+        self.assertTrue(self.hold.exists())
+        self.assertEqual(h._consent(NOW, self.consent)["schema_version"], 2)
+        archived = list(self.consent.parent.glob(
+            "m10-btc-self-heal.json.legacy.*.bak"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].read_bytes(), previous)
+        self.assertEqual(stat.S_IMODE(archived[0].stat().st_mode), 0o600)
+        self.assertFalse(result["service_started_or_restarted"])
+        self.assertFalse(result["order_sent"])
+
     def test_sqlite_gap_mismatch_denied_before_release(self):
         with patch.object(h, "_journal_gap_count", return_value=6):
             self.assertFalse(h.maybe_auto_heal_original_gate(**self.args()))

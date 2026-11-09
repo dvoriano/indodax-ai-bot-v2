@@ -58,7 +58,7 @@ def supervised_public_ws_batch(
     database: str | Path, *, pair: str = "btc_idr",
     sessions: int = 10, seconds: int = 30, pause_seconds: int = 1,
     status_file: str | Path | None = None,
-    collector=None, now=None,
+    collector=None, now=None, reconnect_until_recovered: bool = False,
 ) -> dict[str, Any]:
     """One operator-controlled batch, not infinite looping.
 
@@ -70,7 +70,8 @@ def supervised_public_ws_batch(
     # Validate bounds before acquiring lock or creating any SQLite file.
     if (type(sessions) is not int or not 2 <= sessions <= 10
             or type(seconds) is not int or not 3 <= seconds <= 30
-            or type(pause_seconds) is not int or not 0 <= pause_seconds <= 10):
+            or type(pause_seconds) is not int or not 0 <= pause_seconds <= 10
+            or type(reconnect_until_recovered) is not bool):
         raise PublicWSSupervisorError("INVALID_PUBLIC_WS_SUPERVISOR_BOUNDS")
     if pair != "btc_idr":
         raise PublicWSSupervisorError("M04J_BTC_ONLY_UNTIL_STREAM_SCOPES_QUALIFIED")
@@ -82,8 +83,13 @@ def supervised_public_ws_batch(
     with exclusive_collector_lock(database):
         journal = PublicTradeStreamJournal(database)
         try:
-            data = run(journal, pair=pair, sessions=sessions,
-                       session_seconds=seconds, pause_seconds=pause_seconds)
+            collector_kwargs = {
+                "pair": pair, "sessions": sessions,
+                "session_seconds": seconds, "pause_seconds": pause_seconds,
+            }
+            if reconnect_until_recovered:
+                collector_kwargs["reconnect_until_recovered"] = True
+            data = run(journal, **collector_kwargs)
         except StreamEvidenceError as exc:
             data = {
                 "status": "REJECT",
@@ -126,6 +132,12 @@ def supervised_public_ws_batch(
         )
         if type(immediate_reconnects) is not int or immediate_reconnects not in (0, 1):
             immediate_reconnects = None
+        consecutive_reconnects = (
+            data.get("persistent_transient_reconnect_attempts")
+            if isinstance(data, dict) else None
+        )
+        if type(consecutive_reconnects) is not int or consecutive_reconnects < 0:
+            consecutive_reconnects = None
         result: dict[str, Any] = {
             "stage": "M04J_PUBLIC_WS_SUPERVISION_SLICE",
             "status": "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED" if safe else "REJECT",
@@ -148,6 +160,8 @@ def supervised_public_ws_batch(
                 if isinstance(data, dict) else 0
             ),
             "immediate_transient_reconnect_attempts": immediate_reconnects,
+            "persistent_transient_reconnect_attempts": consecutive_reconnects,
+            "reconnect_until_recovered": reconnect_until_recovered,
             "full_stream_continuity_proven": False,
             "g1_receipt_issuance_allowed": False,
             "g2_provider_call_allowed": False,

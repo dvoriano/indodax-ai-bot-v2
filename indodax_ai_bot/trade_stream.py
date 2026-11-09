@@ -935,19 +935,23 @@ _IMMEDIATE_TRANSIENT_WS_RECONNECT = frozenset({
 def collect_official_public_ws(
     journal: PublicTradeStreamJournal, *, pair: str = "btc_idr",
     sessions: int = 2, session_seconds: int = 30, pause_seconds: int = 1,
-    probe=None, sleep=None,
+    probe=None, sleep=None, reconnect_until_recovered: bool = False,
 ) -> dict[str, Any]:
     """M04-I: bounded PUBLIC trade collection using existing verified WS probe.
 
-    This is a finite operator-driven acquisition slice, NOT a daemon, no
-    unbounded reconnect, no trusted trade-tape issuer, no buy permission.
+    Default research acquisition stays finite and fail-stop. The explicit
+    ORIGINAL supervised-service option reconnects indefinitely on ONLY typed
+    transient transport losses, without an attempt-count cap. First retry
+    starts immediately; subsequent failures use bounded exponential backoff.
+    This never relaxes source continuity, G1, AI, or execution authority.
     Identical SQLite journal is reused across sessions, so server offset
     recovery can cover short intentional reconnect gaps. No other scanner.
     """
     channel_for_pair(pair)
     if (type(sessions) is not int or not 2 <= sessions <= 10
             or type(session_seconds) is not int or not 3 <= session_seconds <= 30
-            or type(pause_seconds) is not int or not 0 <= pause_seconds <= 10):
+            or type(pause_seconds) is not int or not 0 <= pause_seconds <= 10
+            or type(reconnect_until_recovered) is not bool):
         raise StreamEvidenceError("INVALID_PUBLIC_WS_COLLECTOR_BOUNDS")
     import time
     session_probe = probe if probe is not None else probe_official_public_ws
@@ -958,6 +962,7 @@ def collect_official_public_ws(
     safe_count = 0
     attempts_after_unrecoverable_gap = 0
     immediate_transient_reconnect_attempts = 0
+    persistent_transient_reconnect_attempts = 0
     attempted = 0
     halted_reason: str | None = None
     for index in range(sessions):
@@ -965,7 +970,35 @@ def collect_official_public_ws(
             wait(pause_seconds)
         attempted += 1
         try:
-            result = session_probe(journal, pair=pair, seconds=session_seconds)
+            if reconnect_until_recovered:
+                failures = 0
+                while True:
+                    try:
+                        result = session_probe(
+                            journal, pair=pair, seconds=session_seconds,
+                        )
+                        break
+                    except StreamEvidenceError as transient:
+                        # Only an enumerated network/socket loss may
+                        # trigger this loop. A malformed frame, source GAP,
+                        # exchange refusal, HTTP 401/403/429, TLS, protocol
+                        # or unexpected exception propagates to fail-stop.
+                        if str(transient) not in _IMMEDIATE_TRANSIENT_WS_RECONNECT:
+                            raise
+                        persistent_transient_reconnect_attempts += 1
+                        if failures:
+                            # First retry is immediate. During a sustained
+                            # outage apply 1/2/4/8/16/30s pauses, with NO
+                            # total-count limit. Actual network dial time
+                            # is outside this deliberate sleep.
+                            wait(min(30, 2 ** min(failures - 1, 5)))
+                        failures += 1
+                        # Each probe is a new authorized WS socket and fresh
+                        # subscribe/recover against the ORIGINAL journal.
+            else:
+                result = session_probe(
+                    journal, pair=pair, seconds=session_seconds,
+                )
         except StreamEvidenceError as exc:
             # Attempt a NEW public socket immediately, at most ONCE per batch.
             # No timer wait for the first typed transient disconnect; repeated
@@ -1068,6 +1101,8 @@ def collect_official_public_ws(
         "total_recovered_publications_newly_persisted": total_recovered,
         "fresh_retry_after_unrecoverable_gap_count": attempts_after_unrecoverable_gap,
         "immediate_transient_reconnect_attempts": immediate_transient_reconnect_attempts,
+        "persistent_transient_reconnect_attempts": persistent_transient_reconnect_attempts,
+        "reconnect_until_recovered": reconnect_until_recovered,
         "unrecoverable_gap_rebaseline_count": persisted["unrecoverable_gap_rebaseline_count"],
         "full_stream_continuity_proven": False,
         "total_live_publications_newly_persisted": total_live,

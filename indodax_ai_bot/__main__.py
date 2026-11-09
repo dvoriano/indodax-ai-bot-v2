@@ -274,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="PUBLIC WS collector: 2..10 sessions per bounded invocation")
     parser.add_argument("--collector-pause-seconds", type=int, default=1,
                         help="PUBLIC WS collector: 0..10 seconds between sessions")
+    parser.add_argument("--public-ws-reconnect-until-recovered",
+                        action="store_true",
+                        help="Original supervised BTC PUBLIC only: reconnect every typed transport loss, immediate then bounded backoff; never trading")
     parser.add_argument("--supervisor-status-file", default=None,
                         help="Optional atomic status of last PUBLIC WS batch, not certified trade evidence")
     parser.add_argument("--health-max-age-seconds", type=int, default=3600,
@@ -1750,6 +1753,7 @@ def main(argv: list[str] | None = None) -> int:
                     seconds=args.stream_seconds,
                     pause_seconds=args.collector_pause_seconds,
                     status_file=args.supervisor_status_file,
+                    reconnect_until_recovered=args.public_ws_reconnect_until_recovered,
                 )
             elif args.public_ws_collect:
                 outcome = app.run_public_ws_collect_cycle(

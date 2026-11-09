@@ -152,6 +152,107 @@ class M04SImmediateReconnectTests(unittest.TestCase):
             self.assertEqual(result["status"], "REJECT")
             self.assertFalse(result["full_stream_continuity_proven"])
 
+    def test_explicit_resilient_mode_reconnects_after_any_number_of_typed_losses(self):
+        with TemporaryDirectory() as td:
+            journal = PublicTradeStreamJournal(Path(td) / "btc.sqlite3")
+            calls, sleeps = [], []
+            def probe(j, *, pair, seconds):
+                calls.append(1)
+                if len(calls) <= 11:
+                    raise StreamEvidenceError(
+                        "PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
+                return fresh_completed_session(j, pair=pair)
+
+            result = collect_official_public_ws(
+                journal, sessions=2, session_seconds=3, pause_seconds=1,
+                reconnect_until_recovered=True,
+                probe=probe, sleep=sleeps.append,
+            )
+            # 11 consecutive socket losses are recovered without a quota cap.
+            self.assertEqual(len(calls), 13)
+            self.assertEqual(sleeps, [1, 2, 4, 8, 16, 30, 30, 30, 30, 30, 1])
+            self.assertEqual(result["persistent_transient_reconnect_attempts"], 11)
+            self.assertEqual(result["completed_safe_sessions"], 2)
+            self.assertEqual(result["attempted_sessions"], 2)
+            self.assertEqual(result["status"], "PUBLIC_SAMPLE_COLLECTED_UNATTESTED")
+            self.assertFalse(result["full_stream_continuity_proven"])
+            self.assertFalse(result["g1_receipt_issuance_allowed"])
+            self.assertFalse(result["execution_allowed"])
+
+    def test_recovery_streak_resets_after_fresh_verified_session(self):
+        with TemporaryDirectory() as td:
+            journal = PublicTradeStreamJournal(Path(td) / "btc.sqlite3")
+            calls, sleeps = [], []
+            def probe(j, *, pair, seconds):
+                calls.append(1)
+                if len(calls) in (1, 2, 4, 5):
+                    raise StreamEvidenceError(
+                        "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_RESET")
+                return fresh_completed_session(j, pair=pair)
+            result = collect_official_public_ws(
+                journal, sessions=2, session_seconds=3,
+                pause_seconds=0, reconnect_until_recovered=True,
+                probe=probe, sleep=sleeps.append,
+            )
+            self.assertEqual(len(calls), 6)
+            self.assertEqual(sleeps, [1, 0, 1])  # Ordinary zero-pause between completed sessions.
+            self.assertEqual(result["persistent_transient_reconnect_attempts"], 4)
+            self.assertEqual(result["completed_safe_sessions"], 2)
+
+    def test_resilient_mode_still_stops_unauthorized_and_protocol_errors(self):
+        for code in (
+            "PUBLIC_WS_CONNECT_FAILED",
+            "PUBLIC_WS_AUTH_REJECTED",
+            "PUBLIC_WS_STREAM_RECEIVE_TLS_ERROR",
+            "PUBLIC_WS_STREAM_RECEIVE_PROTOCOL_ERROR",
+            "PUBLIC_WS_STREAM_DECODE_FAILED",
+            "WS_RECOVERY_GAP_UNRESOLVED",
+        ):
+            with self.subTest(code=code), TemporaryDirectory() as td:
+                j = PublicTradeStreamJournal(Path(td) / "btc.sqlite3")
+                calls = []
+                def probe(_journal, *, pair, seconds):
+                    calls.append(True)
+                    raise StreamEvidenceError(code)
+                r = collect_official_public_ws(
+                    j, sessions=2, session_seconds=3,
+                    reconnect_until_recovered=True,
+                    probe=probe, sleep=lambda _: self.fail("unexpected retry"),
+                )
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(r["status"], "REJECT")
+                self.assertFalse(r["execution_allowed"])
+
+    def test_supervisor_routes_persistent_reconnect_to_existing_collector(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            called = []
+            def probe(j, *, pair, seconds):
+                called.append(1)
+                if len(called) in (1, 2, 3):
+                    raise StreamEvidenceError("PUBLIC_WS_CONNECT_CONNECTION_RESET")
+                return fresh_completed_session(j, pair=pair)
+            def collector(j, **kw):
+                return collect_official_public_ws(
+                    j, pair=kw["pair"], sessions=kw["sessions"],
+                    session_seconds=kw["session_seconds"],
+                    pause_seconds=kw["pause_seconds"],
+                    reconnect_until_recovered=kw["reconnect_until_recovered"],
+                    probe=probe, sleep=lambda _: None,
+                )
+            result = supervised_public_ws_batch(
+                root / "btc.sqlite3", sessions=2, seconds=3,
+                pause_seconds=0, collector=collector,
+                reconnect_until_recovered=True,
+                status_file=root / "btc.status.json",
+            )
+            self.assertEqual(len(called), 5)
+            self.assertEqual(result["persistent_transient_reconnect_attempts"], 3)
+            self.assertTrue(result["reconnect_until_recovered"])
+            self.assertEqual(result["status"],
+                             "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED")
+            self.assertFalse(result["execution_allowed"])
+
     def test_supervisor_sidecar_records_one_reconnect_without_false_g1(self):
         with TemporaryDirectory() as td:
             root = Path(td)

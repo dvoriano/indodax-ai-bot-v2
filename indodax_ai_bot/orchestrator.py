@@ -3165,12 +3165,15 @@ class DailyScalpingOrchestrator:
         self, trace_id: str, *, db_path: str, pair: str = "btc_idr",
         sessions: int = 10, seconds: int = 30, pause_seconds: int = 1,
         status_file: str | None = None,
+        reconnect_until_recovered: bool = False,
     ) -> CycleResult:
-        """One lock-protected PUBLIC service batch, no paid AI or orders."""
+        """One original PUBLIC service batch; optional transient transport recovery."""
         try:
             report = supervised_public_ws_batch(
                 db_path, pair=pair, sessions=sessions, seconds=seconds,
                 pause_seconds=pause_seconds, status_file=status_file,
+                **({"reconnect_until_recovered": True}
+                   if reconnect_until_recovered else {}),
             )
         except PublicWSSupervisorError:
             report = {
