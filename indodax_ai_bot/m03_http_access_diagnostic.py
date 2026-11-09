@@ -48,12 +48,14 @@ def inspect_local_proxy_snapshot(
                     if manager_output is not None else None)
     unit_keys = (_unit_proxy_names(unit_output.get("Environment", ""))
                  if unit_output is not None else None)
-    pass_keys = (_unit_proxy_names(
-        unit_output.get("PassEnvironment", "").replace(" ", "=")
+    pass_keys = (_proxy_names(
+        unit_output.get("PassEnvironment", "").split()
     ) if unit_output is not None else None)
-    unset_keys = (_unit_proxy_names(
-        unit_output.get("UnsetEnvironment", "").replace(" ", "=")
-    ) if unit_output is not None else None)
+    unset_keys = (sorted(set(_proxy_names(
+        unit_output.get("UnsetEnvironment", "").split()
+    )) | set(_unit_proxy_names(
+        unit_output.get("UnsetEnvironment", "")
+    ))) if unit_output is not None else None)
     fragment = unit_output.get("FragmentPath", "") if unit_output else ""
     actual = home / ".config" / "systemd" / "user" / _UNIT
     exec_text = unit_output.get("ExecStart", "") if unit_output else ""
@@ -114,7 +116,7 @@ def diagnose_original_m03_local() -> dict[str, Any]:
              "EnvironmentFiles", "FragmentPath", "ExecStart", "ActiveState")
     raw = _run_output(
         ["systemctl", "--user", "show", _UNIT, "--no-pager"] +
-        ["-p", p for p in props]
+        [item for p in props for item in ("-p", p)]
     )
     unit: dict[str, str] | None = None
     if raw is not None:
