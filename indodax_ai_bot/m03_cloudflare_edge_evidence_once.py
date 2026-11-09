@@ -1,13 +1,12 @@
 """One bounded original V2 PUBLIC REST HTTP status/Cloudflare evidence probe.
 
-CLI performs at most ONE original-budgeted GET to official /api/server_time.
+CLI invokes the original-budgeted _get exactly once for /api/server_time.
 No authentication, order, retry, redirect bypass, alternate IP/host, response
-body export or proxy/header modification. User must explicitly invoke it.
+body export or proxy/header modification. urllib may follow redirects as in\nthe existing adapter; this program never adds another independent GET.\nUser must explicitly invoke it.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from email.message import Message
 import json
 import os
 import re
