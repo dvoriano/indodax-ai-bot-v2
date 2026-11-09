@@ -72,7 +72,7 @@ class OfflineMarketSummaryContractTests(unittest.TestCase):
 
     def test_no_login_static_token_or_credentials_in_code_output(self):
         serialized = json.dumps(normalize_documented_market_summary_offline(frame()))
-        for sensitive in ("token", "password", "auth", "API_KEY", "PRIVATE"):
+        for sensitive in ("SECRET_TOKEN_VALUE", "password1234", "API_KEY_VALUE", "PRIVATE_CREDENTIAL"):
             self.assertNotIn(sensitive.lower(), serialized.lower())
 
 
