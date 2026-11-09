@@ -196,6 +196,29 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         original.symlink_to(renamed, target_is_directory=True)
         self.assert_denied_untouched()
 
+    def test_original_owned_runtime_0755_can_self_heal(self):
+        # Original Ubuntu runtime directory can be an owner-controlled
+        # non-group-writable 0755 ancestor; sensitive files stay 0600.
+        os.chmod(self.db.parent, 0o755)
+        self.assertEqual(
+            self.ready()["status"],
+            "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+        )
+        self.assertTrue(self.make_attempt())
+        self.assertFalse(self.hold.exists())
+        self.assertEqual(
+            stat.S_IMODE(self.state.stat().st_mode), 0o600
+        )
+        self.assertEqual(
+            stat.S_IMODE(self.lease.stat().st_mode), 0o600
+        )
+
+    def test_group_writable_runtime_never_releases_hold(self):
+        for mode in (0o775, 0o777):
+            with self.subTest(mode=mode):
+                os.chmod(self.db.parent, mode)
+                self.assert_denied_untouched()
+
     def test_missing_optin_leaves_machine_hold(self):
         self.consent.unlink()
         self.assert_denied_untouched()
