@@ -79,8 +79,17 @@ def inspect_public_ws_systemd_unit(
         or sum(1 for name, _ in entries if name == "WorkingDirectory") != 1
         or any(name == "ExecStart" and
                (not value.startswith("%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot ")
-                or "--public-ws-supervised-once" not in value
-                or "--pair btc_idr" not in value)
+                or "--pair btc_idr" not in value
+                or not (
+                    ("--public-ws-supervised-once" in value
+                     and "--public-ws-supervised-continuous" not in value)
+                    or ("--public-ws-supervised-continuous" in value
+                        and "--public-ws-supervised-once" not in value
+                        and "--collector-sessions 4" in value
+                        and "--stream-seconds 30" in value
+                        and "--collector-pause-seconds 0" in value
+                        and "--public-ws-reconnect-until-recovered" in value)
+                ))
                for name, value in entries)
         or sum(1 for name, _ in entries if name == "ExecStart") != 1
         or any(name == "Environment" and
