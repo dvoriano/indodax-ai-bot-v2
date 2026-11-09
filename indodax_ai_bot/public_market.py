@@ -13,6 +13,7 @@ import re
 from time import time
 from typing import Any, Callable
 from urllib.parse import urlencode
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .contracts import MarketSnapshot, SourceReceipt
@@ -182,6 +183,18 @@ class IndodaxPublicMarket:
                 if len(payload) > 2_000_000:
                     raise PublicDataError("PUBLIC_RESPONSE_TOO_LARGE")
             return json.loads(payload)
+        except HTTPError as exc:
+            # Sanitize public transport outcomes for the ORIGINAL M03 caller.
+            # A VPS edge 403 is NOT JSON corruption or a BTC WS 4/4 failure.
+            # Never include body/headers, follow redirects, rotate addresses,
+            # retry denied endpoints or grant market/G1/trading authority.
+            if exc.code == 403:
+                raise PublicDataError("PUBLIC_REST_HTTP_403_FORBIDDEN") from None
+            if exc.code == 429:
+                raise PublicDataError("PUBLIC_REST_HTTP_429_RATE_LIMITED") from None
+            if exc.code in (502, 503, 504):
+                raise PublicDataError("PUBLIC_REST_HTTP_5XX_UNAVAILABLE") from None
+            raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from None
         except (OSError, ValueError) as exc:
             raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from exc
 
