@@ -6,11 +6,12 @@ from email.message import Message
 import json
 import unittest
 from urllib.error import HTTPError
+from unittest.mock import patch
 
 from indodax_ai_bot.m03_cloudflare_edge_evidence_once import (
     _headers_evidence, collect_one_public_rest_edge_evidence
 )
-from indodax_ai_bot.public_market import PublicDataError
+from indodax_ai_bot.public_market import PublicDataError, IndodaxPublicMarket
 
 
 class M03EdgeProofTests(unittest.TestCase):
@@ -62,6 +63,43 @@ class M03EdgeProofTests(unittest.TestCase):
             "https://indodax.com", "Set-Cookie",
         ):
             self.assertNotIn(private, json.dumps(report))
+
+    def test_original_public_adapter_http403_remains_inspectable_without_leaks(self):
+        # This is the exact PR244→existing edge diagnostic join, previously
+        # not exercised: fixed M03 scanner reason AND CF response provenance.
+        from email.message import Message
+        headers = Message()
+        headers.add_header("Server", "cloudflare")
+        headers.add_header("Cf-Ray", "1234abc-SIN")
+        headers.add_header("Content-Type", "text/html")
+        headers.add_header("Set-Cookie", "UNTRUSTED-SECRET")
+        original = HTTPError(
+            "https://indodax.com/api/server_time", 403,
+            "DO_NOT_SHOW_HTTP_REASON", headers, None,
+        )
+        class Adapter:
+            def __init__(self, timeout):
+                self.market = IndodaxPublicMarket(fetch=lambda _path: None)
+                self.public_get_attempt_count = 0
+            def _get(self, path):
+                self.public_get_attempt_count += 1
+                return self.market._http_json(path)
+
+        with patch("indodax_ai_bot.public_market.urlopen",
+                   side_effect=original) as network:
+            report = collect_one_public_rest_edge_evidence(
+                env=self.off, market_factory=Adapter, now_fn=self.fixed_time,
+            )
+        self.assertEqual(network.call_count, 1)
+        self.assertEqual(report["status"], "HTTP_RESPONSE_ERROR")
+        self.assertEqual(report["http_status"], 403)
+        self.assertEqual(report["cf_ray"], "1234abc-SIN")
+        self.assertEqual(report["response_content_type"], "text/html")
+        self.assertEqual(report["public_get_attempts"], 1)
+        self.assertFalse(report["trading_enabled"])
+        for secret in ("UNTRUSTED-SECRET", "DO_NOT_SHOW_HTTP_REASON",
+                       "https://indodax.com"):
+            self.assertNotIn(secret, json.dumps(report))
 
     def test_missing_readonly_gate_never_constructs_client(self):
         def fail_factory(**kwargs):
