@@ -19,6 +19,8 @@ from indodax_ai_bot.btc_ops_gate import (
 )
 from indodax_ai_bot.m10_btc_self_heal import (
     CONSENT, CONSENT_SCOPE, GO, MAX_PER_24H, MIN_INTERVAL,
+    CONTINUOUS_TRANSIENT_SCHEMA, CONTINUOUS_TRANSIENT_MIN_INTERVAL,
+    CONTINUOUS_TRANSIENT_MODE,
     AutoHealDenied, _consent, _owned_dir, _owned_safe_ancestor_dir,
     diagnose_self_heal_readonly,
 )
@@ -28,10 +30,43 @@ from scripts.m10_btc_owner_bounded_recovery import (
 )
 
 OWNER_TOKEN = "OWNER_ENABLE_ORIGINAL_V2_PUBLIC_TRANSIENT_SELF_HEAL"
+CONTINUOUS_TOKEN = "OWNER_ENABLE_ORIGINAL_V2_PUBLIC_CONTINUOUS_TRANSIENT_RECONNECT"
+
+
+def _upgrade_private_consent(*, consent: Path, previous: bytes,
+                             updated: dict, now: int) -> None:
+    """Atomic owner-only consent upgrade with retained private legacy backup."""
+    tag = str(now) + "." + str(os.getpid())
+    backup = consent.with_name(consent.name + ".legacy." + tag + ".bak")
+    stage = consent.with_name(consent.name + ".continuous." + tag + ".tmp")
+    if backup.exists() or stage.exists():
+        raise AutoHealDenied("AUTO_HEAL_OPTIN_BACKUP_CONFLICT")
+    if _private_json(consent, 2048)[1] != previous:
+        raise AutoHealDenied("AUTO_HEAL_OPTIN_CHANGED")
+    payload = (json.dumps(updated, sort_keys=True) + "\n").encode("ascii")
+    try:
+        for path, raw in ((backup, previous), (stage, payload)):
+            fd = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0), 0o600
+            )
+            with os.fdopen(fd, "wb") as output:
+                output.write(raw)
+                output.flush()
+                os.fsync(output.fileno())
+        if _private_json(consent, 2048)[1] != previous:
+            raise AutoHealDenied("AUTO_HEAL_OPTIN_CHANGED")
+        os.replace(stage, consent)
+    except OSError:
+        raise AutoHealDenied("AUTO_HEAL_OPTIN_PRIVATE_WRITE_DENIED") from None
+    finally:
+        stage.unlink(missing_ok=True)
+
 
 
 def enable_owner_optin(*, now: int | None = None,
-                       consent: Path = CONSENT, go: Path = GO) -> dict:
+                       consent: Path = CONSENT, go: Path = GO,
+                       continuous_reconnect: bool = False) -> dict:
     now = int(time.time()) if now is None else now
     if type(now) is not int or now <= 0:
         raise AutoHealDenied("AUTO_HEAL_CLOCK_INVALID")
@@ -65,27 +100,58 @@ def enable_owner_optin(*, now: int | None = None,
         # Confirms a SINGLE original BTC collector, original owner
         # ExecCondition+ExecStopPost, unchanged capped drop-in, NO restarts,
         # existing timer active and same M05 service still active.
-        assess_original_btc_systemd(values=_units())
+        units = _units()
+        assess_original_btc_systemd(values=units)
+        if (continuous_reconnect
+                and "--public-ws-reconnect-until-recovered"
+                not in units.get("execstart", "")):
+            raise AutoHealDenied("AUTO_HEAL_CONTINUOUS_COLLECTOR_NOT_INSTALLED")
     except BtcRecoveryDenied:
         raise AutoHealDenied("AUTO_HEAL_ORIGINAL_SYSTEMD_UNVERIFIED") from None
-    if consent.exists():
-        _consent(now, consent)
-        return {
-            "status": "M10_PUBLIC_AUTO_HEAL_OWNER_OPTIN_ALREADY_PRESENT",
+    data = (
+        {
+            "schema_version": CONTINUOUS_TRANSIENT_SCHEMA,
+            "scope": CONSENT_SCOPE,
+            "owner_authorized": True,
+            "issued_at_epoch": now,
+            "reconnect_mode": CONTINUOUS_TRANSIENT_MODE,
+            "minimum_interval_seconds": CONTINUOUS_TRANSIENT_MIN_INTERVAL,
+        }
+        if continuous_reconnect else
+        {
+            "schema_version": 1,
+            "scope": CONSENT_SCOPE,
+            "owner_authorized": True,
+            "issued_at_epoch": now,
             "max_attempts_per_24h": MAX_PER_24H,
             "minimum_interval_seconds": MIN_INTERVAL,
+        }
+    )
+    if consent.exists():
+        old = _consent(now, consent)
+        if continuous_reconnect and old["schema_version"] == 1:
+            _upgrade_private_consent(
+                consent=consent,
+                previous=_private_json(consent, 2048)[1],
+                updated=data, now=now,
+            )
+            return {
+                "status": "M10_CONTINUOUS_TRANSIENT_CONSENT_UPGRADED",
+                "retry_attempt_count_cap": None,
+                "prior_owner_consent_backed_up": True,
+                "service_started_or_restarted": False,
+                "hold_removed": False,
+                "order_sent": False,
+            }
+        return {
+            "status": "M10_PUBLIC_AUTO_HEAL_OWNER_OPTIN_ALREADY_PRESENT",
+            "retry_attempt_count_cap": (
+                MAX_PER_24H if old["schema_version"] == 1 else None
+            ),
             "service_started_or_restarted": False,
             "hold_removed": False,
             "order_sent": False,
         }
-    data = {
-        "schema_version": 1,
-        "scope": CONSENT_SCOPE,
-        "owner_authorized": True,
-        "issued_at_epoch": now,
-        "max_attempts_per_24h": MAX_PER_24H,
-        "minimum_interval_seconds": MIN_INTERVAL,
-    }
     fd = -1
     try:
         fd = os.open(consent, os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -102,10 +168,16 @@ def enable_owner_optin(*, now: int | None = None,
         if fd >= 0:
             os.close(fd)
     return {
-        "status": "M10_PUBLIC_AUTO_HEAL_OPTED_IN",
+        "status": ("M10_PUBLIC_CONTINUOUS_TRANSIENT_OPTED_IN"
+                   if continuous_reconnect else "M10_PUBLIC_AUTO_HEAL_OPTED_IN"),
         "scope": "ONE_EXISTING_ORIGINAL_BTC_PUBLIC_TIMER",
-        "max_attempts_per_24h": MAX_PER_24H,
-        "minimum_interval_seconds": MIN_INTERVAL,
+        "retry_attempt_count_cap": (
+            None if continuous_reconnect else MAX_PER_24H
+        ),
+        "minimum_interval_seconds": (
+            CONTINUOUS_TRANSIENT_MIN_INTERVAL if continuous_reconnect
+            else MIN_INTERVAL
+        ),
         "new_timers_or_scanners_installed": False,
         "service_started_or_restarted": False,
         "hold_removed": False,
@@ -119,17 +191,22 @@ def main() -> int:
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--diagnose-readonly", action="store_true")
     group.add_argument("--owner-enable-standing-transient", action="store_true")
+    group.add_argument("--owner-enable-continuous-reconnect", action="store_true")
     p.add_argument("--owner-confirm", type=str)
     args = p.parse_args()
     if args.diagnose_readonly:
         print(json.dumps(diagnose_self_heal_readonly(), sort_keys=True))
         return 0
-    if args.owner_confirm != OWNER_TOKEN:
+    needed = (CONTINUOUS_TOKEN if args.owner_enable_continuous_reconnect
+              else OWNER_TOKEN)
+    if args.owner_confirm != needed:
         print(json.dumps({"status": "DENIED",
             "reason": "AUTO_HEAL_EXPLICIT_OWNER_OPTIN_REQUIRED"}, sort_keys=True))
         return 2
     try:
-        report = enable_owner_optin()
+        report = enable_owner_optin(
+            continuous_reconnect=args.owner_enable_continuous_reconnect,
+        )
     except AutoHealDenied as exc:
         # Only expose fixed local diagnostic codes, never private paths,
         # policy contents, HTTP errors or model credentials.
