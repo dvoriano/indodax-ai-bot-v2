@@ -120,6 +120,7 @@ def supervised_public_ws_continuous(
     seconds: int = SECONDS_PER_WINDOW, pause_seconds: int = 0,
     status_file: str | Path,
     probe=None, sleep=None, clock=None, go: Path = _GO,
+    hold: Path = _HOLD,
     _test_stop_after_reports: int | None = None,
 ) -> dict[str, Any]:
     """Original one-writer persistent WS process. Never loops on auth/rate denial.
@@ -147,6 +148,7 @@ def supervised_public_ws_continuous(
         # also deny a direct CLI launch before touching the public network.
         _standing_gap_budget(
             int(now()), journal.status(pair)["unrecoverable_gap_rebaseline_count"], go,
+            hold=hold,
         )
         windows: list[dict[str, Any]] = []
         reconnects = 0
@@ -158,7 +160,9 @@ def supervised_public_ws_continuous(
         def publish(*, status: str, reason: str | None = None) -> dict[str, Any]:
             stamp = int(now())
             state = journal.status(pair)
-            _standing_gap_budget(stamp, state["unrecoverable_gap_rebaseline_count"], go)
+            _standing_gap_budget(
+                stamp, state["unrecoverable_gap_rebaseline_count"], go, hold=hold
+            )
             completed = len(windows)
             attempted = WINDOWS_PER_REPORT if status == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED" else min(
                 WINDOWS_PER_REPORT, completed + 1)
@@ -190,7 +194,7 @@ def supervised_public_ws_continuous(
                 int(now()), sample.get("unrecoverable_gap_rebaseline_count")
                 if type(sample.get("unrecoverable_gap_rebaseline_count")) is int
                 else journal.status(pair)["unrecoverable_gap_rebaseline_count"],
-                go,
+                go, hold=hold,
             )
             windows.append(sample)
             consecutive_failures = 0
