@@ -684,9 +684,14 @@ class PublicTradeStreamJournal:
 
 def probe_official_public_ws(
     journal: PublicTradeStreamJournal, *, pair: str = "btc_idr",
-    seconds: int = 12,
+    seconds: int = 12, windows: int | None = 1, on_window=None,
 ) -> dict[str, Any]:
-    """One bounded public WS session, persisted in the V2-only SQLite DB.
+    """One authenticated socket with optional 30s evaluation windows.
+
+    Default research probe remains one bounded window. Explicit windows=None
+    keeps the SAME authenticated public socket across arbitrarily many
+    evaluations; callback merely reports persisted PUBLIC observations, never
+    certifies trade-tape completeness or authorizes an order.
 
     Only one channel per session; never logs the public token or raw socket
     exception. websocket-client is an optional dependency for THIS probe.
@@ -694,6 +699,11 @@ def probe_official_public_ws(
     """
     if type(seconds) is not int or not 3 <= seconds <= 30:
         raise StreamEvidenceError("INVALID_WS_PROBE_SECONDS")
+    if ((windows is not None and
+         (type(windows) is not int or not 1 <= windows <= 4))
+            or (on_window is not None and not callable(on_window))
+            or (windows is None and on_window is None)):
+        raise StreamEvidenceError("INVALID_WS_PROBE_WINDOWS")
     channel_for_pair(pair)
     try:
         import websocket  # type: ignore[import-not-found]
@@ -803,44 +813,77 @@ def probe_official_public_ws(
                 break
         if not acked:
             raise StreamEvidenceError("PUBLIC_WS_SUBSCRIBE_TIMEOUT")
-        # Documented WS method 7 heartbeat distinguishes a quiet channel
-        # from a connection that cannot reply to control frames.
-        failure_phase = "HEARTBEAT_SEND"
-        ws.send(json.dumps({"method": 7, "id": 3}))
-        until = time.monotonic() + seconds
-        while time.monotonic() < until:
-            failure_phase = "STREAM_RECEIVE"
-            try:
-                raw = ws.recv()
-            except websocket.WebSocketTimeoutException:
-                timeout_reads += 1
-                continue
-            if raw is None or raw == "":
-                # Some websocket-client versions return empty on close.
-                # Never treat this as a valid empty-trade minute.
-                raise StreamEvidenceError("PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
-            if not isinstance(raw, str) or len(raw) > 512_000:
-                raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
-            failure_phase = "STREAM_DECODE"
-            msg = json.loads(raw)
-            if not isinstance(msg, dict):
-                raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SHAPE")
-            if msg.get("id") == 3 and set(msg) == {"id"}:
-                heartbeat_confirmed = True
-            elif (isinstance(msg.get("result"), dict)
-                    and msg["result"].get("channel") == channel_for_pair(pair)):
-                failure_phase = "STREAM_INGEST"
-                journal.ingest(pair, msg)
-                received += 1
-            else:
-                other_frames += 1
-        failure_phase = "STREAM_STATUS"
-        during_probe = journal.status(pair)
-        if during_probe["stream_status"] == "GAP":
-            # A final frame can reveal a gap without another frame arriving
-            # to raise in _advance. Carry it into the same one-time
-            # discontinuous baseline recovery, never mark this probe safe.
-            raise StreamEvidenceError("WS_RECOVERY_GAP_UNRESOLVED")
+        # A rolling 30-second window is a measurement boundary, never a
+        # reconnect boundary. One socket stays open across all evaluations.
+        # A new heartbeat ID per window prevents a late response being
+        # mistaken for proof that a newer window is alive.
+        window_index = 0
+        window_start_publications = publications_after_ack
+        while windows is None or window_index < windows:
+            heartbeat_id = 3 + window_index
+            window_heartbeat = False
+            failure_phase = "HEARTBEAT_SEND"
+            ws.send(json.dumps({"method": 7, "id": heartbeat_id}))
+            until = time.monotonic() + seconds
+            while time.monotonic() < until:
+                failure_phase = "STREAM_RECEIVE"
+                try:
+                    raw = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    timeout_reads += 1
+                    continue
+                if raw is None or raw == "":
+                    raise StreamEvidenceError("PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
+                if not isinstance(raw, str) or len(raw) > 512_000:
+                    raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SIZE")
+                failure_phase = "STREAM_DECODE"
+                msg = json.loads(raw)
+                if not isinstance(msg, dict):
+                    raise StreamEvidenceError("INVALID_PUBLIC_WS_MESSAGE_SHAPE")
+                if msg.get("id") == heartbeat_id and set(msg) == {"id"}:
+                    window_heartbeat = True
+                    heartbeat_confirmed = True
+                elif (isinstance(msg.get("result"), dict)
+                        and msg["result"].get("channel") == channel_for_pair(pair)):
+                    failure_phase = "STREAM_INGEST"
+                    journal.ingest(pair, msg)
+                    received += 1
+                else:
+                    other_frames += 1
+            failure_phase = "STREAM_STATUS"
+            during_probe = journal.status(pair)
+            if during_probe["stream_status"] == "GAP":
+                raise StreamEvidenceError("WS_RECOVERY_GAP_UNRESOLVED")
+            window_live = (
+                during_probe["persisted_publications"] - window_start_publications
+            )
+            if window_live < 0:
+                raise StreamEvidenceError("PUBLIC_WS_LIVE_COUNTER_INVALID")
+            if on_window is not None:
+                # A quiet market is valid only if this exact window's
+                # protocol heartbeat was acknowledged.
+                if not window_heartbeat:
+                    raise StreamEvidenceError("WS_HEARTBEAT_NOT_CONFIRMED")
+                on_window({
+                    "session": window_index + 1,
+                    "subscription_acknowledged": True,
+                    "protocol_heartbeat_confirmed": window_heartbeat,
+                    "stream_status_during_probe": during_probe["stream_status"],
+                    "recovered_publications_newly_persisted": (
+                        recovered_new_publications if window_index == 0 else 0
+                    ),
+                    "live_publications_newly_persisted": window_live,
+                    "last_publication_offset": during_probe["last_publication_offset"],
+                    "persisted_publications": during_probe["persisted_publications"],
+                    "unrecoverable_gap_rebaseline_count": (
+                        during_probe["unrecoverable_gap_rebaseline_count"]
+                    ),
+                    "g1_receipt_issuance_allowed": False,
+                    "g2_provider_call_allowed": False,
+                    "execution_allowed": False,
+                })
+            window_start_publications = during_probe["persisted_publications"]
+            window_index += 1
         live_publications_persisted = (
             during_probe["persisted_publications"] - publications_after_ack
         )
@@ -887,7 +930,7 @@ def probe_official_public_ws(
         # Crucial: no blanket retry, no fabricated trade continuity.
         reason = (
             _safe_ws_receive_failure(exc, websocket)
-            if failure_phase == "STREAM_RECEIVE"
+            if failure_phase in ("STREAM_RECEIVE", "HEARTBEAT_SEND")
             else _safe_ws_transport_failure(exc, websocket, failure_phase)
             if failure_phase in ("CONNECT", "AUTH_RECEIVE")
             else "PUBLIC_WS_" + failure_phase + "_FAILED"
