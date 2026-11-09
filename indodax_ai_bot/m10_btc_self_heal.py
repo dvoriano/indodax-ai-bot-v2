@@ -2,8 +2,9 @@
 
 Explicit local owner opt-in, exact machine-failure HOLD, exact known WS
 transport failure, original standing public GO, source+journal gap agreement,
-durable max-two/rolling-24h attempts and 30m backoff. No new timer, public
-network request, scanner, provider, owner Telegram action or exchange order.
+legacy canary max-two/24h or owner-selected persistent transient reconnect.
+Continuous consent has no attempt-count cap; same failed-batch digest,
+source/gap proof and 600s admission backoff remain. No second worker.
 
 This only re-opens ONE already scheduled original BTC collector batch.
 M03 keeps requiring a NEW clean 10/10 BTC status <=1h. An operator HOLD,
@@ -34,8 +35,11 @@ HOLD = ROOT / "btc_public_ops.hold.json"
 WSDB = ROOT / "public_ws_btc.sqlite3"
 STATE = ROOT / "btc_public_self_heal.state.json"
 LEASE = ROOT / "btc_public_self_heal.lease.json"
-MAX_PER_24H = 2
+MAX_PER_24H = 2  # Legacy owner canary.
 MIN_INTERVAL = 1800
+CONTINUOUS_TRANSIENT_SCHEMA = 2
+CONTINUOUS_TRANSIENT_MIN_INTERVAL = 600
+CONTINUOUS_TRANSIENT_MODE = "ALWAYS_RECONNECT_TYPED_PUBLIC_TRANSPORT"
 # Historical 24-hour REJECT freshness is not a PUBLIC reconnect admission TTL.
 # The 24-hour window is still enforced on recovery ATTEMPTS, never on market evidence.
 MAX_REJECT_AGE = 86400
@@ -49,6 +53,7 @@ _TRANSIENT = frozenset((
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_CONNECTION_ABORTED",
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_BROKEN_PIPE",
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EOF",
+    "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED",
     # PUBLIC-only connect / auth transport failures (not authorization errors).
     "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CLOSED_OR_LOST",
     "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CONNECTION_RESET",
@@ -113,20 +118,37 @@ def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
         v, _ = _private_json(path, 2048)
     except AdmissionDenied:
         _deny("AUTO_HEAL_OWNER_OPT_IN_MISSING_OR_UNTRUSTED")
-    if (set(v) != {
-            "schema_version", "scope", "owner_authorized",
-            "issued_at_epoch", "max_attempts_per_24h",
-            "minimum_interval_seconds",
-        } or type(v["schema_version"]) is not int
-            or v["schema_version"] != 1
-            or v["scope"] != CONSENT_SCOPE
-            or v["owner_authorized"] is not True
-            or type(v["issued_at_epoch"]) is not int
-            or not 0 < v["issued_at_epoch"] <= now
-            or type(v["max_attempts_per_24h"]) is not int
-            or v["max_attempts_per_24h"] != MAX_PER_24H
-            or type(v["minimum_interval_seconds"]) is not int
-            or v["minimum_interval_seconds"] != MIN_INTERVAL):
+    legacy_fields = {
+        "schema_version", "scope", "owner_authorized",
+        "issued_at_epoch", "max_attempts_per_24h",
+        "minimum_interval_seconds",
+    }
+    continuous_fields = {
+        "schema_version", "scope", "owner_authorized",
+        "issued_at_epoch", "reconnect_mode",
+        "minimum_interval_seconds",
+    }
+    if (type(v.get("schema_version")) is not int
+            or v.get("scope") != CONSENT_SCOPE
+            or v.get("owner_authorized") is not True
+            or type(v.get("issued_at_epoch")) is not int
+            or not 0 < v["issued_at_epoch"] <= now):
+        _deny("AUTO_HEAL_OWNER_OPT_IN_INVALID")
+    if v["schema_version"] == 1:
+        if (set(v) != legacy_fields
+                or type(v.get("max_attempts_per_24h")) is not int
+                or v["max_attempts_per_24h"] != MAX_PER_24H
+                or type(v.get("minimum_interval_seconds")) is not int
+                or v["minimum_interval_seconds"] != MIN_INTERVAL):
+            _deny("AUTO_HEAL_OWNER_OPT_IN_INVALID")
+    elif v["schema_version"] == CONTINUOUS_TRANSIENT_SCHEMA:
+        if (set(v) != continuous_fields
+                or v.get("reconnect_mode") != CONTINUOUS_TRANSIENT_MODE
+                or type(v.get("minimum_interval_seconds")) is not int
+                or v["minimum_interval_seconds"] !=
+                CONTINUOUS_TRANSIENT_MIN_INTERVAL):
+            _deny("AUTO_HEAL_OWNER_OPT_IN_INVALID")
+    else:
         _deny("AUTO_HEAL_OWNER_OPT_IN_INVALID")
     return v
 
@@ -231,7 +253,7 @@ def ready_for_transient_recovery(
     """Pure inspection, no disk writes, no private content exposed."""
     if type(now) is not int or now <= 0:
         _deny("AUTO_HEAL_CLOCK_INVALID")
-    _consent(now, consent)
+    approval = _consent(now, consent)
     # Aged REJECT is never promoted to current market data. It is only
     # historic evidence for one bounded PUBLIC network reconnection attempt.
     src = _source(now, go=go, status=status, hold=hold, db=db,
@@ -239,16 +261,24 @@ def ready_for_transient_recovery(
     history = _state(state)
     _existing_lease(lease)
     recent = [a for a in history if now - 86400 < a["epoch"] <= now]
-    if len(recent) >= MAX_PER_24H:
+    if (approval["schema_version"] == 1
+            and len(recent) >= MAX_PER_24H):
         _deny("AUTO_HEAL_DAILY_RETRY_CAP")
     if (history and (history[-1]["epoch"] > now
-                     or now - history[-1]["epoch"] < MIN_INTERVAL)):
+                     or now - history[-1]["epoch"]
+                      < approval["minimum_interval_seconds"])):
         _deny("AUTO_HEAL_RETRY_BACKOFF")
     if any(x["status_sha256"] == src["status_sha256"] for x in history):
         _deny("AUTO_HEAL_SAME_FAILED_BATCH_ALREADY_RETRIED")
     return {
         **src, "history": history,
         "status": "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+        "owner_continuous_transient_recovery": (
+            approval["schema_version"] == CONTINUOUS_TRANSIENT_SCHEMA
+        ),
+        "retry_count_cap": (
+            MAX_PER_24H if approval["schema_version"] == 1 else None
+        ),
         "next_attempt_count_24h": len(recent) + 1,
     }
 
@@ -406,6 +436,13 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
             _owned_safe_ancestor_dir(ROOT)
         ),
         "eligible_transient_recovery_snapshot": eligible,
+        "owner_continuous_transient_recovery": (
+            r.get("owner_continuous_transient_recovery", False)
+            if eligible else False
+        ),
+        "retry_count_cap": (
+            r.get("retry_count_cap", MAX_PER_24H) if eligible else None
+        ),
         "next_attempt_count_24h": attempts,
         "owner_intentional_hold_preserved": True,
         "service_started_or_restarted": False,
