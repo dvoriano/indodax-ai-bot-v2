@@ -120,6 +120,12 @@ def supervised_public_ws_batch(
             attempted if not safe and attempted is not None
             and completed is not None and attempted > completed else None
         )
+        immediate_reconnects = (
+            data.get("immediate_transient_reconnect_attempts")
+            if isinstance(data, dict) else None
+        )
+        if type(immediate_reconnects) is not int or immediate_reconnects not in (0, 1):
+            immediate_reconnects = None
         result: dict[str, Any] = {
             "stage": "M04J_PUBLIC_WS_SUPERVISION_SLICE",
             "status": "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED" if safe else "REJECT",
@@ -141,6 +147,7 @@ def supervised_public_ws_batch(
                 data.get("fresh_retry_after_unrecoverable_gap_count", 0)
                 if isinstance(data, dict) else 0
             ),
+            "immediate_transient_reconnect_attempts": immediate_reconnects,
             "full_stream_continuity_proven": False,
             "g1_receipt_issuance_allowed": False,
             "g2_provider_call_allowed": False,
