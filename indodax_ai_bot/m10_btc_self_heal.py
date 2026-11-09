@@ -2,8 +2,9 @@
 
 Explicit local owner opt-in, exact machine-failure HOLD, exact known WS
 transport failure, original standing public GO, source+journal gap agreement,
-durable max-two/rolling-24h attempts and 30m backoff. No new timer, public
-network request, scanner, provider, owner Telegram action or exchange order.
+durable owner-selected bounded attempt budget (legacy 2/24h or opt-in
+standing 3/30min, >=10m between attempts). The existing original BTC timer
+still decides the actual start cadence. No new timer or network request.
 
 This only re-opens ONE already scheduled original BTC collector batch.
 M03 keeps requiring a NEW clean 10/10 BTC status <=1h. An operator HOLD,
@@ -34,8 +35,11 @@ HOLD = ROOT / "btc_public_ops.hold.json"
 WSDB = ROOT / "public_ws_btc.sqlite3"
 STATE = ROOT / "btc_public_self_heal.state.json"
 LEASE = ROOT / "btc_public_self_heal.lease.json"
-MAX_PER_24H = 2
+MAX_PER_24H = 2  # Legacy schema1 owner consent remains unchanged.
 MIN_INTERVAL = 1800
+STANDING_RECONNECT_MAX_PER_WINDOW = 3
+STANDING_RECONNECT_WINDOW_SECONDS = 1800
+STANDING_RECONNECT_MIN_INTERVAL = 600
 # Historical 24-hour REJECT freshness is not a PUBLIC reconnect admission TTL.
 # The 24-hour window is still enforced on recovery ATTEMPTS, never on market evidence.
 MAX_REJECT_AGE = 86400
@@ -49,6 +53,7 @@ _TRANSIENT = frozenset((
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_CONNECTION_ABORTED",
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_BROKEN_PIPE",
     "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EOF",
+    "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED",
     # PUBLIC-only connect / auth transport failures (not authorization errors).
     "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CLOSED_OR_LOST",
     "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_CONNECTION_RESET",
@@ -113,20 +118,34 @@ def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
         v, _ = _private_json(path, 2048)
     except AdmissionDenied:
         _deny("AUTO_HEAL_OWNER_OPT_IN_MISSING_OR_UNTRUSTED")
-    if (set(v) != {
-            "schema_version", "scope", "owner_authorized",
-            "issued_at_epoch", "max_attempts_per_24h",
-            "minimum_interval_seconds",
-        } or type(v["schema_version"]) is not int
-            or v["schema_version"] != 1
+    limits = {
+        1: (MAX_PER_24H, MIN_INTERVAL, 86400),
+        2: (STANDING_RECONNECT_MAX_PER_WINDOW,
+            STANDING_RECONNECT_MIN_INTERVAL,
+            STANDING_RECONNECT_WINDOW_SECONDS),
+    }
+    common = {
+        "schema_version", "scope", "owner_authorized",
+        "issued_at_epoch", "max_attempts_per_24h",
+        "minimum_interval_seconds",
+    }
+    allowed = (common | {"retry_window_seconds"}
+               if v.get("schema_version") == 2 else common)
+    if (set(v) != allowed or type(v["schema_version"]) is not int
+            or v["schema_version"] not in limits
             or v["scope"] != CONSENT_SCOPE
             or v["owner_authorized"] is not True
             or type(v["issued_at_epoch"]) is not int
             or not 0 < v["issued_at_epoch"] <= now
             or type(v["max_attempts_per_24h"]) is not int
-            or v["max_attempts_per_24h"] != MAX_PER_24H
-            or type(v["minimum_interval_seconds"]) is not int
-            or v["minimum_interval_seconds"] != MIN_INTERVAL):
+            or type(v["minimum_interval_seconds"]) is not int):
+        _deny("AUTO_HEAL_OWNER_OPT_IN_INVALID")
+    cap, interval, window = limits[v["schema_version"]]
+    if (v["max_attempts_per_24h"] != cap
+            or v["minimum_interval_seconds"] != interval
+            or (v["schema_version"] == 2
+                and (type(v["retry_window_seconds"]) is not int
+                     or v["retry_window_seconds"] != window))):
         _deny("AUTO_HEAL_OWNER_OPT_IN_INVALID")
     return v
 
@@ -231,25 +250,33 @@ def ready_for_transient_recovery(
     """Pure inspection, no disk writes, no private content exposed."""
     if type(now) is not int or now <= 0:
         _deny("AUTO_HEAL_CLOCK_INVALID")
-    _consent(now, consent)
+    approval = _consent(now, consent)
     # Aged REJECT is never promoted to current market data. It is only
     # historic evidence for one bounded PUBLIC network reconnection attempt.
     src = _source(now, go=go, status=status, hold=hold, db=db,
                   max_reject_age=None)
     history = _state(state)
     _existing_lease(lease)
-    recent = [a for a in history if now - 86400 < a["epoch"] <= now]
-    if len(recent) >= MAX_PER_24H:
+    window_seconds = (approval["retry_window_seconds"]
+                      if approval["schema_version"] == 2 else 86400)
+    recent = [a for a in history
+              if now - window_seconds < a["epoch"] <= now]
+    if len(recent) >= approval["max_attempts_per_24h"]:
         _deny("AUTO_HEAL_DAILY_RETRY_CAP")
     if (history and (history[-1]["epoch"] > now
-                     or now - history[-1]["epoch"] < MIN_INTERVAL)):
+                     or now - history[-1]["epoch"]
+                      < approval["minimum_interval_seconds"])):
         _deny("AUTO_HEAL_RETRY_BACKOFF")
     if any(x["status_sha256"] == src["status_sha256"] for x in history):
         _deny("AUTO_HEAL_SAME_FAILED_BATCH_ALREADY_RETRIED")
     return {
         **src, "history": history,
         "status": "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
-        "next_attempt_count_24h": len(recent) + 1,
+        "retry_window_seconds": window_seconds,
+        "next_attempt_count_window": len(recent) + 1,
+        "next_attempt_count_24h": (
+            len(recent) + 1 if window_seconds == 86400 else None
+        ),
     }
 
 
@@ -384,7 +411,7 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
         r = ready_for_transient_recovery(now=epoch)
         reason = r["status"]
         eligible = True
-        attempts = r["next_attempt_count_24h"]
+        attempts = r["next_attempt_count_window"]
     except AutoHealDenied as exc:
         reason = str(exc)
         eligible = False
@@ -406,7 +433,14 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
             _owned_safe_ancestor_dir(ROOT)
         ),
         "eligible_transient_recovery_snapshot": eligible,
-        "next_attempt_count_24h": attempts,
+        "next_attempt_count_window": attempts,
+        "next_attempt_count_24h": (
+            attempts if eligible and r["retry_window_seconds"] == 86400
+            else None
+        ),
+        "retry_window_seconds": (
+            r["retry_window_seconds"] if eligible else None
+        ),
         "owner_intentional_hold_preserved": True,
         "service_started_or_restarted": False,
         "new_scanner_or_timer_created": False,
