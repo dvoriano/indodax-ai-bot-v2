@@ -906,6 +906,32 @@ def probe_official_public_ws(
 
 
 
+# Only an explicitly classified connection loss gets one immediate new socket.
+# An HTTP 401/403/429, TLS/protocol/payload error, unknown exception or
+# incomplete source receipt must never be retried through this fast path.
+# Re-subscribing uses the original durable SQLite offset/gap validation.
+_IMMEDIATE_TRANSIENT_WS_RECONNECT = frozenset({
+    "PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED",
+    "PUBLIC_WS_STREAM_RECEIVE_CLOSED_OR_LOST",
+    "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_RESET",
+    "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_ABORTED",
+    "PUBLIC_WS_STREAM_RECEIVE_BROKEN_PIPE",
+    "PUBLIC_WS_STREAM_RECEIVE_EOF",
+    "PUBLIC_WS_CONNECT_CLOSED_OR_LOST",
+    "PUBLIC_WS_CONNECT_CONNECTION_RESET",
+    "PUBLIC_WS_CONNECT_CONNECTION_ABORTED",
+    "PUBLIC_WS_CONNECT_CONNECTION_REFUSED",
+    "PUBLIC_WS_CONNECT_BROKEN_PIPE",
+    "PUBLIC_WS_CONNECT_TIMEOUT",
+    "PUBLIC_WS_CONNECT_HTTP_UNAVAILABLE",  # Only explicitly typed 502/503/504.
+    "PUBLIC_WS_AUTH_RECEIVE_CLOSED_OR_LOST",
+    "PUBLIC_WS_AUTH_RECEIVE_CONNECTION_RESET",
+    "PUBLIC_WS_AUTH_RECEIVE_CONNECTION_ABORTED",
+    "PUBLIC_WS_AUTH_RECEIVE_BROKEN_PIPE",
+    "PUBLIC_WS_AUTH_RECEIVE_TIMEOUT",
+})
+
+
 def collect_official_public_ws(
     journal: PublicTradeStreamJournal, *, pair: str = "btc_idr",
     sessions: int = 2, session_seconds: int = 30, pause_seconds: int = 1,
@@ -931,6 +957,7 @@ def collect_official_public_ws(
     total_live = 0
     safe_count = 0
     attempts_after_unrecoverable_gap = 0
+    immediate_transient_reconnect_attempts = 0
     attempted = 0
     halted_reason: str | None = None
     for index in range(sessions):
@@ -940,10 +967,28 @@ def collect_official_public_ws(
         try:
             result = session_probe(journal, pair=pair, seconds=session_seconds)
         except StreamEvidenceError as exc:
+            # Attempt a NEW public socket immediately, at most ONCE per batch.
+            # No timer wait for the first typed transient disconnect; repeated
+            # faults retain the original fail-stop and backoff rules. The
+            # replacement session must freshly authenticate, subscribe,
+            # validate replay/gaps, and complete the whole bounded probe.
+            if (immediate_transient_reconnect_attempts == 0
+                    and str(exc) in _IMMEDIATE_TRANSIENT_WS_RECONNECT):
+                immediate_transient_reconnect_attempts = 1
+                try:
+                    result = session_probe(
+                        journal, pair=pair, seconds=session_seconds,
+                    )
+                except StreamEvidenceError as retry_exc:
+                    halted_reason = "WS_SESSION_REJECTED:" + str(retry_exc)
+                    break
+                except Exception:
+                    halted_reason = "WS_SESSION_UNAVAILABLE"
+                    break
             # ONE controlled fresh PUBLIC baseline retry after a *persisted*
             # GAP, preserving historical publications and recording the
             # discontinuity. No retries for transport/auth/other faults.
-            if (attempts_after_unrecoverable_gap == 0
+            elif (attempts_after_unrecoverable_gap == 0
                     and str(exc) in ("WS_RECOVERY_GAP_UNRESOLVED",
                                      "WS_STREAM_GAP_OR_EPOCH_CHANGED")
                     and journal.status(pair)["stream_status"] == "GAP"):
@@ -1022,6 +1067,7 @@ def collect_official_public_ws(
         "attempted_sessions": attempted,
         "total_recovered_publications_newly_persisted": total_recovered,
         "fresh_retry_after_unrecoverable_gap_count": attempts_after_unrecoverable_gap,
+        "immediate_transient_reconnect_attempts": immediate_transient_reconnect_attempts,
         "unrecoverable_gap_rebaseline_count": persisted["unrecoverable_gap_rebaseline_count"],
         "full_stream_continuity_proven": False,
         "total_live_publications_newly_persisted": total_live,
