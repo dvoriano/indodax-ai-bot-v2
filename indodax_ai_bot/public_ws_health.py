@@ -85,6 +85,9 @@ def public_ws_health(
                 or document.get("persistent_socket_observed_within_windows") is not True
                 or document.get("requested_sessions") != expected
                 or document.get("attempted_sessions") != expected
+                or (expected == 2 and (
+                    document.get("checkpoint_is_exchange_closed_1m_candle") is not False
+                    or document.get("calendar_minute_alignment_proven") is not False))
                 or document.get("collector_failure_code") is not None))
             or (not live_window and document.get("stream_status") != "DISCONNECTED")):
         return {**base, "reason": "WS_HEALTH_UNTRUSTED_BATCH_STATUS"}
