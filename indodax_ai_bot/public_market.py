@@ -184,17 +184,19 @@ class IndodaxPublicMarket:
                     raise PublicDataError("PUBLIC_RESPONSE_TOO_LARGE")
             return json.loads(payload)
         except HTTPError as exc:
-            # Sanitize public transport outcomes for the ORIGINAL M03 caller.
-            # A VPS edge 403 is NOT JSON corruption or a BTC WS 4/4 failure.
-            # Never include body/headers, follow redirects, rotate addresses,
-            # retry denied endpoints or grant market/G1/trading authority.
+            # Report only fixed sanitized codes to the original scheduled
+            # scanner. Preserve typed HTTPError as the explicit cause for
+            # the EXISTING owner-invoked M03 Cloudflare evidence collector,
+            # which separately allowlists status, CF-Ray and content type.
+            # Never include response bodies or arbitrary headers in reasons,
+            # retry forbidden endpoints, rotate egress or promote G1/orders.
             if exc.code == 403:
-                raise PublicDataError("PUBLIC_REST_HTTP_403_FORBIDDEN") from None
+                raise PublicDataError("PUBLIC_REST_HTTP_403_FORBIDDEN") from exc
             if exc.code == 429:
-                raise PublicDataError("PUBLIC_REST_HTTP_429_RATE_LIMITED") from None
+                raise PublicDataError("PUBLIC_REST_HTTP_429_RATE_LIMITED") from exc
             if exc.code in (502, 503, 504):
-                raise PublicDataError("PUBLIC_REST_HTTP_5XX_UNAVAILABLE") from None
-            raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from None
+                raise PublicDataError("PUBLIC_REST_HTTP_5XX_UNAVAILABLE") from exc
+            raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from exc
         except (OSError, ValueError) as exc:
             raise PublicDataError("PUBLIC_HTTP_OR_JSON_UNAVAILABLE") from exc
 
