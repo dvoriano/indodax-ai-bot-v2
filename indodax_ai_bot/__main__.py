@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-ws-supervised-once", action="store_true",
                        help="One public WS service batch with file lock and fail-stop; NO automatic deployment")
     group.add_argument("--public-ws-supervised-continuous", action="store_true",
-                       help="One original BTC PUBLIC socket across rolling 4x30s reports; no G1/AI/order")
+                       help="One original BTC PUBLIC socket across rolling 2x30s reports; no G1/AI/order")
     group.add_argument("--public-ws-health", action="store_true",
                        help="READ-ONLY last-batch public WS SQLite/status diagnostic; no journal writes")
     group.add_argument("--public-ws-unit-status", action="store_true",
@@ -356,12 +356,12 @@ def main(argv: list[str] | None = None) -> int:
             # A single owner-controlled, PUBLIC-only systemd service.
             # Dispatch BEFORE any DecisionJournal, scanner, AI or account API.
             settings.require_m01_safety()
-            if (args.pair != "btc_idr" or args.collector_sessions != 4
+            if (args.pair != "btc_idr" or args.collector_sessions != 2
                     or args.stream_seconds != 30
                     or args.collector_pause_seconds != 0
                     or not args.public_ws_reconnect_until_recovered
                     or not args.supervisor_status_file):
-                raise ConfigurationError("M04W_FOUR_30S_CONTINUOUS_BOUNDS_REQUIRED")
+                raise ConfigurationError("M04W_TWO_30S_CONTINUOUS_BOUNDS_REQUIRED")
             report = supervised_public_ws_continuous(
                 args.db, pair=args.pair, sessions=args.collector_sessions,
                 seconds=args.stream_seconds,
