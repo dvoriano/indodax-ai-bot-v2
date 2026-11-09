@@ -179,6 +179,9 @@ class M03SharedEgressAdmission:
             and status.get("requested_sessions") == expected
             and status.get("attempted_sessions") == expected
             and status.get("completed_safe_sessions") == expected
+            and (expected != 2 or (
+                status.get("checkpoint_is_exchange_closed_1m_candle") is False
+                and status.get("calendar_minute_alignment_proven") is False))
             and status.get("stream_status") in (
                 "BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
             and status.get("persistent_socket_observed_within_windows") is True
