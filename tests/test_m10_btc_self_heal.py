@@ -326,6 +326,133 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         })
         self.assertFalse(self.make_attempt(NOW + 90000))
 
+    def test_owner_standing_reconnect_profile_explicit_not_legacy(self):
+        # New consent cannot be synthesized from the old owner 2/day file.
+        new = {**self.consent_val, "schema_version": 2,
+               "max_attempts_per_24h": h.STANDING_RECONNECT_MAX_PER_WINDOW,
+               "minimum_interval_seconds": h.STANDING_RECONNECT_MIN_INTERVAL,
+               "retry_window_seconds": h.STANDING_RECONNECT_WINDOW_SECONDS}
+        self.put(self.consent, new)
+        self.assertEqual(h._consent(NOW, self.consent)["schema_version"], 2)
+        # A legacy 2/day state must not freeze newly approved monitoring.
+        self.put(self.state, {
+            "schema_version": 1, "scope": h.CONSENT_SCOPE,
+            "attempts": [
+                {"epoch": NOW - 1200, "status_sha256": "a" * 64},
+                {"epoch": NOW - 900, "status_sha256": "b" * 64},
+            ],
+        })
+        self.assertEqual(self.ready()["next_attempt_count_window"], 3)
+        self.assertTrue(self.make_attempt())
+        self.assertFalse(self.hold.exists())
+        self.assertEqual(
+            len(json.loads(self.state.read_text())["attempts"]), 3
+        )
+        self.assertTrue(h.validated_standing_failure_lease(
+            now=NOW, policy_bytes=self.go.read_bytes(),
+            status_bytes=self.status.read_bytes(),
+            lease=self.lease, state=self.state, consent=self.consent,
+        ))
+        # An exact same failed batch must never be retried as "new" data.
+        self.put(self.hold, self.hold_val)
+        self.assertFalse(self.make_attempt(NOW + 901))
+
+    def test_standing_reconnect_three_per_30m_with_10m_minimum(self):
+        self.put(self.consent, {
+            **self.consent_val, "schema_version": 2,
+            "max_attempts_per_24h": 3,
+            "minimum_interval_seconds": 600,
+            "retry_window_seconds": 1800,
+        })
+        self.put(self.state, {
+            "schema_version": 1, "scope": h.CONSENT_SCOPE,
+            "attempts": [
+                {"epoch": NOW - 1400, "status_sha256": "a" * 64},
+                {"epoch": NOW - 700, "status_sha256": "b" * 64},
+            ],
+        })
+        self.assertEqual(self.ready()["retry_window_seconds"], 1800)
+        self.assertEqual(self.ready()["next_attempt_count_window"], 3)
+        self.assertIsNone(self.ready()["next_attempt_count_24h"])
+        self.assertTrue(self.make_attempt())
+        self.put(self.hold, self.hold_val)
+        self.s["last_completed_batch_epoch"] += 1
+        self.put(self.status, self.s)
+        with self.assertRaisesRegex(h.AutoHealDenied,
+                                    "AUTO_HEAL_DAILY_RETRY_CAP"):
+            self.ready(NOW + 1)
+        self.assertTrue(self.hold.exists())
+        # After the rolling 30m window ages out, a new distinct batch
+        # becomes eligible, subject to interval and valid source state.
+        self.assertEqual(self.ready(NOW + 1801)["retry_window_seconds"], 1800)
+
+    def test_standing_reconnect_requires_exact_owner_profile(self):
+        for changed in (
+            {**self.consent_val, "schema_version": 2},
+            {**self.consent_val, "schema_version": 2,
+             "max_attempts_per_24h": 999, "retry_window_seconds": 1800},
+            {**self.consent_val, "schema_version": 2,
+             "minimum_interval_seconds": 1, "retry_window_seconds": 1800},
+        ):
+            with self.subTest(changed=changed):
+                self.put(self.consent, changed)
+                self.assert_denied_untouched()
+        # Denied classes remain held even with explicit 3/30m consent.
+        self.put(self.consent, {
+            **self.consent_val, "schema_version": 2,
+            "max_attempts_per_24h": 3, "minimum_interval_seconds": 600,
+            "retry_window_seconds": 1800,
+        })
+        self.s["collector_failure_code"] = (
+            "WS_SESSION_REJECTED:PUBLIC_WS_CONNECT_FAILED")
+        self.put(self.status, self.s)
+        self.assert_denied_untouched()
+
+    def test_empty_or_closed_sample_can_recover_without_promoting_data(self):
+        self.s["collector_failure_code"] = (
+            "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
+        self.put(self.status, self.s)
+        self.assertEqual(self.ready()["next_attempt_count_24h"], 1)
+        self.assertTrue(self.make_attempt())
+        self.assertEqual(json.loads(self.status.read_text())["status"], "REJECT")
+        self.assertFalse(json.loads(self.status.read_text())["execution_allowed"])
+
+    def test_owner_explicit_reconnect_upgrade_archives_previous_consent(self):
+        from scripts import m10_btc_self_heal_owner as cli
+        os.chmod(self.db.parent, 0o755)
+        os.chmod(self.consent.parent.parent, 0o755)
+        drop = self.db.parent / "same-original-dropin.conf"
+        templ = self.db.parent / "reviewed-source.conf"
+        drop.write_text("[Service]\\nRestart=no\\n", encoding="ascii")
+        templ.write_text("[Service]\\nRestart=no\\n", encoding="ascii")
+        old = self.consent.read_bytes()
+        with patch.object(cli, "ROOT", self.db.parent), patch.object(
+            cli, "DROP", drop
+        ), patch.object(cli, "TEMPLATE", templ), patch.object(
+            cli, "_units", return_value={"fixture": "original"}
+        ), patch.object(
+            cli, "assess_original_btc_systemd"
+        ) as service:
+            result = cli.enable_owner_optin(
+                now=NOW, consent=self.consent, go=self.go,
+                standing_reconnect=True
+            )
+        service.assert_called_once()
+        self.assertEqual(result["status"],
+            "M10_PUBLIC_STANDING_RECONNECT_CONSENT_UPGRADED")
+        self.assertTrue(self.hold.exists())  # Never clear it in the issuer.
+        self.assertEqual(h._consent(NOW, self.consent)["schema_version"], 2)
+        self.assertEqual(h._consent(NOW, self.consent)["retry_window_seconds"], 1800)
+        backups = list(self.consent.parent.glob(
+            "m10-btc-self-heal.json.legacy.*.bak"
+        ))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), old)
+        self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.consent.stat().st_mode), 0o600)
+        self.assertFalse(result["service_started_or_restarted"])
+        self.assertFalse(result["order_sent"])
+
     def test_sqlite_gap_mismatch_denied_before_release(self):
         with patch.object(h, "_journal_gap_count", return_value=6):
             self.assertFalse(h.maybe_auto_heal_original_gate(**self.args()))
