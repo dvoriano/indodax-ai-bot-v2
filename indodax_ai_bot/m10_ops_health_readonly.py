@@ -125,6 +125,9 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
     if (attempted != requested or completed != requested
             or (live_window and (
                 expected not in (2, 4) or requested != expected
+                or (expected == 2 and (
+                    document.get("checkpoint_is_exchange_closed_1m_candle") is not False
+                    or document.get("calendar_minute_alignment_proven") is not False))
                 or failure_code is not None or restart is not False
                 or stream not in ("BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
                 or document.get("persistent_socket_observed_within_windows") is not True))
