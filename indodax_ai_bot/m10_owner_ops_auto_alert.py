@@ -59,7 +59,9 @@ def _compact_ops_auto_message(snap: dict) -> str:
     else:
         sessions = "belum valid"
     state = (
-        "AKTIF (metadata)"
+        "PERSISTEN · 4x30s (metadata)"
+        if snap.get("btc_ws_continuous_fresh_metadata_observed") is True
+        else "AKTIF (metadata)"
         if snap.get("btc_ws_unit_active_metadata_observed") is True
         else "TERJADWAL · batch segar"
         if snap.get("btc_ws_scheduled_fresh_metadata_observed") is True
