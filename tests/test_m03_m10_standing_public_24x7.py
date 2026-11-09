@@ -55,6 +55,7 @@ class StandingPublicOnlyTests(unittest.TestCase):
             "requested_sessions": 10, "attempted_sessions": 10,
             "completed_safe_sessions": 10,
             "collector_failure_code": None,
+            "stream_status": "DISCONNECTED",
             "restart_only_after_clean_batch": True,
             "last_completed_batch_epoch": NOW - 22000,
             "unrecoverable_gap_rebaseline_count": 8,
@@ -137,6 +138,56 @@ class StandingPublicOnlyTests(unittest.TestCase):
             self.status["last_completed_batch_epoch"] = after - 120
             self._write(self.status_path, self.status)
             self.assertEqual(self.m03(after), 90)
+
+    def test_m03_accepts_exact_recent_4x30s_checkpoint_not_trade_source(self):
+        self.issue()
+        self.status.update({
+            "stage": "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS",
+            "status": "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED",
+            "requested_sessions": 4, "attempted_sessions": 4,
+            "completed_safe_sessions": 4,
+            "stream_status": "BASELINE_ONLY",
+            "restart_only_after_clean_batch": False,
+            "persistent_socket_observed_within_windows": True,
+            "last_completed_batch_epoch": NOW - 60,
+        })
+        self._write(self.status_path, self.status)
+        self.assertEqual(self.m03(NOW), 90)
+        self.btc(NOW)
+
+        self.status["completed_safe_sessions"] = 3
+        self._write(self.status_path, self.status)
+        with self.assertRaisesRegex(
+            M03EgressAdmissionError, "M03_STANDING_BTC_SOURCE_UNHEALTHY"
+        ):
+            self.m03(NOW)
+        with self.assertRaisesRegex(AdmissionDenied, "PUBLIC_WS_PREVIOUS_WINDOW_UNSAFE"):
+            self.btc(NOW)
+
+    def test_m03_four_window_checkpoint_stale_or_untrusted_stays_blocked(self):
+        self.issue()
+        self.status.update({
+            "stage": "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS",
+            "status": "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED",
+            "requested_sessions": 4, "attempted_sessions": 4,
+            "completed_safe_sessions": 4,
+            "stream_status": "CONTIGUOUS_OBSERVED",
+            "restart_only_after_clean_batch": False,
+            "persistent_socket_observed_within_windows": True,
+            "last_completed_batch_epoch": NOW - 361,
+        })
+        self._write(self.status_path, self.status)
+        with self.assertRaisesRegex(
+            M03EgressAdmissionError, "M03_STANDING_BTC_SOURCE_UNHEALTHY"
+        ):
+            self.m03(NOW)
+        self.status["last_completed_batch_epoch"] = NOW - 60
+        self.status["g1_receipt_issuance_allowed"] = True
+        self._write(self.status_path, self.status)
+        with self.assertRaisesRegex(
+            M03EgressAdmissionError, "M03_STANDING_BTC_SOURCE_UNHEALTHY"
+        ):
+            self.m03(NOW)
 
     def test_m03_rejects_forged_permanent_scope(self):
         self.issue()

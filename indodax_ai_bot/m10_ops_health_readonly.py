@@ -21,7 +21,12 @@ from .m10_v2_units_readonly import (
 
 _MAX_STATUS_BYTES = 32768
 _MAX_BATCH_AGE_SECONDS = 3600
-_SAFE_BATCH_STATUSES = frozenset(("PUBLIC_COLLECTION_BATCH_OK_UNATTESTED", "REJECT"))
+_MAX_PERSISTENT_WINDOW_AGE_SECONDS = 360
+_SAFE_BATCH_STATUSES = frozenset((
+    "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED",
+    "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED",
+    "REJECT",
+))
 _SAFE_STREAM_STATUSES = frozenset(("DISCONNECTED", "CONTIGUOUS_OBSERVED", "BASELINE_ONLY"))
 
 
@@ -62,6 +67,7 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
         "failure_code_observed": False,
         "restart_only_after_clean_batch_observed": False,
         "stream_disconnected_observed": False,
+        "stream_live_observed": False,
     }
     if not isinstance(document, dict):
         return result, ["BTC_WS_BATCH_STATUS_UNAVAILABLE"]
@@ -97,19 +103,28 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
         "failure_code_observed": failure_code is not None,
         "restart_only_after_clean_batch_observed": restart,
         "stream_disconnected_observed": stream == "DISCONNECTED",
+        "stream_live_observed": stream in ("BASELINE_ONLY", "CONTIGUOUS_OBSERVED"),
     })
     alerts: list[str] = []
     if age < 0:
         alerts.append("BTC_WS_BATCH_FUTURE_CLOCK")
-    elif age > _MAX_BATCH_AGE_SECONDS:
+    elif age > (_MAX_PERSISTENT_WINDOW_AGE_SECONDS
+                if status == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
+                else _MAX_BATCH_AGE_SECONDS):
         alerts.append("BTC_WS_BATCH_STALE")
 
     if status == "REJECT":
         alerts.append("BTC_WS_BATCH_REJECTED")
-    if (attempted != requested or completed != requested or
-            (status == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
-             and (failure_code is not None or restart is not True
-                  or stream != "DISCONNECTED"))):
+    live_window = status == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
+    if (attempted != requested or completed != requested
+            or (live_window and (
+                document.get("stage") != "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"
+                or requested != 4 or failure_code is not None or restart is not False
+                or stream not in ("BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
+                or document.get("persistent_socket_observed_within_windows") is not True))
+            or (status == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
+                and (requested not in (4, 10) or failure_code is not None
+                     or restart is not True or stream != "DISCONNECTED"))):
         alerts.append("BTC_WS_BATCH_INCOMPLETE_OR_INCONSISTENT")
     # A forged REJECT with restart=true must never look clean.
     if status == "REJECT" and restart:
@@ -163,15 +178,14 @@ def assess_v2_operations_readonly(
         btc_timer and btc_timer.get("observed_active") == "active"
         and btc_timer.get("observed_enabled") in ("enabled", "enabled-runtime")
     )
-    # The original public collector is a bounded systemd timer batch, NOT
-    # a permanent connected WebSocket process. Between scheduled sessions,
-    # inactive/oneshot is expected only when a trusted enabled timer and a
-    # recent, clean completed 10/10 supervisor batch are both observed.
+    # Migration: historic 10/10 finite batches remain inspectable; one
+    # persistent service instead checkpoints 4x30s while the socket stays
+    # open. An active unit + fresh checkpoint is metadata, NOT live ping.
     fresh_btc_batch = bool(
         batch["last_batch_status"] == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
-        and batch["requested_sessions"] == 10
-        and batch["attempted_sessions"] == 10
-        and batch["completed_safe_sessions"] == 10
+        and batch["requested_sessions"] in (4, 10)
+        and batch["attempted_sessions"] == batch["requested_sessions"]
+        and batch["completed_safe_sessions"] == batch["requested_sessions"]
         and batch["failure_code_observed"] is False
         and batch["restart_only_after_clean_batch_observed"] is True
         and batch["stream_disconnected_observed"] is True
@@ -181,6 +195,19 @@ def assess_v2_operations_readonly(
     btc_scheduled_fresh = bool(
         btc is not None and not btc_active and btc_timer_active
         and fresh_btc_batch
+    )
+    btc_continuous_fresh = bool(
+        btc_active
+        and batch["last_batch_status"] == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
+        and batch["requested_sessions"] == 4
+        and batch["attempted_sessions"] == 4
+        and batch["completed_safe_sessions"] == 4
+        and batch["failure_code_observed"] is False
+        and batch["restart_only_after_clean_batch_observed"] is False
+        and batch["stream_live_observed"] is True
+        and type(batch["last_batch_age_seconds"]) is int
+        and 0 <= batch["last_batch_age_seconds"] <= _MAX_PERSISTENT_WINDOW_AGE_SECONDS
+        and "BTC_WS_BATCH_INCOMPLETE_OR_INCONSISTENT" not in alerts
     )
     m05_active = receiver["m05_timer_active_enabled_metadata_only"]
     m05_receiver_active = receiver["m05_receiver_metadata_active"]
@@ -223,6 +250,7 @@ def assess_v2_operations_readonly(
         "btc_ws_unit_active_metadata_observed": btc_active,
         "btc_ws_timer_active_metadata_observed": btc_timer_active,
         "btc_ws_scheduled_fresh_metadata_observed": btc_scheduled_fresh,
+        "btc_ws_continuous_fresh_metadata_observed": btc_continuous_fresh,
         "m05_timer_active_metadata_observed": m05_active,
         "m05_receiver_metadata": receiver,
         "m03_timer_disabled_metadata_observed": m03_disabled,
@@ -287,7 +315,9 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
     labels.sort()
 
     state = (
-        "AKTIF (metadata saja)"
+        "AKTIF 4x30s (checkpoint metadata)"
+        if report.get("btc_ws_continuous_fresh_metadata_observed") is True
+        else "AKTIF (metadata saja)"
         if report.get("btc_ws_unit_active_metadata_observed") is True
         else "TERJADWAL, BATCH TERAKHIR SEGAR (snapshot)"
         if report.get("btc_ws_scheduled_fresh_metadata_observed") is True
@@ -303,7 +333,8 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
     original = report.get("btc_ws_last_batch")
     original = original if isinstance(original, dict) else {}
     status = original.get("last_batch_status")
-    if status not in ("REJECT", "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"):
+    if status not in ("REJECT", "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED",
+                      "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"):
         status = "UNKNOWN"
     count = original.get("completed_safe_sessions")
     requested = original.get("requested_sessions")

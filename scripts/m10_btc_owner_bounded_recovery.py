@@ -154,9 +154,17 @@ def assess_original_btc_systemd(*, values: dict[str, str]) -> None:
     exit_hook = values.get("exit_hook", "")
     expected_python = str(ROOT / ".venv/bin/python")
     gate = str(ROOT / "indodax_ai_bot/btc_ops_gate.py")
+    legacy = ("--public-ws-supervised-once" in cli
+              and "--public-ws-supervised-continuous" not in cli
+              and "--collector-sessions 10" in cli)
+    persistent = ("--public-ws-supervised-continuous" in cli
+                  and "--public-ws-supervised-once" not in cli
+                  and "--collector-sessions 4" in cli
+                  and "--stream-seconds 30" in cli
+                  and "--collector-pause-seconds 0" in cli
+                  and "--public-ws-reconnect-until-recovered" in cli)
     if (expected_python not in cli
-            or "--public-ws-supervised-once" not in cli
-            or "--collector-sessions 10" not in cli
+            or not (legacy or persistent)
             or "--pair btc_idr" not in cli
             or expected_python not in checker
             or gate + " check" not in checker

@@ -161,20 +161,39 @@ class M03SharedEgressAdmission:
         limit = go.get("max_gap_count")
         epoch = status.get("last_completed_batch_epoch")
         observed = status.get("unrecoverable_gap_rebaseline_count")
+        legacy = (
+            status.get("status") == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
+            and status.get("requested_sessions") == 10
+            and status.get("attempted_sessions") == 10
+            and status.get("completed_safe_sessions") == 10
+            and status.get("stream_status") == "DISCONNECTED"
+            and status.get("restart_only_after_clean_batch") is True
+        )
+        persistent = (
+            status.get("status") == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
+            and status.get("stage") == "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"
+            and status.get("requested_sessions") == 4
+            and status.get("attempted_sessions") == 4
+            and status.get("completed_safe_sessions") == 4
+            and status.get("stream_status") in (
+                "BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
+            and status.get("persistent_socket_observed_within_windows") is True
+            and status.get("restart_only_after_clean_batch") is False
+        )
+        # The new 4x30s report is a public-source freshness check only, NOT
+        # verified trade-tape completeness or independent G1/AI authority.
+        freshness = 360 if persistent else 3600
         if (set(go) != {"scope", "mode", "issued_at_epoch", "max_gap_count"}
                 or go.get("scope") != "BTC_PUBLIC_MONITOR_ONLY"
                 or go.get("mode") != STANDING_MODE
                 or type(issued) is not int or not 0 < issued <= now
                 or type(limit) is not int or not 0 <= limit <= 100000
-                or status.get("status") != "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
-                or status.get("requested_sessions") != 10
-                or status.get("attempted_sessions") != 10
-                or status.get("completed_safe_sessions") != 10
+                or not (legacy or persistent)
                 or status.get("collector_failure_code") is not None
                 or status.get("g1_receipt_issuance_allowed") is not False
                 or status.get("g2_provider_call_allowed") is not False
                 or status.get("execution_allowed") is not False
-                or type(epoch) is not int or not 0 <= now - epoch <= 3600
+                or type(epoch) is not int or not 0 <= now - epoch <= freshness
                 or type(observed) is not int or observed != gaps
                 or gaps > limit):
             raise M03EgressAdmissionError("M03_STANDING_BTC_SOURCE_UNHEALTHY")

@@ -123,10 +123,29 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
         raise AdmissionDenied("PUBLIC_WS_GAP_LIMIT_OR_MISMATCH")
 
     if sidecar.get("status") == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED":
-        if (sidecar.get("collector_failure_code") is not None
-                or sidecar.get("attempted_sessions") != 10
-                or sidecar.get("completed_safe_sessions") != 10):
+        # Read historic 10/10 safely during migration, then accept only the
+        # newly configured 4/4 finite test. No partial sample is a clean batch.
+        expected = sidecar.get("requested_sessions")
+        if (type(expected) is not int or expected not in (4, 10)
+                or sidecar.get("collector_failure_code") is not None
+                or sidecar.get("attempted_sessions") != expected
+                or sidecar.get("completed_safe_sessions") != expected
+                or sidecar.get("stream_status") != "DISCONNECTED"
+                or sidecar.get("restart_only_after_clean_batch") is not True):
             raise AdmissionDenied("PUBLIC_WS_PREVIOUS_BATCH_UNSAFE")
+    elif sidecar.get("status") == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED":
+        # A running 24/7 socket checkpoints four 30s windows WITHOUT closing
+        # the socket. This is observational metadata, never a G1 source.
+        if (sidecar.get("stage") != "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"
+                or sidecar.get("requested_sessions") != 4
+                or sidecar.get("attempted_sessions") != 4
+                or sidecar.get("completed_safe_sessions") != 4
+                or sidecar.get("collector_failure_code") is not None
+                or sidecar.get("stream_status") not in (
+                    "CONTIGUOUS_OBSERVED", "BASELINE_ONLY")
+                or sidecar.get("restart_only_after_clean_batch") is not False
+                or sidecar.get("persistent_socket_observed_within_windows") is not True):
+            raise AdmissionDenied("PUBLIC_WS_PREVIOUS_WINDOW_UNSAFE")
     elif sidecar.get("status") == "REJECT":
         digest = policy.get("acknowledged_failure_sha256")
         legacy_ack = (

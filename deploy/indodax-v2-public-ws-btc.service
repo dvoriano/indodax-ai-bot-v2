@@ -1,17 +1,17 @@
-# M04-J STAGED ONLY. Do not install/enable without explicit operator action.
+# M04-W STAGED ONLY. Owner-controlled installation from original V2 only.
 # User service, V2 repo only. PUBLIC MARKETDATA, no paid AI or orders.
-# Restart ONLY after clean public-data batch exit0. Nonzero failure STOPS.
+# Persistent original PUBLIC BTC socket: reports every four 30s windows.
 [Unit]
 Description=Indodax AI Bot V2 PUBLIC BTC WebSocket collector (no trading)
 # Deliberately no After=default.target: avoids ordering cycle in user manager.
-# Each batch validates its own PUBLIC WS connectivity; failure stops the unit.
+# Typed transport loss reconnects internally; unexpected/protocol/GAP fail-stop.
 StartLimitIntervalSec=900
 StartLimitBurst=6
 
 [Service]
 Type=simple
 WorkingDirectory=%h/indodax-ai-bot-v2
-ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --public-ws-supervised-once --pair btc_idr --db runtime/public_ws_btc.sqlite3 --collector-sessions 10 --stream-seconds 30 --collector-pause-seconds 1 --public-ws-reconnect-until-recovered --supervisor-status-file runtime/public_ws_btc.status.json
+ExecStart=%h/indodax-ai-bot-v2/.venv/bin/python -B -m indodax_ai_bot --public-ws-supervised-continuous --pair btc_idr --db runtime/public_ws_btc.sqlite3 --collector-sessions 4 --stream-seconds 30 --collector-pause-seconds 0 --public-ws-reconnect-until-recovered --supervisor-status-file runtime/public_ws_btc.status.json
 Environment=INDODAX_TRADING_ENABLED=NO
 Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO
 Environment=INDODAX_EXECUTION_MODE=DRY_RUN
