@@ -411,7 +411,8 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
         r = ready_for_transient_recovery(now=epoch)
         reason = r["status"]
         eligible = True
-        attempts = r["next_attempt_count_window"]
+        attempts = r.get("next_attempt_count_window",
+                         r.get("next_attempt_count_24h"))
     except AutoHealDenied as exc:
         reason = str(exc)
         eligible = False
@@ -435,11 +436,11 @@ def diagnose_self_heal_readonly(*, now: int | None = None) -> dict[str, Any]:
         "eligible_transient_recovery_snapshot": eligible,
         "next_attempt_count_window": attempts,
         "next_attempt_count_24h": (
-            attempts if eligible and r["retry_window_seconds"] == 86400
+            attempts if eligible and r.get("retry_window_seconds", 86400) == 86400
             else None
         ),
         "retry_window_seconds": (
-            r["retry_window_seconds"] if eligible else None
+            r.get("retry_window_seconds", 86400) if eligible else None
         ),
         "owner_intentional_hold_preserved": True,
         "service_started_or_restarted": False,
