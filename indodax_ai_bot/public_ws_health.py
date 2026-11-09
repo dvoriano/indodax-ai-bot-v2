@@ -58,20 +58,30 @@ def public_ws_health(
         return {**base, "reason": "WS_HEALTH_STATUS_INVALID"}
     if not isinstance(document, dict):
         return {**base, "reason": "WS_HEALTH_STATUS_INVALID"}
+    live_window = document.get("status") == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
     exact = {
-        "stage": "M04J_PUBLIC_WS_SUPERVISION_SLICE",
-        "status": "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED",
+        "stage": ("M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS" if live_window
+                  else "M04J_PUBLIC_WS_SUPERVISION_SLICE"),
+        "status": ("PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED" if live_window
+                   else "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"),
         "pair": "btc_idr",
-        "stream_status": "DISCONNECTED",
-        "restart_only_after_clean_batch": True,
+        "restart_only_after_clean_batch": not live_window,
         "g1_receipt_issuance_allowed": False,
         "g2_provider_call_allowed": False,
         "execution_allowed": False,
         "indodax_trade_tape_completeness_proven": False,
         "source_authenticated_for_g1": False,
     }
-    if any(type(document.get(k)) is not type(v) or document.get(k) != v
-           for k, v in exact.items()):
+    if (any(type(document.get(k)) is not type(v) or document.get(k) != v
+            for k, v in exact.items())
+            or (live_window and (
+                document.get("stream_status") not in (
+                    "BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
+                or document.get("persistent_socket_observed_within_windows") is not True
+                or document.get("requested_sessions") != 4
+                or document.get("attempted_sessions") != 4
+                or document.get("collector_failure_code") is not None))
+            or (not live_window and document.get("stream_status") != "DISCONNECTED")):
         return {**base, "reason": "WS_HEALTH_UNTRUSTED_BATCH_STATUS"}
     epoch = document.get("last_completed_batch_epoch")
     offset = document.get("last_publication_offset")
@@ -113,11 +123,10 @@ def public_ws_health(
             connection.close()
     except (sqlite3.Error, OSError):
         return {**base, "reason": "WS_HEALTH_READONLY_DB_ERROR"}
-    # The SIDECAR describes the *previous completed* batch, whose status
-    # must be DISCONNECTED. The live journal may now belong to the NEXT
-    # supervised batch: BASELINE_ONLY or CONTIGUOUS_OBSERVED are therefore
-    # normal, not evidence of rollback. GAP/RECOVERING/unknown statuses are
-    # deliberately never accepted by this historical health checker.
+    # Legacy batch sidecar was recorded after disconnect; M04-W checkpoints
+    # while the authenticated socket is STILL OPEN. Neither metadata form
+    # proves runtime liveness. The live journal can move ahead afterwards;
+    # reject offsets/counts that roll back or a GAP/RECOVERING state.
     accepted_current_states = {
         "DISCONNECTED", "BASELINE_ONLY", "CONTIGUOUS_OBSERVED",
     }
@@ -132,8 +141,10 @@ def public_ws_health(
         }
     return {
         **base,
-        "status": "RECENT_COMPLETED_PUBLIC_BATCH_UNATTESTED",
-        "reason": "LAST_BATCH_ONLY_NO_RUNTIME_LIVENESS_PROOF",
+        "status": ("RECENT_FOUR_WINDOW_CHECKPOINT_UNATTESTED" if live_window
+                   else "RECENT_COMPLETED_PUBLIC_BATCH_UNATTESTED"),
+        "reason": ("FOUR_WINDOWS_ONLY_NO_SOCKET_LIVENESS_PROOF" if live_window
+                   else "LAST_BATCH_ONLY_NO_RUNTIME_LIVENESS_PROOF"),
         # This is just persisted state at read time; it is NOT a socket ping.
         "current_journal_stream_status": row[2],
         "completed_batch_stream_status": document["stream_status"],
