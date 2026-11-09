@@ -154,7 +154,7 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or not 0 <= g["max_gap_count"] <= 100000):
         _deny("AUTO_HEAL_STANDING_PUBLIC_GO_UNVERIFIED")
     if (type(s.get("last_completed_batch_epoch")) is not int
-            or not (0 <= now - s["last_completed_batch_epoch"]
+            or not (g["issued_at_epoch"] <= s["last_completed_batch_epoch"] <= now
                     and (max_reject_age is None or
                          now - s["last_completed_batch_epoch"] <= max_reject_age))
             or s.get("status") != "REJECT"
