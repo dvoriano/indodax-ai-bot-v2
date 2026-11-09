@@ -310,7 +310,9 @@ def maybe_auto_heal_original_gate(
     lock = state.with_name(state.name + ".lock")
     fd = -1
     try:
-        if lock.is_symlink() or not _owned_dir(state.parent):
+        # Runtime is a trusted owned ancestor (0700/0755), not a public
+        # consent directory. The state/lease/lock files remain private 0600.
+        if lock.is_symlink() or not _owned_safe_ancestor_dir(state.parent):
             return False
         fd = os.open(lock, os.O_RDWR | os.O_CREAT | getattr(os,"O_NOFOLLOW",0), 0o600)
         stat_fd = os.fstat(fd)
