@@ -274,7 +274,9 @@ def dedicated_owner_fast_loop_nonlive(
                 "batches": 0, "handled": 0, "ignored": 0,
                 "readonly_preflight_outage_bursts":
                     readonly_preflight_outage_bursts,
-                "execution_allowed": False, "order_sent": False,
+                "radar_invocations": 0, "radar_enabled": auto_radar_alert is not None,
+                "single_original_poller": True, "execution_allowed": False,
+                "order_sent": False,
             }
         poller = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
