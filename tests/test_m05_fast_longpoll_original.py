@@ -362,17 +362,19 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
             raise TimeoutError("synthetic transport secret")
 
         api = TelegramBotApiClient(token=TOKEN, transport=unreachable)
+        offset = self.owner.telegram_next_offset()
         with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleep:
-            with self.assertRaisesRegex(
-                TelegramTransportError,
-                "M05_READONLY_PREFLIGHT_TRANSPORT_RETRY_EXHAUSTED",
-            ):
-                dedicated_owner_fast_loop_nonlive(
-                    api=api, ledger=self.owner, expected_bot_id=BOT,
-                    lock_path=self.lock, max_batches=1,
-                )
+            report = dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner, expected_bot_id=BOT,
+                lock_path=self.lock, max_batches=1,
+                stop_requested=lambda: len(called) >= 3,
+            )
         self.assertEqual(called, ["getMe"] * 3)
-        self.assertEqual([x.args[0] for x in sleep.call_args_list], [1, 2])
+        self.assertEqual([x.args[0] for x in sleep.call_args_list], [1, 2, 5])
+        self.assertEqual(report["status"], "M05_FAST_LOOP_STOPPED_NONLIVE")
+        self.assertEqual(report["batches"], 0)
+        self.assertEqual(self.owner.telegram_next_offset(), offset)
+        self.assertFalse(report["execution_allowed"])
 
     def test_invalid_bot_identity_never_retried(self):
         called = []
@@ -454,18 +456,79 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         api = TelegramBotApiClient(token=TOKEN, transport=down)
         offset = self.owner.telegram_next_offset()
         with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as sleeper:
-            with self.assertRaisesRegex(
-                TelegramTransportError,
-                "M05_GETUPDATES_TRANSPORT_RETRY_EXHAUSTED",
-            ):
-                dedicated_owner_fast_loop_nonlive(
-                    api=api, ledger=self.owner, expected_bot_id=BOT,
-                    lock_path=self.lock, max_batches=1,
-                )
+            report = dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner, expected_bot_id=BOT,
+                lock_path=self.lock, max_batches=1,
+                stop_requested=lambda: calls.count("getUpdates") >= 3,
+            )
         self.assertEqual(calls.count("getUpdates"), 3)
-        self.assertEqual(sleeper.call_count, 2)
+        self.assertEqual([x.args[0] for x in sleeper.call_args_list], [1, 2, 4])
+        self.assertEqual(report["getupdates_transport_failures"], 3)
+        self.assertEqual(report["batches"], 0)
         self.assertEqual(self.owner.telegram_next_offset(), offset)
         self.assertNotIn("sendMessage", calls)
+
+    def test_outage_longer_than_three_getupdates_reads_recovers_same_poller(self):
+        from types import SimpleNamespace
+        calls = []
+        def flaky(method, payload, _timeout):
+            calls.append(method)
+            if method == "getMe":
+                result = {"id": BOT, "is_bot": True, "username": "pitidenbot"}
+            elif method == "getWebhookInfo":
+                result = {"url": "", "pending_update_count": 0}
+            elif method == "getUpdates":
+                if calls.count("getUpdates") <= 5:
+                    raise TimeoutError("private simulated outage")
+                result = []
+            else:
+                raise AssertionError("NO_EFFECTS_DURING_NETWORK_OUTAGE")
+            return {"ok": True, "result": result}
+        api = TelegramBotApiClient(token=TOKEN, transport=flaky)
+        offset = self.owner.telegram_next_offset()
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as pause:
+            result = dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner, expected_bot_id=BOT,
+                lock_path=self.lock, max_batches=1,
+            )
+        self.assertEqual(result["batches"], 1)
+        self.assertEqual(result["getupdates_transport_failures"], 5)
+        self.assertEqual(result["getupdates_consecutive_failures"], 0)
+        self.assertEqual(calls.count("getUpdates"), 6)
+        self.assertEqual([x.args[0] for x in pause.call_args_list],
+                         [1, 2, 4, 8, 16])
+        self.assertEqual(self.owner.telegram_next_offset(), offset)
+        self.assertNotIn("sendMessage", calls)
+        self.assertFalse(result["execution_allowed"])
+
+    def test_unavailable_readonly_preflight_recovers_without_polling_while_down(self):
+        calls = []
+        def flaky(method, payload, _timeout):
+            calls.append(method)
+            if method == "getMe":
+                if calls.count("getMe") <= 3:
+                    raise TimeoutError("private synthetic transport outage")
+                result = {"id": BOT, "is_bot": True, "username": "pitidenbot"}
+            elif method == "getWebhookInfo":
+                result = {"url": "", "pending_update_count": 0}
+            elif method == "getUpdates":
+                result = []
+            else:
+                raise AssertionError("NO_EFFECTS_DURING_PREFLIGHT_OUTAGE")
+            return {"ok": True, "result": result}
+        api = TelegramBotApiClient(token=TOKEN, transport=flaky)
+        with patch("indodax_ai_bot.telegram_dedicated_inbound.time.sleep") as pause:
+            result = dedicated_owner_fast_loop_nonlive(
+                api=api, ledger=self.owner, expected_bot_id=BOT,
+                lock_path=self.lock, max_batches=1,
+            )
+        self.assertEqual(result["batches"], 1)
+        self.assertEqual(result["readonly_preflight_transport_failures"], 3)
+        self.assertEqual(calls.count("getMe"), 4)
+        self.assertEqual(calls.count("getUpdates"), 1)
+        self.assertEqual([x.args[0] for x in pause.call_args_list], [1, 2, 5])
+        self.assertNotIn("sendMessage", calls)
+        self.assertFalse(result["execution_allowed"])
 
     def test_failed_owner_send_is_never_replayed_as_getupdates_retry(self):
         calls = []
