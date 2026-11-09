@@ -906,6 +906,30 @@ def probe_official_public_ws(
 
 
 
+# One immediate reconnect of the ORIGINAL socket probe after a typed
+# connection loss. This is a fresh authenticated subscription and replay
+# check, not a retry of old prices, an unlimited loop, or a G1 receipt.
+_IMMEDIATE_WS_RECONNECT_CODES = frozenset({
+    "PUBLIC_WS_STREAM_RECEIVE_CLOSED_OR_LOST",
+    "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_RESET",
+    "PUBLIC_WS_STREAM_RECEIVE_CONNECTION_ABORTED",
+    "PUBLIC_WS_STREAM_RECEIVE_BROKEN_PIPE",
+    "PUBLIC_WS_STREAM_RECEIVE_EOF",
+    "PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED",
+    "PUBLIC_WS_CONNECT_CLOSED_OR_LOST",
+    "PUBLIC_WS_CONNECT_CONNECTION_RESET",
+    "PUBLIC_WS_CONNECT_CONNECTION_ABORTED",
+    "PUBLIC_WS_CONNECT_CONNECTION_REFUSED",
+    "PUBLIC_WS_CONNECT_BROKEN_PIPE",
+    "PUBLIC_WS_CONNECT_TIMEOUT",
+    "PUBLIC_WS_AUTH_RECEIVE_CLOSED_OR_LOST",
+    "PUBLIC_WS_AUTH_RECEIVE_CONNECTION_RESET",
+    "PUBLIC_WS_AUTH_RECEIVE_CONNECTION_ABORTED",
+    "PUBLIC_WS_AUTH_RECEIVE_BROKEN_PIPE",
+    "PUBLIC_WS_AUTH_RECEIVE_TIMEOUT",
+})
+
+
 def collect_official_public_ws(
     journal: PublicTradeStreamJournal, *, pair: str = "btc_idr",
     sessions: int = 2, session_seconds: int = 30, pause_seconds: int = 1,
@@ -931,6 +955,7 @@ def collect_official_public_ws(
     total_live = 0
     safe_count = 0
     attempts_after_unrecoverable_gap = 0
+    immediate_reconnect_attempts = 0
     attempted = 0
     halted_reason: str | None = None
     for index in range(sessions):
@@ -940,13 +965,32 @@ def collect_official_public_ws(
         try:
             result = session_probe(journal, pair=pair, seconds=session_seconds)
         except StreamEvidenceError as exc:
-            # ONE controlled fresh PUBLIC baseline retry after a *persisted*
-            # GAP, preserving historical publications and recording the
-            # discontinuity. No retries for transport/auth/other faults.
-            if (attempts_after_unrecoverable_gap == 0
-                    and str(exc) in ("WS_RECOVERY_GAP_UNRESOLVED",
-                                     "WS_STREAM_GAP_OR_EPOCH_CHANGED")
-                    and journal.status(pair)["stream_status"] == "GAP"):
+            code = str(exc)
+            # Reconnect immediately, without an intentional sleep, on the
+            # FIRST typed transport close in this batch. The old probe has
+            # already closed its socket and marked its offset DISCONNECTED.
+            # New probe must AUTH + SUBSCRIBE/recover + run a full fresh
+            # duration; failures NEVER count as completed safe sessions.
+            if (code in _IMMEDIATE_WS_RECONNECT_CODES
+                    and immediate_reconnect_attempts == 0):
+                immediate_reconnect_attempts = 1
+                try:
+                    result = session_probe(
+                        journal, pair=pair, seconds=session_seconds,
+                    )
+                except StreamEvidenceError as retry_exc:
+                    halted_reason = "WS_SESSION_REJECTED:" + str(retry_exc)
+                    break
+                except Exception:
+                    halted_reason = "WS_SESSION_UNAVAILABLE"
+                    break
+            # Existing single GAP recovery remains disjoint from a transport
+            # reconnect. Do not hide a second break, TLS/auth denial, 403,
+            # protocol/payload failure, malformed frame or unknown error.
+            elif (attempts_after_unrecoverable_gap == 0
+                  and code in ("WS_RECOVERY_GAP_UNRESOLVED",
+                               "WS_STREAM_GAP_OR_EPOCH_CHANGED")
+                  and journal.status(pair)["stream_status"] == "GAP"):
                 attempts_after_unrecoverable_gap += 1
                 try:
                     result = session_probe(
@@ -960,7 +1004,7 @@ def collect_official_public_ws(
                     break
             else:
                 # Never log raw transport exception text/secret bodies.
-                halted_reason = "WS_SESSION_REJECTED:" + str(exc)
+                halted_reason = "WS_SESSION_REJECTED:" + code
                 break
         except Exception:
             halted_reason = "WS_SESSION_UNAVAILABLE"
@@ -1022,6 +1066,7 @@ def collect_official_public_ws(
         "attempted_sessions": attempted,
         "total_recovered_publications_newly_persisted": total_recovered,
         "fresh_retry_after_unrecoverable_gap_count": attempts_after_unrecoverable_gap,
+        "immediate_transport_reconnect_attempts": immediate_reconnect_attempts,
         "unrecoverable_gap_rebaseline_count": persisted["unrecoverable_gap_rebaseline_count"],
         "full_stream_continuity_proven": False,
         "total_live_publications_newly_persisted": total_live,
