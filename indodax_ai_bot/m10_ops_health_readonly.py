@@ -157,6 +157,7 @@ def assess_v2_operations_readonly(
     m05 = trusted_unit("m05_telegram_timer")
     receiver = classify_m05_receiver_metadata(units)
     m03 = trusted_unit("m03_scanner_timer")
+    m03_service = trusted_unit("m03_scanner")
     btc_active = bool(btc and btc.get("observed_active") == "active")
     btc_timer_active = bool(
         btc_timer and btc_timer.get("observed_active") == "active"
@@ -203,6 +204,16 @@ def assess_v2_operations_readonly(
         alerts.append("M03_TIMER_STATUS_UNVERIFIED")
     elif not (m03_disabled or m03_scheduled):
         alerts.append("M03_TIMER_NOT_CONFIRMED_DISABLED")
+    # A live *timer* is not proof the triggered oneshot scanner succeeded.
+    # Inactive is normal between successful ticks; only a trusted explicit
+    # systemd FAILED service state is a concrete failure snapshot.
+    # Never infer HTTP403/root cause or freshness from this metadata alone.
+    m03_service_failed = bool(
+        m03_scheduled and m03_service is not None
+        and m03_service.get("observed_active") == "failed"
+    )
+    if m03_service_failed:
+        alerts.append("M03_SCANNER_SERVICE_FAILED")
 
     # A green-looking snapshot is NOT a heartbeat; output only warnings.
     return {
@@ -216,6 +227,7 @@ def assess_v2_operations_readonly(
         "m05_receiver_metadata": receiver,
         "m03_timer_disabled_metadata_observed": m03_disabled,
         "m03_timer_active_metadata_observed": m03_scheduled,
+        "m03_scanner_service_failed_metadata_observed": m03_service_failed,
         "btc_ws_last_batch": batch,
         "continuous_24h_heartbeat_verified": False,
         "alerts_delivered_to_owner_verified": False,
@@ -246,6 +258,7 @@ _M05_OPS_ALERT_LABELS = {
     "M05_TIMER_STATUS_UNVERIFIED": "M05_TIMER_UNVERIFIED",
     "M03_TIMER_NOT_CONFIRMED_DISABLED": "M03_TIMER_REVIEW",
     "M03_TIMER_STATUS_UNVERIFIED": "M03_TIMER_UNVERIFIED",
+    "M03_SCANNER_SERVICE_FAILED": "M03_SCANNER_FAILED",
 }
 
 
