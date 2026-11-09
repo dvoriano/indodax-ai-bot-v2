@@ -64,6 +64,48 @@ def _safe_ws_receive_failure(exc: Exception, websocket_module: Any) -> str:
     return "PUBLIC_WS_STREAM_RECEIVE_FAILED"
 
 
+
+def _safe_ws_transport_failure(exc: Exception, websocket_module: Any,
+                               phase: str) -> str:
+    """Explicit PUBLIC WS connect/auth transport outage classification.
+
+    Only enumerated transport problems are eligible for bounded retry by
+    the original self-heal gate. Never use remote exception text, headers,
+    response body or credentials; HTTP 401/403/429 and unknown are denied.
+    """
+    if phase not in ("CONNECT", "AUTH_RECEIVE"):
+        return "PUBLIC_WS_TRANSPORT_PHASE_UNRECOGNIZED"
+    prefix = "PUBLIC_WS_" + phase + "_"
+    # Distinguish exchange maintenance (gateway/server unavailable) from
+    # auth denial, rate limiting and unexpected handshake responses.
+    cls = getattr(websocket_module, "WebSocketBadStatusException", None)
+    if phase == "CONNECT" and isinstance(cls, type) and isinstance(exc, cls):
+        if type(getattr(exc, "status_code", None)) is int and exc.status_code in (
+                502, 503, 504):
+            return prefix + "HTTP_UNAVAILABLE"
+        return prefix + "FAILED"
+    cls = getattr(websocket_module, "WebSocketConnectionClosedException", None)
+    if isinstance(cls, type) and isinstance(exc, cls):
+        return prefix + "CLOSED_OR_LOST"
+    # TLS and protocol errors never become retryable transport evidence.
+    import ssl
+    if isinstance(exc, ssl.SSLError):
+        return prefix + "TLS_ERROR"
+    cls = getattr(websocket_module, "WebSocketTimeoutException", None)
+    if ((isinstance(cls, type) and isinstance(exc, cls))
+            or isinstance(exc, TimeoutError)):
+        return prefix + "TIMEOUT"
+    for klass, code in (
+        (ConnectionResetError, "CONNECTION_RESET"),
+        (ConnectionAbortedError, "CONNECTION_ABORTED"),
+        (ConnectionRefusedError, "CONNECTION_REFUSED"),
+        (BrokenPipeError, "BROKEN_PIPE"),
+    ):
+        if isinstance(exc, klass):
+            return prefix + code
+    return prefix + "FAILED"
+
+
 def channel_for_pair(pair: str) -> str:
     if not isinstance(pair, str) or not _PAIR.fullmatch(pair):
         raise StreamEvidenceError("INVALID_PUBLIC_STREAM_PAIR")
@@ -846,6 +888,8 @@ def probe_official_public_ws(
         reason = (
             _safe_ws_receive_failure(exc, websocket)
             if failure_phase == "STREAM_RECEIVE"
+            else _safe_ws_transport_failure(exc, websocket, failure_phase)
+            if failure_phase in ("CONNECT", "AUTH_RECEIVE")
             else "PUBLIC_WS_" + failure_phase + "_FAILED"
         )
         raise StreamEvidenceError(reason) from None
