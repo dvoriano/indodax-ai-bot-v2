@@ -167,16 +167,13 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
                 journal.acknowledge(pair, ack(100))
                 on_window(sample(journal))
                 manual_hold.write_text("manually held")
-                with patch("indodax_ai_bot.public_ws_continuous._HOLD", manual_hold):
-                    on_window(sample(journal))
-            # A local direct check ensures operator HOLD never becomes
-            # a clean report; the running daemon's imported default HOLD
-            # path is immutable, so test the same checker directly.
-            from indodax_ai_bot.public_ws_continuous import _standing_gap_budget
-            manual_hold.write_text("hold")
+                on_window(sample(journal))
             with self.assertRaisesRegex(StreamEvidenceError, "PUBLIC_WS_OPERATOR_HOLD"):
-                _standing_gap_budget(NOW, 0, go, hold=manual_hold)
-
+                supervised_public_ws_continuous(
+                    db, status_file=status, probe=fake_probe, go=go,
+                    hold=manual_hold, clock=lambda: NOW,
+                )
+            self.assertFalse(status.exists())
     def test_new_checkpoint_ops_health_is_4_4_not_false_incomplete(self):
         report = {
             "stage": "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS",
