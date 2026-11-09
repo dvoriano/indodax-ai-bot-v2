@@ -116,10 +116,14 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
     if status == "REJECT":
         alerts.append("BTC_WS_BATCH_REJECTED")
     live_window = status == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
+    expected = {
+        "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS": 4,
+        "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS": 2,
+    }.get(document.get("stage")) if live_window else None
     if (attempted != requested or completed != requested
             or (live_window and (
-                document.get("stage") != "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"
-                or requested != 4 or failure_code is not None or restart is not False
+                expected not in (2, 4) or requested != expected
+                or failure_code is not None or restart is not False
                 or stream not in ("BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
                 or document.get("persistent_socket_observed_within_windows") is not True))
             or (status == "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"
@@ -199,9 +203,9 @@ def assess_v2_operations_readonly(
     btc_continuous_fresh = bool(
         btc_active
         and batch["last_batch_status"] == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
-        and batch["requested_sessions"] == 4
-        and batch["attempted_sessions"] == 4
-        and batch["completed_safe_sessions"] == 4
+        and batch["requested_sessions"] in (2, 4)
+        and batch["attempted_sessions"] == batch["requested_sessions"]
+        and batch["completed_safe_sessions"] == batch["requested_sessions"]
         and batch["failure_code_observed"] is False
         and batch["restart_only_after_clean_batch_observed"] is False
         and batch["stream_live_observed"] is True
@@ -315,7 +319,7 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
     labels.sort()
 
     state = (
-        "AKTIF 4x30s (checkpoint metadata)"
+        "AKTIF 2x30s/4x30s (checkpoint metadata)"
         if report.get("btc_ws_continuous_fresh_metadata_observed") is True
         else "AKTIF (metadata saja)"
         if report.get("btc_ws_unit_active_metadata_observed") is True
