@@ -250,9 +250,15 @@ def dedicated_owner_fast_loop_nonlive(
             nonlocal readonly_preflight_outage_bursts
             # Retry only read-only network failures. Identity, webhook and
             # malformed API responses remain fatal before any owner effects.
+            first_attempt = True
             while True:
-                if stop_requested is not None and stop_requested():
+                # Preserve original startup identity verification even when
+                # shutdown is already requested; after a failed transport
+                # attempt, respect shutdown before another network call.
+                if (not first_attempt and stop_requested is not None
+                        and stop_requested()):
                     return False
+                first_attempt = False
                 try:
                     _preflight()
                     readonly_preflight_outage_bursts = 0
