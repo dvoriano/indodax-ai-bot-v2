@@ -195,7 +195,7 @@ class M04SImmediateReconnectTests(unittest.TestCase):
                 probe=probe, sleep=sleeps.append,
             )
             self.assertEqual(len(calls), 6)
-            self.assertEqual(sleeps, [1, 1])
+            self.assertEqual(sleeps, [1, 0, 1])  # Ordinary zero-pause between completed sessions.
             self.assertEqual(result["persistent_transient_reconnect_attempts"], 4)
             self.assertEqual(result["completed_safe_sessions"], 2)
 
