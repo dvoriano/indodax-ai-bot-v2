@@ -169,12 +169,19 @@ class M03SharedEgressAdmission:
             and status.get("stream_status") == "DISCONNECTED"
             and status.get("restart_only_after_clean_batch") is True
         )
+        expected = {
+            "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS": 4,
+            "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS": 2,
+        }.get(status.get("stage"))
         persistent = (
             status.get("status") == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
-            and status.get("stage") == "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"
-            and status.get("requested_sessions") == 4
-            and status.get("attempted_sessions") == 4
-            and status.get("completed_safe_sessions") == 4
+            and expected in (2, 4)
+            and status.get("requested_sessions") == expected
+            and status.get("attempted_sessions") == expected
+            and status.get("completed_safe_sessions") == expected
+            and (expected != 2 or (
+                status.get("checkpoint_is_exchange_closed_1m_candle") is False
+                and status.get("calendar_minute_alignment_proven") is False))
             and status.get("stream_status") in (
                 "BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
             and status.get("persistent_socket_observed_within_windows") is True

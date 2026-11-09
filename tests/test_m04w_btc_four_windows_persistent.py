@@ -46,8 +46,8 @@ def sample(journal: PublicTradeStreamJournal):
     }
 
 
-class FourWindowPersistentCollectorTests(unittest.TestCase):
-    def test_one_authenticated_probe_drives_two_4x30_reports_not_two_sockets(self):
+class TwoWindowPersistentCollectorTests(unittest.TestCase):
+    def test_one_authenticated_probe_drives_two_2x30_reports_not_two_sockets(self):
         with TemporaryDirectory() as td:
             rt = Path(td)
             db = rt / "btc.sqlite3"
@@ -58,7 +58,7 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
             def fake_probe(journal, *, pair, seconds, windows, on_window):
                 calls.append((pair, seconds, windows))
                 journal.acknowledge(pair, ack(100))
-                for _ in range(9):
+                for _ in range(5):
                     on_window(sample(journal))
             with patch("builtins.print"):
                 result = supervised_public_ws_continuous(
@@ -68,10 +68,13 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
             self.assertEqual(calls, [("btc_idr", 30, None)])
             self.assertEqual(result["status"],
                              "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED")
-            self.assertEqual(result["requested_sessions"], 4)
-            self.assertEqual(result["attempted_sessions"], 4)
-            self.assertEqual(result["completed_safe_sessions"], 4)
+            self.assertEqual(result["requested_sessions"], 2)
+            self.assertEqual(result["attempted_sessions"], 2)
+            self.assertEqual(result["completed_safe_sessions"], 2)
             self.assertFalse(result["restart_only_after_clean_batch"])
+            self.assertEqual(result["stage"], "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS")
+            self.assertFalse(result["checkpoint_is_exchange_closed_1m_candle"])
+            self.assertFalse(result["calendar_minute_alignment_proven"])
             self.assertTrue(result["persistent_socket_observed_within_windows"])
             self.assertFalse(result["g1_receipt_issuance_allowed"])
             self.assertFalse(result["g2_provider_call_allowed"])
@@ -83,7 +86,7 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
             self.assertIsNone(health["live_stream_currently_connected"])
             self.assertFalse(health["source_authenticated_for_g1"])
 
-    def test_typed_network_loss_reconnects_immediately_then_four_windows(self):
+    def test_typed_network_loss_reconnects_immediately_then_two_windows(self):
         with TemporaryDirectory() as td:
             rt = Path(td)
             db, status, go = [rt / x for x in ("btc.sqlite3", "state.json", "go.json")]
@@ -94,7 +97,7 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
                 if len(calls) == 1:
                     raise StreamEvidenceError("PUBLIC_WS_STREAM_RECEIVE_EMPTY_OR_CLOSED")
                 journal.acknowledge(pair, ack(100))
-                for _ in range(4):
+                for _ in range(2):
                     on_window(sample(journal))
             with patch("builtins.print"):
                 result = supervised_public_ws_continuous(
@@ -105,7 +108,7 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
             self.assertEqual(sleeps, [])
             self.assertEqual(result["persistent_transient_reconnect_attempts"], 1)
             self.assertEqual(result["status"], "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED")
-            self.assertEqual(result["completed_safe_sessions"], 4)
+            self.assertEqual(result["completed_safe_sessions"], 2)
             self.assertFalse(result["execution_allowed"])
 
     def test_unapproved_payload_fails_stops_with_reject_sidecar(self):
@@ -126,7 +129,7 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
                 )
             written = json.loads(status.read_text())
             self.assertEqual(written["status"], "REJECT")
-            self.assertEqual(written["requested_sessions"], 4)
+            self.assertEqual(written["requested_sessions"], 2)
             self.assertEqual(written["completed_safe_sessions"], 0)
             self.assertEqual(written["failed_session_number"], 1)
             self.assertFalse(written["execution_allowed"])
@@ -157,7 +160,7 @@ class FourWindowPersistentCollectorTests(unittest.TestCase):
             self.assertEqual(called, [])
             self.assertFalse(status.exists())
 
-    def test_owner_manual_hold_halts_after_window_without_false_4_4(self):
+    def test_owner_manual_hold_halts_after_window_without_false_2_2(self):
         with TemporaryDirectory() as td:
             rt = Path(td)
             db, status, go = [rt / x for x in ("btc.sqlite3", "state.json", "go.json")]

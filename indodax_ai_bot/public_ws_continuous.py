@@ -22,7 +22,7 @@ from .trade_stream import (
     _IMMEDIATE_TRANSIENT_WS_RECONNECT, probe_official_public_ws,
 )
 
-WINDOWS_PER_REPORT = 4
+WINDOWS_PER_REPORT = 2
 SECONDS_PER_WINDOW = 30
 _GO = ROOT / "btc_public_ops.go.json"
 _HOLD = ROOT / "btc_public_ops.hold.json"
@@ -81,7 +81,7 @@ def _checkpoint(
     state = journal.status("btc_idr")
     clean = status == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
     return {
-        "stage": "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS",
+        "stage": "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS",
         "status": status,
         "reason": "PUBLIC_WS_WINDOW_DATA_UNATTESTED" if clean
                   else "PUBLIC_WS_WINDOW_INTERRUPTED_OR_UNVERIFIED",
@@ -100,6 +100,8 @@ def _checkpoint(
         "persistent_transient_reconnect_attempts": reconnects,
         "reconnect_until_recovered": True,
         "window_seconds": SECONDS_PER_WINDOW,
+        "checkpoint_is_exchange_closed_1m_candle": False,
+        "calendar_minute_alignment_proven": False,
         "persistent_socket_observed_within_windows": clean,
         "full_stream_continuity_proven": False,
         "indodax_trade_tape_completeness_proven": False,
@@ -205,7 +207,7 @@ def supervised_public_ws_continuous(
                 windows.clear()
                 # A short sanitized operational heartbeat, not source trust.
                 print(json.dumps({
-                    "stage": "M04W_FOUR_30S_WINDOWS",
+                    "stage": "M04W_TWO_30S_WINDOWS",
                     "completed_safe_sessions": WINDOWS_PER_REPORT,
                     "status": last_report["status"],
                     "g1_receipt_issuance_allowed": False,

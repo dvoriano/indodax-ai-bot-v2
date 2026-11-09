@@ -182,7 +182,7 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or s.get("status") != "REJECT"
             or s.get("pair") != "btc_idr"
             or type(s.get("requested_sessions")) is not int
-            or s["requested_sessions"] not in (4, 10)
+            or s["requested_sessions"] not in (2, 4, 10)
             or type(s.get("attempted_sessions")) is not int
             or not 1 <= s["attempted_sessions"] <= s["requested_sessions"]
             or type(s.get("completed_safe_sessions")) is not int

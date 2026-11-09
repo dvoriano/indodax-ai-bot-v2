@@ -159,7 +159,8 @@ def assess_original_btc_systemd(*, values: dict[str, str]) -> None:
               and "--collector-sessions 10" in cli)
     persistent = ("--public-ws-supervised-continuous" in cli
                   and "--public-ws-supervised-once" not in cli
-                  and "--collector-sessions 4" in cli
+                  and ("--collector-sessions 4" in cli
+                       or "--collector-sessions 2" in cli)
                   and "--stream-seconds 30" in cli
                   and "--collector-pause-seconds 0" in cli
                   and "--public-ws-reconnect-until-recovered" in cli)

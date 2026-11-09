@@ -164,6 +164,41 @@ class StandingPublicOnlyTests(unittest.TestCase):
         with self.assertRaisesRegex(AdmissionDenied, "PUBLIC_WS_PREVIOUS_WINDOW_UNSAFE"):
             self.btc(NOW)
 
+    def test_m03_accepts_new_two_by_thirty_source_without_candle_promotion(self):
+        self.issue()
+        self.status.update({
+            "stage": "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS",
+            "status": "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED",
+            "requested_sessions": 2, "attempted_sessions": 2,
+            "completed_safe_sessions": 2,
+            "stream_status": "BASELINE_ONLY",
+            "restart_only_after_clean_batch": False,
+            "persistent_socket_observed_within_windows": True,
+            "last_completed_batch_epoch": NOW - 20,
+            "checkpoint_is_exchange_closed_1m_candle": False,
+            "calendar_minute_alignment_proven": False,
+        })
+        self._write(self.status_path, self.status)
+        self.assertEqual(self.m03(NOW), 90)
+        self.btc(NOW)
+        # One corrupt source stage or partial 1/2 must block BOTH consumers.
+        for bad_key, bad_value in (
+            ("stage", "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"),
+            ("completed_safe_sessions", 1),
+            ("g1_receipt_issuance_allowed", True),
+        ):
+            saved = self.status[bad_key]
+            self.status[bad_key] = bad_value
+            self._write(self.status_path, self.status)
+            with self.subTest(bad_key=bad_key):
+                with self.assertRaisesRegex(
+                    M03EgressAdmissionError, "M03_STANDING_BTC_SOURCE_UNHEALTHY",
+                ):
+                    self.m03(NOW)
+                with self.assertRaises(AdmissionDenied):
+                    self.btc(NOW)
+            self.status[bad_key] = saved
+
     def test_m03_four_window_checkpoint_stale_or_untrusted_stays_blocked(self):
         self.issue()
         self.status.update({

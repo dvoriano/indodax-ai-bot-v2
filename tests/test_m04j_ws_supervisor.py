@@ -224,7 +224,7 @@ class M04JPublicWSSupervisorTests(unittest.TestCase):
         self.assertIn("INDODAX_EXECUTION_MODE=DRY_RUN",unit)
         self.assertIn("--public-ws-supervised-continuous", unit)
         self.assertNotIn("--public-ws-supervised-once", unit)
-        self.assertIn("--collector-sessions 4", unit)
+        self.assertIn("--collector-sessions 2", unit)
         self.assertIn("--stream-seconds 30", unit)
         self.assertIn("--collector-pause-seconds 0", unit)
         self.assertIn("--public-ws-reconnect-until-recovered", unit)
