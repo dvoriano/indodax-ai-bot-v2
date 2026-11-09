@@ -25,14 +25,19 @@ from .trade_stream import (
 WINDOWS_PER_REPORT = 4
 SECONDS_PER_WINDOW = 30
 _GO = ROOT / "btc_public_ops.go.json"
+_HOLD = ROOT / "btc_public_ops.hold.json"
 
 
 class _OfflineStopAfterReports(Exception):
     """Only used by injected test code; not reachable from the production CLI."""
 
 
-def _standing_gap_budget(now: int, journal_gap: int, go: Path) -> None:
-    """Re-check the existing owner standing public permission every 2 minutes."""
+def _standing_gap_budget(
+    now: int, journal_gap: int, go: Path, hold: Path = _HOLD,
+) -> None:
+    """Check owner PUBLIC standing scope, manual HOLD and gap budget."""
+    if hold.exists() or hold.is_symlink():
+        raise StreamEvidenceError("PUBLIC_WS_OPERATOR_HOLD")
     try:
         value, _ = _private_json(go, 2048)
     except AdmissionDenied:
@@ -138,6 +143,11 @@ def supervised_public_ws_continuous(
     status_path = Path(status_file)
     with exclusive_collector_lock(database):
         journal = PublicTradeStreamJournal(database)
+        # The original systemd ExecCondition already enforces admission;
+        # also deny a direct CLI launch before touching the public network.
+        _standing_gap_budget(
+            int(now()), journal.status(pair)["unrecoverable_gap_rebaseline_count"], go,
+        )
         windows: list[dict[str, Any]] = []
         reconnects = 0
         consecutive_failures = 0
@@ -173,6 +183,15 @@ def supervised_public_ws_continuous(
                     or type(sample.get("live_publications_newly_persisted")) is not int
                     or sample["live_publications_newly_persisted"] < 0):
                 raise StreamEvidenceError("PUBLIC_WS_WINDOW_PROOF_INVALID")
+            # Manual HOLD, owner revocation and exceeded gap budget must
+            # halt an already-running persistent socket within one window,
+            # not merely prevent its next systemd start.
+            _standing_gap_budget(
+                int(now()), sample.get("unrecoverable_gap_rebaseline_count")
+                if type(sample.get("unrecoverable_gap_rebaseline_count")) is int
+                else journal.status(pair)["unrecoverable_gap_rebaseline_count"],
+                go,
+            )
             windows.append(sample)
             consecutive_failures = 0
             gap_retry = 0
