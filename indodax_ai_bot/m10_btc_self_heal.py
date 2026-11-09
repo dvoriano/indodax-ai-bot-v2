@@ -117,7 +117,7 @@ def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
 
 
 def _source(now: int, *, go: Path, status: Path, hold: Path,
-            db: Path) -> dict[str, Any]:
+            db: Path, max_reject_age: int = MAX_REJECT_AGE) -> dict[str, Any]:
     try:
         h, hbytes = _private_json(hold, 2048)
         g, gbytes = _private_json(go, 2048)
@@ -139,7 +139,7 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or not 0 <= g["max_gap_count"] <= 100000):
         _deny("AUTO_HEAL_STANDING_PUBLIC_GO_UNVERIFIED")
     if (type(s.get("last_completed_batch_epoch")) is not int
-            or not 0 <= now - s["last_completed_batch_epoch"] <= MAX_REJECT_AGE
+            or not 0 <= now - s["last_completed_batch_epoch"] <= max_reject_age
             or s.get("status") != "REJECT"
             or s.get("pair") != "btc_idr"
             or s.get("requested_sessions") != 10
