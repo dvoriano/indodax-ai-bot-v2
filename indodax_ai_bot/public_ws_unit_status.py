@@ -85,7 +85,8 @@ def inspect_public_ws_systemd_unit(
                      and "--public-ws-supervised-continuous" not in value)
                     or ("--public-ws-supervised-continuous" in value
                         and "--public-ws-supervised-once" not in value
-                        and "--collector-sessions 4" in value
+                        and ("--collector-sessions 4" in value
+                             or "--collector-sessions 2" in value)
                         and "--stream-seconds 30" in value
                         and "--collector-pause-seconds 0" in value
                         and "--public-ws-reconnect-until-recovered" in value)
