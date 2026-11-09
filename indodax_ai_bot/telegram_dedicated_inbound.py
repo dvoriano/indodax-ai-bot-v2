@@ -206,6 +206,7 @@ def dedicated_owner_fast_loop_nonlive(
     getupdates_transport_failures = 0
     getupdates_consecutive_failures = 0
     readonly_preflight_transport_failures = 0
+    readonly_preflight_outage_bursts = 0
     radar_next_due = None
     radar_last_status = ("M05_RADAR_PENDING_FIRST_POLL"
                          if auto_radar_alert is not None else "M05_RADAR_OPTIN_OFF")
@@ -245,7 +246,36 @@ def dedicated_owner_fast_loop_nonlive(
                     raise TelegramTransportError("M05_DEDICATED_PREFLIGHT_UNSAFE")
                 return
 
-        _preflight()
+        def _verified_preflight_or_stop() -> bool:
+            nonlocal readonly_preflight_outage_bursts
+            # Retry only read-only network failures. Identity, webhook and
+            # malformed API responses remain fatal before any owner effects.
+            while True:
+                if stop_requested is not None and stop_requested():
+                    return False
+                try:
+                    _preflight()
+                    readonly_preflight_outage_bursts = 0
+                    return True
+                except TelegramTransportError as error:
+                    if str(error) != (
+                            "M05_READONLY_PREFLIGHT_TRANSPORT_RETRY_EXHAUSTED"):
+                        raise
+                    readonly_preflight_outage_bursts += 1
+                    # Same exclusive original poller lock; no getUpdates,
+                    # outbound, or cursor changes until preflight succeeds.
+                    time.sleep(min(
+                        30, 5 * (2 ** min(readonly_preflight_outage_bursts - 1, 3))
+                    ))
+
+        if not _verified_preflight_or_stop():
+            return {
+                "status": "M05_FAST_LOOP_STOPPED_NONLIVE",
+                "batches": 0, "handled": 0, "ignored": 0,
+                "readonly_preflight_outage_bursts":
+                    readonly_preflight_outage_bursts,
+                "execution_allowed": False, "order_sent": False,
+            }
         poller = TelegramOwnerPoller(
             api=api, ledger=ledger, expected_bot_id=expected_bot_id,
             on_manual_buy_preview_nonlive=on_manual_buy_preview_nonlive,
@@ -256,7 +286,8 @@ def dedicated_owner_fast_loop_nonlive(
             # Recheck bot identity and webhook periodically, not on
             # every owner press. Upstream getUpdates also rejects a webhook.
             if batches > 0 and batches % 15 == 0:
-                _preflight()
+                if not _verified_preflight_or_stop():
+                    break
             try:
                 result = poller.poll_once(limit=10, wait_seconds=wait_seconds)
             except TelegramGetUpdatesTransportError:
@@ -264,11 +295,14 @@ def dedicated_owner_fast_loop_nonlive(
                 # Owner sends and callbacks retain uncertain/no-replay rules.
                 getupdates_transport_failures += 1
                 getupdates_consecutive_failures += 1
-                if getupdates_consecutive_failures >= 3:
-                    raise TelegramTransportError(
-                        "M05_GETUPDATES_TRANSPORT_RETRY_EXHAUSTED"
-                    ) from None
-                time.sleep(getupdates_consecutive_failures)
+                # Read-only getUpdates may recover from network outages.
+                # Never ack/replay a cursor or owner send on uncertain IO.
+                # API rejected and unsafe state errors remain fatal.
+                time.sleep(
+                    getupdates_consecutive_failures
+                    if getupdates_consecutive_failures < 3
+                    else min(30, 2 ** min(getupdates_consecutive_failures - 1, 5))
+                )
                 continue
             getupdates_consecutive_failures = 0
             if (result.get("execution_allowed") is not False
@@ -366,6 +400,7 @@ def dedicated_owner_fast_loop_nonlive(
                     "advisory_delivery_reason": advisory_delivery_reason,
                     "getupdates_transport_failures": getupdates_transport_failures,
                     "readonly_preflight_transport_failures": readonly_preflight_transport_failures,
+                    "readonly_preflight_outage_bursts": readonly_preflight_outage_bursts,
                     "getupdates_consecutive_failures": getupdates_consecutive_failures,
                     "radar_enabled": auto_radar_alert is not None,
                     "radar_invocations": radar_invocations,
@@ -387,6 +422,7 @@ def dedicated_owner_fast_loop_nonlive(
         "advisory_delivery_reason": advisory_delivery_reason,
         "getupdates_transport_failures": getupdates_transport_failures,
         "readonly_preflight_transport_failures": readonly_preflight_transport_failures,
+        "readonly_preflight_outage_bursts": readonly_preflight_outage_bursts,
         "getupdates_consecutive_failures": getupdates_consecutive_failures,
         "radar_enabled": auto_radar_alert is not None,
         "radar_invocations": radar_invocations,
