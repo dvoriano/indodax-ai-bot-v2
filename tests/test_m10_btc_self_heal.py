@@ -376,7 +376,9 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
         self.put(self.hold, self.hold_val)
         self.s["last_completed_batch_epoch"] += 1
         self.put(self.status, self.s)
-        self.assertFalse(self.make_attempt(NOW + 901))
+        with self.assertRaisesRegex(h.AutoHealDenied,
+                                    "AUTO_HEAL_DAILY_RETRY_CAP"):
+            self.ready(NOW + 1)
         self.assertTrue(self.hold.exists())
 
     def test_standing_reconnect_requires_exact_owner_profile(self):
