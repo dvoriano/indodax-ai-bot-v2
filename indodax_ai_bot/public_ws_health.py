@@ -59,8 +59,12 @@ def public_ws_health(
     if not isinstance(document, dict):
         return {**base, "reason": "WS_HEALTH_STATUS_INVALID"}
     live_window = document.get("status") == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED"
+    expected = {
+        "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS": 4,
+        "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS": 2,
+    }.get(document.get("stage")) if live_window else None
     exact = {
-        "stage": ("M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS" if live_window
+        "stage": (document.get("stage") if live_window
                   else "M04J_PUBLIC_WS_SUPERVISION_SLICE"),
         "status": ("PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED" if live_window
                    else "PUBLIC_COLLECTION_BATCH_OK_UNATTESTED"),
@@ -75,11 +79,12 @@ def public_ws_health(
     if (any(type(document.get(k)) is not type(v) or document.get(k) != v
             for k, v in exact.items())
             or (live_window and (
-                document.get("stream_status") not in (
+                expected not in (2, 4)
+                or document.get("stream_status") not in (
                     "BASELINE_ONLY", "CONTIGUOUS_OBSERVED")
                 or document.get("persistent_socket_observed_within_windows") is not True
-                or document.get("requested_sessions") != 4
-                or document.get("attempted_sessions") != 4
+                or document.get("requested_sessions") != expected
+                or document.get("attempted_sessions") != expected
                 or document.get("collector_failure_code") is not None))
             or (not live_window and document.get("stream_status") != "DISCONNECTED")):
         return {**base, "reason": "WS_HEALTH_UNTRUSTED_BATCH_STATUS"}
