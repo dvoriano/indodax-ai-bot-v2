@@ -144,6 +144,9 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
                 or sidecar.get("requested_sessions") != expected
                 or sidecar.get("attempted_sessions") != expected
                 or sidecar.get("completed_safe_sessions") != expected
+                or (expected == 2 and (
+                    sidecar.get("checkpoint_is_exchange_closed_1m_candle") is not False
+                    or sidecar.get("calendar_minute_alignment_proven") is not False))
                 or sidecar.get("collector_failure_code") is not None
                 or sidecar.get("stream_status") not in (
                     "CONTIGUOUS_OBSERVED", "BASELINE_ONLY")
