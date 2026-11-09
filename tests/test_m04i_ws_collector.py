@@ -119,6 +119,81 @@ class M04IBoundedCollectorTests(unittest.TestCase):
                              "WS_SESSION_REJECTED:PUBLIC_WS_CONNECTION_OR_FRAME_FAILED")
             self.assertEqual(result["status"],"REJECT")
 
+    def test_typed_close_immediately_resubscribes_same_journal_once(self):
+        with TemporaryDirectory() as td:
+            j = PublicTradeStreamJournal(Path(td) / "btc.sqlite3")
+            calls, sleeps = [], []
+            def probe(journal, *, pair, seconds):
+                calls.append(journal)
+                if len(calls) == 1:
+                    journal.acknowledge(pair, ack(100))
+                    journal.mark_disconnected(pair)
+                    raise StreamEvidenceError(
+                        "PUBLIC_WS_STREAM_RECEIVE_CLOSED_OR_LOST")
+                self.assertTrue(journal.subscription(pair)["params"]["recover"])
+                if len(calls) == 2:
+                    journal.acknowledge(pair, ack(101,
+                        publications=[replay_pub(101)]))
+                    journal.ingest(pair, pub(102))
+                    journal.mark_disconnected(pair)
+                    return report(journal, live=1, recovered=1)
+                journal.acknowledge(pair, ack(102))
+                journal.mark_disconnected(pair)
+                return report(journal)
+            result = collect_official_public_ws(
+                j, sessions=2, session_seconds=3, pause_seconds=1,
+                probe=probe, sleep=lambda s: sleeps.append(s))
+            self.assertEqual(len(calls), 3)
+            self.assertTrue(all(x is j for x in calls))
+            self.assertEqual(sleeps, [1])  # No sleep before reconnect.
+            self.assertEqual(result["immediate_transport_reconnect_attempts"], 1)
+            self.assertEqual(result["completed_safe_sessions"], 2)
+            self.assertEqual(result["attempted_sessions"], 2)
+            self.assertEqual(result["status"], "PUBLIC_SAMPLE_COLLECTED_UNATTESTED")
+            self.assertEqual(result["total_live_publications_newly_persisted"], 1)
+            self.assertEqual(result["total_recovered_publications_newly_persisted"], 1)
+            self.assertFalse(result["source_authenticated_for_g1"])
+            self.assertFalse(result["execution_allowed"])
+
+    def test_immediate_retry_failure_is_reject_and_no_repeat_loop(self):
+        with TemporaryDirectory() as td:
+            j = PublicTradeStreamJournal(Path(td) / "btc.sqlite3")
+            calls, sleeps = [], []
+            def probe(journal, *, pair, seconds):
+                calls.append(True)
+                raise StreamEvidenceError("PUBLIC_WS_STREAM_RECEIVE_EOF")
+            result = collect_official_public_ws(
+                j, sessions=10, session_seconds=3, probe=probe,
+                sleep=lambda s: sleeps.append(s))
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(sleeps, [])
+            self.assertEqual(result["completed_safe_sessions"], 0)
+            self.assertEqual(result["attempted_sessions"], 1)
+            self.assertEqual(result["immediate_transport_reconnect_attempts"], 1)
+            self.assertEqual(result["reason"],
+                "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_EOF")
+            self.assertEqual(result["status"], "REJECT")
+            self.assertFalse(result["execution_allowed"])
+
+    def test_denials_protocol_and_unknown_never_reconnect(self):
+        for code in ("PUBLIC_WS_CONNECT_FAILED",
+                     "PUBLIC_WS_STREAM_RECEIVE_PROTOCOL_ERROR",
+                     "PUBLIC_WS_STREAM_RECEIVE_TLS_ERROR",
+                     "PUBLIC_WS_AUTH_REJECTED",
+                     "PUBLIC_WS_STREAM_RECEIVE_FAILED"):
+            with self.subTest(code=code), TemporaryDirectory() as td:
+                j = PublicTradeStreamJournal(Path(td) / "btc.sqlite3")
+                calls = []
+                def probe(_journal, *, pair, seconds):
+                    calls.append(True)
+                    raise StreamEvidenceError(code)
+                result = collect_official_public_ws(
+                    j, sessions=2, session_seconds=3,
+                    probe=probe, sleep=lambda _:None)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(result["immediate_transport_reconnect_attempts"], 0)
+                self.assertEqual(result["status"], "REJECT")
+
     def test_invalid_collector_config_cannot_start_any_session(self):
         with TemporaryDirectory() as td:
             j=PublicTradeStreamJournal(Path(td)/"state.sqlite3")
