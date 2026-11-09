@@ -1,8 +1,9 @@
 """M10-06 read-only 24h heartbeat evidence from the ONE ORIGINAL M05 service.
 
 Reads allowlisted systemd user journal records only, never prints raw logs.
-The fast receiver already emits M05_FAST_LOOP_HEARTBEAT_NONLIVE every 10
-batches; this tool creates NO worker, timer, GO, order, API call or log file.
+The fast receiver emits M05_FAST_LOOP_HEARTBEAT_NONLIVE every 10 batches
+and on radar checks (including batch 1). This tool creates NO worker,
+timer, GO, order, API call or log file.
 A completed M05 heartbeat window is NOT full M10-06 acceptance, because
 BTC WS recovery and external alert-delivery guarantees are independent.
 """
@@ -39,6 +40,7 @@ def assess_m05_heartbeat_window(
     events: list[tuple[int, str, int]] = []
     invalid = False
     rejected: Counter[str] = Counter()
+    rejected_fields: Counter[str] = Counter()
     count = 0
     for row in records:
         count += 1
@@ -65,20 +67,25 @@ def assess_m05_heartbeat_window(
         invocation = row.get("_SYSTEMD_INVOCATION_ID")
         batches = body.get("batches")
         counters = ("handled", "ignored", "outbound_sent")
-        valid = (
-            isinstance(stamp, str) and len(stamp) <= 19
-            and stamp.isascii() and stamp.isdecimal()
-            and isinstance(invocation, str)
-            and _INVOCATION_RE.fullmatch(invocation) is not None
-            and type(batches) is int and batches >= 10
-            and batches % 10 == 0
-            and all(type(body.get(k)) is int and body[k] >= 0
-                    for k in counters)
-            and body.get("execution_allowed") is False
-        )
-        if not valid:
+        # Validate the original producer's contract, not its periodic cadence:
+        # radar emits on the first poll and on non-multiples of ten as well.
+        checks = {
+            "TIMESTAMP_INVALID": isinstance(stamp, str) and len(stamp) <= 19
+                and stamp.isascii() and stamp.isdecimal(),
+            "INVOCATION_INVALID": isinstance(invocation, str)
+                and _INVOCATION_RE.fullmatch(invocation) is not None,
+            "BATCHES_INVALID": type(batches) is int and batches >= 1,
+            "EXECUTION_NOT_FALSE": body.get("execution_allowed") is False,
+        }
+        checks.update({
+            k.upper() + "_INVALID": type(body.get(k)) is int and body[k] >= 0
+            for k in counters
+        })
+        failed_fields = [name for name, ok in checks.items() if not ok]
+        if failed_fields:
             invalid = True
             rejected["HEARTBEAT_FIELDS_UNTRUSTED"] += 1
+            rejected_fields.update(failed_fields)
             continue
         when = int(stamp) // 1_000_000
         if not start <= when <= now_epoch:
@@ -94,6 +101,7 @@ def assess_m05_heartbeat_window(
     max_gap_to_epoch = None
     progress_valid = True
     invocation_segments: list[dict[str, int]] = []
+    transitions: list[dict[str, int]] = []
     segment_invocation = None
     if events:
         # Include BOTH edges of the audit window. Never present a window
@@ -105,6 +113,11 @@ def assess_m05_heartbeat_window(
         maximum = max(intervals, key=lambda x: x[1] - x[0])
         max_gap_from_epoch, max_gap_to_epoch, max_gap_kind = maximum
         max_gap = max_gap_to_epoch - max_gap_from_epoch
+        transitions = [{
+            "previous_heartbeat_epoch": a[0],
+            "next_heartbeat_epoch": b[0],
+            "gap_seconds": b[0] - a[0],
+        } for a, b in zip(events, events[1:]) if a[1] != b[1]]
         last_batches_by_invocation: dict[str, int] = {}
         for epoch, invocation, batches in events:
             previous = last_batches_by_invocation.get(invocation)
@@ -138,6 +151,8 @@ def assess_m05_heartbeat_window(
         "sample_count": len(events),
         "invalid_or_untrusted_records": invalid,
         "rejected_record_counts": dict(sorted(rejected.items())),
+        # One rejected row can fail multiple fields; these are not row totals.
+        "rejected_field_counts": dict(sorted(rejected_fields.items())),
         "journal_truncated": bool(journal_truncated),
         "counter_progress_valid": progress_valid,
         "observed_process_invocation_count": invocations,
@@ -149,6 +164,8 @@ def assess_m05_heartbeat_window(
         "maximum_gap_end_epoch": max_gap_to_epoch,
         "invocation_segments": invocation_segments[:8],
         "invocation_segments_truncated": len(invocation_segments) > 8,
+        "invocation_transitions": transitions[:8],
+        "invocation_transitions_truncated": len(transitions) > 8,
         "original_m05_heartbeat_window_complete": continuity,
         "continuous_24h_heartbeat_verified": (
             continuity and window_seconds == WINDOW_SECONDS
@@ -205,3 +222,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

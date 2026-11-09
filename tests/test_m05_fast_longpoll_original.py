@@ -572,6 +572,18 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         self.assertEqual(report["radar_invocations"], 1)
         self.assertEqual(calls, [True])
         self.assertEqual(events[0]["batches"], 1)
+        from indodax_ai_bot.m10_m05_heartbeat_window_readonly import (
+            assess_m05_heartbeat_window,
+        )
+        audit = assess_m05_heartbeat_window([{
+            "MESSAGE": json.dumps(events[0]),
+            "__REALTIME_TIMESTAMP": str(NOW * 1000000),
+            "_SYSTEMD_INVOCATION_ID": "a" * 32,
+        }], now_epoch=NOW)
+        self.assertEqual(audit["sample_count"], 1)
+        self.assertEqual(audit["rejected_field_counts"], {})
+        self.assertFalse(audit["invalid_or_untrusted_records"])
+        self.assertFalse(audit["continuous_24h_heartbeat_verified"])
         self.assertFalse(report["order_sent"])
         self.assertFalse(report["execution_allowed"])
 
@@ -842,4 +854,5 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
