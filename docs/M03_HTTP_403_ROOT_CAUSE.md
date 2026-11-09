@@ -27,3 +27,18 @@ Output **hanya nama proxy keys**, tidak pernah nilai, host, port, user/pass, tok
 **Batas**: shell SSH bukan bukti environment aktual M03 saat systemd mengeksekusi; systemd EnvironmentFile bisa menyembunyikan proxy (laporkan presence, tidak membuka). `unit_fragment_matches_original_v2` dan `unit_exec_uses_original_v2_checkout` hanya metadata, bukan attestation file byte/source/runtime. Daftar proxy kosong tidak membuktikan koneksi direct jika ada transparent egress proxy/cloud WAF. Keberadaan proxy key juga tidak membuktikan proxy tersebut dipakai.
 
 Selanjutnya, jika tidak ada kesalahan lingkungan lokal yang terlihat, gunakan CF-Ray ID dan UTC timestamp untuk tiket resmi ke Indodax terkait alasan WAF/edge HTTP 403, bukan brute-force, rotasi IP, perubahan User-Agent secara spekulatif, ataupun host alternatif. Jangan kirim kredensial. M03 baru PASS setelah real public source normal dan original scanner menghasilkan data segar, bukan cached/replay. **Checklist master tetap terbuka** sampai bukti VPS disampaikan.
+
+## Owner original VPS follow-up (9 Nov): `EnvironmentFiles` lokal ditemukan
+
+Owner menyinkronkan V2 `main` sampai `11dedff` dan menjalankan 5/5 tes `m03_http_access_diagnostic` PASS. Output lokal: `process_proxy_keys=[]`, `manager_proxy_keys=[]`, `unit_explicit_proxy_keys=[]`, `unit_pass_proxy_keys=[]`, `unit_unset_proxy_keys=[]`, `urllib_proxy_schemes=[]`, tetapi **`unit_environment_file_present=true`**, `unit_fragment_matches_original_v2=true`, `unit_exec_uses_original_v2_checkout=true`, M03 `failed/exit-code/3`, M05 `active` dan `NRestarts=0` saat snapshot. **Unit `deploy/indodax-v2-m03-mainpath.service` di GitHub tidak memuat `EnvironmentFile`**, sehingga deklarasi yang terpasang kemungkinan berasal dari overlay/drop-in lokal; belum pasti. Tidak ada satu request API pada pemeriksaan.
+
+Tool tambahan **`indodax_ai_bot.m03_envfile_proxy_keys_readonly`** secara sengaja terpisah dan hanya boleh memeriksa envfile **yang dideklarasikan oleh fixed ORIGINAL M03 unit**, setelah memastikan metadata FragmentPath dan original Python checkout cocok. Hanya membuka file reguler owner-private tanpa symlink di `~/.config/indodax-ai-bot-v2`, ukuran maksimal 64 KiB, menampilkan hitungan file, key PROXY yang masuk allowlist, dan status seluruh file diperiksa. Semua path, URL, password, secret, nama file dan nilai env tetap tersembunyi. File tidak memenuhi syarat atau parsing metadata ambigu dilaporkan `skipped` / `all_checked=false`, **bukan** "tidak ada proxy". Tanpa HTTP, DNS, unit restart, perubahan izin/file, secret dump, atau trade.
+
+Setelah PR merged, jalankan satu kali di original VPS (clean FF source):
+
+```bash
+.venv/bin/python -B -m unittest -q tests.test_m03_envfile_proxy_keys_readonly
+.venv/bin/python -B -m indodax_ai_bot.m03_envfile_proxy_keys_readonly
+```
+
+Jika envfile tidak mengandung proxy dan `all_checked=true`, tidak ada bukti **proxy via envfile** M03; Cloudflare edge restriction masih memerlukan provider/WAF evidence dan/atau audit egress eksternal. Jika key ditemukan, periksa konfigurasi instalasi secara owner-only tanpa mencetak nilainya, jangan langsung mengubahnya. `M03` tetap exit 3; `M05` stabil hanya pada snapshot, bukan SLA 24 jam. Tidak ada checkbox penuntasan baru.
