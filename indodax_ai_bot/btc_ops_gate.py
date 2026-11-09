@@ -136,10 +136,14 @@ def _policy_checks(go_path: Path, status_path: Path, database: Path,
     elif sidecar.get("status") == "PUBLIC_COLLECTION_WINDOW_OK_UNATTESTED":
         # A running 24/7 socket checkpoints four 30s windows WITHOUT closing
         # the socket. This is observational metadata, never a G1 source.
-        if (sidecar.get("stage") != "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS"
-                or sidecar.get("requested_sessions") != 4
-                or sidecar.get("attempted_sessions") != 4
-                or sidecar.get("completed_safe_sessions") != 4
+        expected = {
+            "M04W_PERSISTENT_PUBLIC_WS_FOUR_WINDOWS": 4,
+            "M04W_PERSISTENT_PUBLIC_WS_TWO_WINDOWS": 2,
+        }.get(sidecar.get("stage"))
+        if (expected not in (2, 4)
+                or sidecar.get("requested_sessions") != expected
+                or sidecar.get("attempted_sessions") != expected
+                or sidecar.get("completed_safe_sessions") != expected
                 or sidecar.get("collector_failure_code") is not None
                 or sidecar.get("stream_status") not in (
                     "CONTIGUOUS_OBSERVED", "BASELINE_ONLY")
