@@ -377,10 +377,15 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
             "WS_SESSION_REJECTED:PUBLIC_WS_STREAM_RECEIVE_TLS_ERROR"
         )
         self.put(self.status, self.s)
-        self.assert_denied_untouched()
+        hold_before = self.hold.read_bytes()
+        lease_before = self.lease.read_bytes()
+        self.assertFalse(self.make_attempt(NOW + 601))
+        self.assertEqual(self.hold.read_bytes(), hold_before)
+        self.assertEqual(self.lease.read_bytes(), lease_before)
         self.put(self.hold, {"reason": "OPERATOR_MANUAL_HOLD",
                              "scope": "BTC_PUBLIC_MONITOR_ONLY"})
-        self.assert_denied_untouched()
+        self.assertFalse(self.make_attempt(NOW + 1202))
+        self.assertEqual(self.lease.read_bytes(), lease_before)
 
     def test_continuous_consent_must_be_exact_and_legacy_is_unchanged(self):
         for invalid in (
