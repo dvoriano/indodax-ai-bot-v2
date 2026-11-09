@@ -7,7 +7,7 @@ Continuous consent has no attempt-count cap; same failed-batch digest,
 source/gap proof and 600s admission backoff remain. No second worker.
 
 This only re-opens ONE already scheduled original BTC collector batch.
-M03 keeps requiring a NEW clean 10/10 BTC status <=1h. An operator HOLD,
+M03 still forbids source promotion from either legacy 10/10 or 4x30s metadata. An operator HOLD,
 nontransport failure, corrupted journal, unknown state or absent consent
 MUST continue to fail closed.
 """
@@ -181,9 +181,10 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
                          now - s["last_completed_batch_epoch"] <= max_reject_age))
             or s.get("status") != "REJECT"
             or s.get("pair") != "btc_idr"
-            or s.get("requested_sessions") != 10
+            or type(s.get("requested_sessions")) is not int
+            or s["requested_sessions"] not in (4, 10)
             or type(s.get("attempted_sessions")) is not int
-            or not 1 <= s["attempted_sessions"] <= 10
+            or not 1 <= s["attempted_sessions"] <= s["requested_sessions"]
             or type(s.get("completed_safe_sessions")) is not int
             or not 0 <= s["completed_safe_sessions"] < s["attempted_sessions"]
             or s.get("failed_session_number") != s["attempted_sessions"]
