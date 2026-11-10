@@ -18,6 +18,7 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal, DecisionConflictError
 from .m03_egress_admission import M03SharedEgressAdmission, M03EgressAdmissionError
+from .m03_ws_summary_live_watch import run_m03_ws3_summary_watch_once
 from .public_market import IndodaxPublicMarket
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import M07PreflightBlocked
@@ -246,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
+    group.add_argument("--m03-ws-summary-watch-once", action="store_true",
+                       help="One bounded official WS3 market-summary WATCH into the original V2 SQLite; no REST, bid/ask, G1, AI or order")
     group.add_argument("--m03-ws-summary-replay-offline-once", action="store_true",
                        help="Two supplied PUBLIC WS summary frames in private /tmp JSON; original orchestrator WATCH-only, NO socket or DB writes")
     group.add_argument("--scheduled-public-scanner-once", action="store_true",
@@ -359,6 +362,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+
+        if args.m03_ws_summary_watch_once:
+            # Explicit M03 public monitoring alternative, not a REST fix.
+            # One bounded WS3 session and SAME original DecisionJournal DB.
+            settings.require_m01_safety()
+            report = run_m03_ws3_summary_watch_once(args.db)
+            print(json.dumps({
+                "m03_ws_summary_watch": report,
+                "rest_scanner_recovered": False,
+                "g1_verified": False,
+                "live_trading_authorized": False,
+                "execution_allowed": False,
+            }, sort_keys=True, separators=(",", ":")))
+            return 0
 
         if args.m03_ws_summary_replay_file is not None and not args.m03_ws_summary_replay_offline_once:
             raise ConfigurationError("M03_WS_REPLAY_FILE_REQUIRES_OFFLINE_ACTION")
