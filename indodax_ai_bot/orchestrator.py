@@ -168,6 +168,134 @@ class DailyScalpingOrchestrator:
             excluded_pairs=MAIN_EXCLUDED_PAIRS,
         )
 
+    @staticmethod
+    def inspect_m04_ws3_micro_role_readiness_readonly(
+        *, db_path: Path, now_epoch: int, provider_report: dict,
+    ) -> dict:
+        """Original WS3 -> M04 source integrity and three-role readiness.
+
+        Inspection only. Partial WS3 is NOT complete trade tape, closed
+        candle, independent G1 issuance or approval for a provider request.
+        Does not instantiate a journal, market client, model or owner sender.
+        """
+        from .m04_radar_three_role_handoff_readonly import (
+            inspect_original_ws3_micro_prealert_three_role_handoff_readonly,
+        )
+        from .three_role_ai import ROLES
+
+        if (type(now_epoch) is not int or now_epoch <= 0
+                or not isinstance(provider_report, dict)):
+            raise ValueError("M04_WS3_READINESS_INVALID_INPUT")
+        source = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=db_path, now_epoch=now_epoch,
+        )
+        status = source.get("status")
+        candidates = source.get("candidates")
+        integrity_ok = (
+            status == "M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED"
+            and type(candidates) is list and 1 <= len(candidates) <= 2
+            and source.get("candidate_count") == len(candidates)
+            and source.get("three_role_input_slots_prepared") == 3 * len(candidates)
+            and source.get("actual_three_role_ai_calls") == 0
+            and source.get("provider_http_calls") == 0
+            and source.get("execution_allowed") is False
+            and source.get("g1_independent_issuer_verified") is False
+        )
+        reports = []
+        if integrity_ok:
+            seen = set()
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    integrity_ok = False
+                    break
+                packet = candidate.get("public_evidence")
+                pair = candidate.get("pair")
+                digest = candidate.get("evidence_digest_sha256")
+                slots = candidate.get("role_slots")
+                try:
+                    computed = hashlib.sha256(json.dumps(
+                        packet, sort_keys=True, separators=(",", ":"),
+                        ensure_ascii=True, allow_nan=False,
+                    ).encode("ascii")).hexdigest()
+                except (ValueError, TypeError, UnicodeError):
+                    integrity_ok = False
+                    break
+                if (type(pair) is not str or pair in seen
+                        or not isinstance(packet, dict)
+                        or packet.get("pair") != pair
+                        or packet.get("source_kind") !=
+                        "ORIGINAL_V2_WS3_MICRO_PREALERT_SOURCE_UNATTESTED"
+                        or packet.get("execution_allowed") is not False
+                        or packet.get("complete_trade_tape_verified") is not False
+                        or packet.get("independent_g1_issuer_verified") is not False
+                        or packet.get("closed_candles") != "UNVERIFIED"
+                        or type(digest) is not str or digest != computed
+                        or type(slots) is not list or len(slots) != len(ROLES)
+                        or any(
+                            type(slot) is not dict
+                            or slot.get("role") != role
+                            or slot.get("evidence_digest_sha256") != digest
+                            or slot.get("model_output") is not None
+                            or slot.get("dispatch") !=
+                            "NOT_CALLED_G1_UNVERIFIED_AND_OWNER_PAID_AI_GO_ABSENT"
+                            for slot, role in zip(slots, ROLES)
+                        )):
+                    integrity_ok = False
+                    break
+                score = candidate.get("quality_score_out_of_100")
+                if type(score) is not int or not 0 <= score <= 100:
+                    integrity_ok = False
+                    break
+                seen.add(pair)
+                reports.append({
+                    "pair": pair, "evidence_digest_sha256": digest,
+                    "quality_score_observational_only": score,
+                    "role_input_order": list(ROLES), "roles_called": [],
+                    "missing_evidence": list(candidate.get("missing_evidence") or []),
+                    "candidate_buy_qualified": False,
+                })
+        if status == "M04_WS3_MICRO_PREALERT_NO_CURRENT_SOURCE":
+            readiness_status = "M04_WS3_READINESS_NO_CURRENT_PREALERT"
+        elif integrity_ok:
+            readiness_status = "M04_WS3_READINESS_ROLES_WAITING_G1_AND_PAID_GO"
+        elif status == "M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED":
+            readiness_status = "M04_WS3_READINESS_PACKET_INTEGRITY_FAILED"
+            reports = []
+        else:
+            readiness_status = "M04_WS3_READINESS_SOURCE_NOT_ACCEPTED"
+        return {
+            "stage": "M04_ORIGINAL_V2_WS3_MICRO_THREE_ROLE_READINESS",
+            "status": readiness_status,
+            "upstream_m04_status": status,
+            "candidate_count": len(reports),
+            "candidates": reports,
+            "role_contract": list(ROLES),
+            "role_slots_validated": 3 * len(reports),
+            "provider_local_config_status": provider_report.get("status", "UNKNOWN"),
+            "provider_models_present_local_only": (
+                provider_report.get("status") ==
+                "M04_PROVIDER_LOCAL_CONFIG_PRESENT_UNVERIFIED"
+            ),
+            "market_source_partial_only": True,
+            "closed_1m_5m_15m_verified": False,
+            "complete_15m_1h_tape_verified": False,
+            "g1_independent_issuer_verified": False,
+            "owner_paid_ai_go_authorized": False,
+            "model_dispatch_allowed": False,
+            "actual_three_role_responses": 0,
+            "paid_provider_calls": 0,
+            "owner_final_decision": None,
+            "telegram_messages_sent": 0,
+            "order_sent": False,
+            "execution_allowed": False,
+            "blockers": [
+                "M04_G1_INDEPENDENT_ISSUER_AND_COMPLETE_TAPE_NOT_VERIFIED",
+                "M04_CLOSED_1M_5M_15M_NOT_VERIFIED",
+                "M04_OWNER_PAID_AI_GO_NOT_GRANTED",
+                "M04_REAL_THREE_ROLE_RESPONSES_NOT_OBSERVED",
+            ],
+        }
+
     def __init__(self, settings: Settings, journal: DecisionJournal, *,
                  ai_role_caller=None,
                  source_verifier: G1ReceiptVerifier | None = None,
