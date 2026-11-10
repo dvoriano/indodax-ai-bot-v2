@@ -728,6 +728,7 @@ def inspect_original_m03_ws3_watch_readonly(
         by_pair[pair].append((minute, exchange, price, turnover, offset))
 
     candidates = []
+    micro_prealert_candidates = []
     for pair, samples in by_pair.items():
         latest = samples[0]
         if (not 0 <= now - latest[0] <= WS3_MAX_AGE_SECONDS
@@ -749,10 +750,13 @@ def inspect_original_m03_ws3_watch_readonly(
         review["microstructure_observation"] = _ws3_micro_observation(
             micro_by_pair.get(pair), now=now, source_minute=latest[0],
         )
-        if (rise < WS3_MIN_PRICE_RISE_PCT
-                and review["momentum_phase"] != "EARLY_ACCELERATION_WATCH"):
-            continue
-        candidates.append({
+        # A micro-backed PREALERT is strictly informational and does not
+        # relax the original M05 Telegram WATCH publication thresholds.
+        alert_threshold_met = (
+            rise >= WS3_MIN_PRICE_RISE_PCT or
+            review["momentum_phase"] == "EARLY_ACCELERATION_WATCH"
+        )
+        candidate = {
             "pair": pair,
             "reference_epoch": reference[1],
             "observed_epoch": latest[1],
@@ -769,10 +773,32 @@ def inspect_original_m03_ws3_watch_readonly(
             "g1_verified": False,
             "execution_allowed": False,
             **review,
-        })
-        candidates[-1]["microstructure_priority_rank"] = (
-            _ws3_observation_priority(candidates[-1])
+        }
+        candidate["microstructure_priority_rank"] = (
+            _ws3_observation_priority(candidate)
         )
+        micro = candidate["microstructure_observation"]
+        if (Decimal("0.05") <= rise <= Decimal("8")
+                and micro.get("status") == "PARTIAL_SOURCE_OBSERVATION"
+                and micro.get("source_malformed") is not True
+                and (micro.get("trade_activity_observed") is True
+                     or micro.get("orderbook_snapshot_observed") is True)):
+            # Source backed, partial capture only, no trading authority.
+            candidate["micro_prealert_observation"] = True
+            candidate["m05_telegram_watch_threshold_met"] = (
+                alert_threshold_met
+            )
+            micro_prealert_candidates.append(candidate)
+        if alert_threshold_met:
+            candidates.append(candidate)
+    micro_prealert_candidates.sort(key=lambda x: (
+        0 if (x["microstructure_observation"].get("trade_activity_observed")
+              and x["microstructure_observation"].get(
+                  "orderbook_snapshot_observed")) else 1,
+        x["momentum_priority_rank"],
+        abs(Decimal(x["observed_rise_pct"]) - Decimal("0.35")),
+        x["pair"],
+    ))
     candidates.sort(key=lambda x: (
         x["momentum_priority_rank"],
         x["microstructure_priority_rank"],
@@ -785,6 +811,9 @@ def inspect_original_m03_ws3_watch_readonly(
         "candidates": candidates[:5],
         "quality_reviewed_candidate_count": len(candidates),
         "ranked_review_shortlist_top40": candidates[:40],
+        "micro_prealert_candidates_top40": micro_prealert_candidates[:40],
+        "micro_prealert_observed_count": len(micro_prealert_candidates),
+        "micro_prealert_is_owner_telegram_alert": False,
         "source_authenticated_for_g1": False,
         "three_ai_role_responses_observed": False,
         "owner_order_specific_final_verified": False,

@@ -317,13 +317,20 @@ def prepare_ws3_three_role_watch_handoff_readonly(
     if (type(now_epoch) is not int or now_epoch <= 0
             or type(max_candidates) is not int or not 1 <= max_candidates <= 2):
         return _blocked("M04_WS3_INVALID_SCOPE")
+    prealert_mode = (
+        isinstance(snapshot, dict) and snapshot.get("status") ==
+        "M03_WS3_MICRO_PREALERT_REVIEW_UNATTESTED"
+    )
     if (not isinstance(snapshot, dict)
-            or snapshot.get("status") != "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"
+            or snapshot.get("status") not in (
+                "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED",
+                "M03_WS3_MICRO_PREALERT_REVIEW_UNATTESTED",
+            )
             or snapshot.get("source_authenticated_for_g1") is not False
             or snapshot.get("three_ai_role_responses_observed") is not False
             or snapshot.get("execution_allowed") is not False
             or not isinstance(snapshot.get("candidates"), list)
-            or len(snapshot["candidates"]) > 5):
+            or len(snapshot["candidates"]) > (40 if prealert_mode else 5)):
         return _blocked("M04_WS3_UNTRUSTED_SOURCE")
     validated = []
     seen = set()
@@ -385,6 +392,13 @@ def prepare_ws3_three_role_watch_handoff_readonly(
                     micro.get("trade_activity_observed") is not False
                     or micro.get("orderbook_snapshot_observed") is not False):
                 raise ValueError("M04_WS3_MICROSTRUCTURE_CONFLICT")
+            if prealert_mode and (
+                    row.get("micro_prealert_observation") is not True
+                    or micro.get("status") != "PARTIAL_SOURCE_OBSERVATION"
+                    or not (micro.get("trade_activity_observed") is True or
+                            micro.get("orderbook_snapshot_observed") is True)
+                    or rise > Decimal("8") or rise < Decimal("0.05")):
+                raise ValueError("M04_WS3_PREALERT_MICRO_EVIDENCE_MISSING")
             if micro.get("status") == "PARTIAL_SOURCE_OBSERVATION" and (
                     micro.get("source_malformed") is True
                     or micro.get("trade_source_gap_or_truncation") is True):
@@ -398,7 +412,15 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             return _blocked("M04_WS3_INVALID_CANDIDATE_PACKET")
         seen.add(pair)
         packet = {
-            "source_kind": "ORIGINAL_V2_WS3_SUMMARY_WATCH_UNATTESTED",
+            "source_kind": (
+                "ORIGINAL_V2_WS3_MICRO_PREALERT_SOURCE_UNATTESTED"
+                if prealert_mode else
+                "ORIGINAL_V2_WS3_SUMMARY_WATCH_UNATTESTED"
+            ),
+            "telegram_alert_threshold_required": not prealert_mode,
+            "m05_telegram_watch_threshold_met": (
+                row.get("m05_telegram_watch_threshold_met", True)
+            ),
             "pair": pair, "observed_epoch": observed,
             "reference_epoch": reference,
             "price_before_idr": str(before),
@@ -442,9 +464,14 @@ def prepare_ws3_three_role_watch_handoff_readonly(
         ))
     validated.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
     result = _blocked(
-        "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED"
-        if validated else "M04_WS3_HANDOFF_NO_CURRENT_WATCH")
+        ("M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED"
+         if prealert_mode else "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED")
+        if validated else (
+            "M04_WS3_MICRO_PREALERT_NO_CURRENT_SOURCE"
+            if prealert_mode else "M04_WS3_HANDOFF_NO_CURRENT_WATCH"
+        ))
     result["source"] = "EXISTING_ORIGINAL_M03_WS3_DB_ONLY"
+    result["source_is_m05_telegram_alert"] = not prealert_mode
     result["candidates"] = [{
         "pair": pair, "public_evidence": packet,
         "evidence_digest_sha256": digest,
@@ -480,6 +507,7 @@ def prepare_ws3_three_role_watch_handoff_readonly(
     result["three_role_input_slots_prepared"] = len(result["candidates"]) * 3
     result["actual_three_role_ai_calls"] = 0
     result["quality_scored_candidates_before_top2"] = len(validated)
+    result["micro_prealert_source_review"] = prealert_mode
     result["selection_policy"] = (
         "SOURCE_CLEAN_FIRST_QUALITY_SCORE_DESC_MOMENTUM_PHASE_TIEBREAK_"
         "NOT_PREDICTED_ROI_OR_FINAL_AI"
@@ -517,6 +545,54 @@ def inspect_original_ws3_three_role_handoff_readonly(
     return prepare_ws3_three_role_watch_handoff_readonly(
         snapshot=snap, now_epoch=now,
     )
+
+
+
+def inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+    *, now_epoch: int | None = None, db_path: Path = DEFAULT_DB,
+) -> dict[str, Any]:
+    """Score partial WS3 MICRO observations before M05 price alert threshold.
+
+    Reads the existing M03 minute summary and micro tables via the original
+    M05 source inspector, then prepares at most two immutable MARKET/RISK/
+    STRATEGY input packets. No new scanner, socket, owner notice or AI call.
+    """
+    from .m05_radar_momentum_nonlive import (
+        inspect_original_m03_ws3_watch_readonly,
+    )
+    now = int(time.time()) if now_epoch is None else now_epoch
+    if type(now) is not int or now <= 0:
+        return _blocked("M04_WS3_PREALERT_INVALID_CLOCK")
+    snap = inspect_original_m03_ws3_watch_readonly(
+        db_path=db_path, now_epoch=now,
+    )
+    upstream_statuses = {
+        "M05_WS3_SOURCE_UNTRUSTED": "M04_WS3_SOURCE_FILE_UNTRUSTED",
+        "M05_WS3_SOURCE_ABSENT": "M04_WS3_SOURCE_TABLE_ABSENT",
+        "M05_WS3_SOURCE_QUERY_UNAVAILABLE": "M04_WS3_SOURCE_QUERY_UNAVAILABLE",
+    }
+    status = snap.get("status") if isinstance(snap, dict) else None
+    if status in upstream_statuses:
+        result = _blocked(upstream_statuses[status])
+        result["upstream_source_status"] = status
+        return result
+    if status != "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED":
+        return _blocked("M04_WS3_PREALERT_SOURCE_UNEXPECTED")
+    sources = snap.get("micro_prealert_candidates_top40")
+    if (not isinstance(sources, list) or len(sources) > 40
+            or snap.get("micro_prealert_is_owner_telegram_alert") is not False):
+        return _blocked("M04_WS3_PREALERT_UNVERIFIED_SOURCE")
+    snapshot = {
+        "status": "M03_WS3_MICRO_PREALERT_REVIEW_UNATTESTED",
+        "source_authenticated_for_g1": False,
+        "three_ai_role_responses_observed": False,
+        "execution_allowed": False,
+        "candidates": sources,
+    }
+    return prepare_ws3_three_role_watch_handoff_readonly(
+        snapshot=snapshot, now_epoch=now,
+    )
+
 
 def main() -> int:
     print(json.dumps(

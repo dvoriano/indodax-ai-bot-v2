@@ -6,6 +6,7 @@ import unittest
 
 from indodax_ai_bot.m04_radar_three_role_handoff_readonly import (
     inspect_original_ws3_three_role_handoff_readonly,
+    inspect_original_ws3_micro_prealert_three_role_handoff_readonly,
     prepare_ws3_three_role_watch_handoff_readonly,
 )
 from indodax_ai_bot.m05_radar_momentum_nonlive import (
@@ -242,6 +243,132 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertNotIn("upstream_source_status", report)
         self.assertEqual(report["candidate_count"], 0)
         self.assertFalse(report["execution_allowed"])
+
+
+    def insert_micro_for_pair(self, pair, *, captured_epoch=None,
+                              trade_frames=2, spread_bps="19.9800"):
+        captured = NOW - 5 if captured_epoch is None else captured_epoch
+        with sqlite3.connect(self.path) as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS m03_ws_microstructure_watch_minute(
+                    pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                    observed_local_epoch INTEGER NOT NULL,
+                    trade_frames INTEGER NOT NULL,
+                    source_buy_count INTEGER, source_sell_count INTEGER,
+                    source_buy_idr TEXT, source_sell_idr TEXT,
+                    last_trade_epoch INTEGER, trade_offset INTEGER,
+                    trade_gap_observed INTEGER NOT NULL,
+                    trade_truncated INTEGER NOT NULL,
+                    book_offset INTEGER, book_local_epoch INTEGER,
+                    best_bid_idr TEXT, best_ask_idr TEXT, spread_bps TEXT,
+                    bid_depth_top5_idr TEXT, ask_depth_top5_idr TEXT,
+                    book_imbalance_top5_ratio TEXT,
+                    source_malformed INTEGER NOT NULL,
+                    PRIMARY KEY(pair,minute_epoch))
+            """)
+            db.execute(
+                "INSERT INTO m03_ws_microstructure_watch_minute VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (pair, NOW-60, captured, trade_frames,
+                 3 if trade_frames else None,
+                 1 if trade_frames else None,
+                 "500000" if trade_frames else None,
+                 "100000" if trade_frames else None,
+                 NOW-8 if trade_frames else None,
+                 40 if trade_frames else None,
+                 0, 0, 51, captured,
+                 "100", "100.2", spread_bps,
+                 "9000000", "7000000", "1.2857", 0)
+            )
+
+    def test_real_micro_prealert_passes_under_telegram_threshold(self):
+        """A +0.2% move and real public book/trades can reach M04 early."""
+        self.row("uai_idr", -2, 100, 700000000)
+        self.row("uai_idr", -1, "100.2", 700050000)
+        self.insert_micro_for_pair("uai_idr")
+        watch = inspect_original_m03_ws3_watch_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(watch["candidates"], [])
+        self.assertEqual(watch["micro_prealert_observed_count"], 1)
+        self.assertFalse(watch["micro_prealert_is_owner_telegram_alert"])
+        self.assertFalse(
+            watch["micro_prealert_candidates_top40"][0][
+                "m05_telegram_watch_threshold_met"
+            ]
+        )
+        r = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(r["status"],
+                         "M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED")
+        self.assertEqual(r["candidate_count"], 1)
+        self.assertEqual(r["three_role_input_slots_prepared"], 3)
+        self.assertEqual(r["actual_three_role_ai_calls"], 0)
+        self.assertEqual(r["provider_http_calls"], 0)
+        self.assertEqual(r["telegram_messages_sent"], 0)
+        self.assertEqual(r["new_scanner_calls"], 0)
+        self.assertFalse(r["order_sent"])
+        self.assertFalse(r["execution_allowed"])
+        self.assertFalse(r["source_is_m05_telegram_alert"])
+        c = r["candidates"][0]
+        self.assertEqual(c["pair"], "uai_idr")
+        self.assertGreater(c["quality_score_out_of_100"], 45)
+        self.assertEqual(
+            c["public_evidence"]["source_kind"],
+            "ORIGINAL_V2_WS3_MICRO_PREALERT_SOURCE_UNATTESTED",
+        )
+        self.assertFalse(
+            c["public_evidence"]["m05_telegram_watch_threshold_met"]
+        )
+        self.assertEqual(c["public_evidence"]["trade_activity"],
+                         "PARTIAL_WS3_CAPTURE")
+        self.assertEqual(c["public_evidence"]["orderbook"],
+                         "PARTIAL_LOCAL_WS3_BOOK_SNAPSHOT")
+        self.assertEqual(
+            [x["role"] for x in c["role_slots"]],
+            ["MARKET", "RISK", "STRATEGY"],
+        )
+        self.assertTrue(all(
+            x["model_output"] is None
+            and x["evidence_digest_sha256"] == c["evidence_digest_sha256"]
+            for x in c["role_slots"]
+        ))
+        self.assertFalse(c["quality_review_observational_only"]["buy_recommended"])
+
+    def test_micro_prealert_does_not_fabricate_missing_micro(self):
+        self.row("uai_idr", -2, 100, 700000000)
+        self.row("uai_idr", -1, "100.2", 700050000)
+        r = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(r["status"],
+                         "M04_WS3_MICRO_PREALERT_NO_CURRENT_SOURCE")
+        self.assertEqual(r["candidate_count"], 0)
+        self.assertEqual(r["actual_three_role_ai_calls"], 0)
+
+    def test_stale_micro_does_not_enter_early_role_handoff(self):
+        self.row("uai_idr", -2, 100, 700000000)
+        self.row("uai_idr", -1, "100.2", 700050000)
+        self.insert_micro_for_pair("uai_idr", captured_epoch=NOW-300)
+        r = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(r["candidate_count"], 0)
+        self.assertFalse(r["execution_allowed"])
+
+    def test_prealert_does_not_promote_advanced_pump_or_manual_assets(self):
+        self.row("uai_idr", -2, 100, 700000000)
+        self.row("uai_idr", -1, 110, 700050000)
+        self.insert_micro_for_pair("uai_idr")
+        self.row("floki_idr", -2, 100, 700000000)
+        self.row("floki_idr", -1, "100.2", 700050000)
+        self.insert_micro_for_pair("floki_idr")
+        r = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(r["candidate_count"], 0)
+        self.assertFalse(r["execution_allowed"])
 
     def test_rejects_tampered_pair_price_or_g1(self):
         self.seed()
