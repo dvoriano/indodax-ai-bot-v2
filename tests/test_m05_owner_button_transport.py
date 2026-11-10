@@ -122,7 +122,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(second["processed"], 0)
         self.assertIsNotNone(self.sent_buttons)
         self.assertEqual(self.sent_buttons["chat_id"], OWNER)
-        self.assertIn("SIMULASI, BUKAN SINYAL PASAR", self.sent_buttons["text"])
+        self.assertIn("SIMULATION, NOT A MARKET SIGNAL", self.sent_buttons["text"])
         self.assertIn("Trading OFF", self.sent_buttons["text"])
         keyboard = self.sent_buttons["reply_markup"]["inline_keyboard"][0]
         self.assertEqual([b["text"] for b in keyboard],
