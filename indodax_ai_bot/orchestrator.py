@@ -16,7 +16,8 @@ from .config import Settings
 from .contracts import FinalDecision
 from .journal import DecisionJournal
 from .public_market import IndodaxPublicMarket, PublicDataError
-from .scanner import DailyPairScanner, rank_scanner_with_early_momentum
+from .scanner import DailyPairScanner, rank_scanner_with_early_momentum, MAIN_EXCLUDED_PAIRS
+from .m03_ws_summary_offline_contract import review_documented_market_summary_sequence_offline
 from .volume_screening import apply_deep_volume_floor
 from .deep_analysis import deep_scan, bulk_public_deep_scan, evaluate_source_backed_candle_research, observe_public_quote_friction, OwnerEnteredAllInFeeSnapshot
 from .three_role_ai import ThreeRoleShadow
@@ -151,6 +152,22 @@ class CycleResult:
 
 
 class DailyScalpingOrchestrator:
+    @staticmethod
+    def review_m03_ws_summary_fixture_watch_offline(
+        frames: object, *, now_epoch: int,
+    ) -> dict:
+        """Research-only review through the existing original V2 mainpath.
+
+        No constructed journal, REST/WS client, paid AI, G1 source issuer,
+        Telegram owner ledger or trade. Reuse the original M03 exclusions
+        without pretending a summary is a trusted REST scanner result.
+        """
+        return review_documented_market_summary_sequence_offline(
+            frames,
+            now_epoch=now_epoch,
+            excluded_pairs=MAIN_EXCLUDED_PAIRS,
+        )
+
     def __init__(self, settings: Settings, journal: DecisionJournal, *,
                  ai_role_caller=None,
                  source_verifier: G1ReceiptVerifier | None = None,
