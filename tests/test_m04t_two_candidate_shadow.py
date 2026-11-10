@@ -13,7 +13,7 @@ import unittest
 
 from indodax_ai_bot.g1_receipt import G1ReceiptVerifier, canonical_receipt_bytes
 from indodax_ai_bot.three_role_ai import ThreeRoleShadow
-from test_m04a_three_role_shadow import RoleCaller, TEST_G1_SECRET, source
+from test_m04a_three_role_shadow import RoleCaller, TEST_G1_SECRET, source, synthetic_issuer_coverage_manifest
 
 
 PAIRS = ("btc_idr", "token000_idr")
@@ -34,6 +34,9 @@ def two_pair_source(*, trusted=True):
             for name in ("listing", "spendable_balance", "fee_slippage",
                          "owned_position", "market_liquidity")
         }
+        bulk["g1_coverage_manifests_by_pair"][PAIRS[1]] = (
+            synthetic_issuer_coverage_manifest(PAIRS[1], epoch)
+        )
     for item in cohort["provisional_quality_reviews"]:
         if item["pair"] in PAIRS:
             item["clear_of_provisional_cautions"] = True
