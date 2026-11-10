@@ -243,10 +243,13 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
         with patch.dict(os.environ, self.env), patch(
             "sys.stdout", new_callable=io.StringIO,
         ) as out, patch("sys.stderr", new_callable=io.StringIO) as err:
-            rc = cli.main(["--m03-light-only"])
-        self.assertEqual(rc, 2)
+            # argparse already requires one original action; this flag
+            # alone cannot create another scanner/entrypoint.
+            with self.assertRaises(SystemExit) as caught:
+                cli.main(["--m03-light-only"])
+        self.assertEqual(caught.exception.code, 2)
         self.assertEqual(out.getvalue(), "")
-        self.assertIn("M03_LIGHT_ONLY_REQUIRES_SCHEDULED_ORIGINAL", err.getvalue())
+        self.assertIn("one of the arguments", err.getvalue())
 
     def test_public_owner_policy_failure_is_still_denied_before_scanner(self):
         code, out, err, checks, lights, deeps, factory = self.invoke(
