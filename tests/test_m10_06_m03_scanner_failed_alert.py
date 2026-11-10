@@ -83,6 +83,15 @@ class M10M03ServiceOutageTest(unittest.TestCase):
         self.assertFalse(report["live_trading_authorized"])
         self.assertFalse(report["m10_06_full_acceptance"])
 
+    def test_real_ops_snapshot_propagates_validated_btc_checkpoint_epoch(self):
+        # Regression: owner alert digest must use the observed epoch, not 0.
+        report = assess()
+        self.assertEqual(
+            report["btc_ws_last_batch"]["last_completed_batch_epoch"],
+            btc_clean()["last_completed_batch_epoch"],
+        )
+        self.assertEqual(report["alert_codes"], ["M03_SCANNER_SERVICE_FAILED"])
+
     def test_idle_oneshot_between_ticks_not_a_failure(self):
         report = assess(service_state="inactive")
         self.assertEqual(report["alert_codes"], [])
