@@ -214,7 +214,6 @@ def inspect_original_m03_radar_readonly(
         by_pair[pair].append((minute, observed, p, v, s))
 
     candidates = []
-    micro_prealert_candidates = []
     for pair, samples in by_pair.items():
         latest = samples[0]  # ORDER BY minute_epoch DESC
         if now - latest[1] > MAX_AGE_SECONDS:
@@ -729,6 +728,7 @@ def inspect_original_m03_ws3_watch_readonly(
         by_pair[pair].append((minute, exchange, price, turnover, offset))
 
     candidates = []
+    micro_prealert_candidates = []
     for pair, samples in by_pair.items():
         latest = samples[0]
         if (not 0 <= now - latest[0] <= WS3_MAX_AGE_SECONDS
