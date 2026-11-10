@@ -440,6 +440,100 @@ def _ws3_price_activity_review(samples: list, latest: tuple,
 
 
 
+def _ws3_micro_observation(row: tuple, *, now: int,
+                            source_minute: int) -> dict:
+    """Validate same original M03 micro archive before using it for WATCH.
+
+    No public sample can act as G1 issuer/order authority, even when source
+    trade activity and book data are both observed.
+    """
+    unknown = {"status": "NOT_OBSERVED", "trade_activity_observed": False,
+               "orderbook_snapshot_observed": False,
+               "source_trade_side_not_aggressor_verified": True,
+               "complete_trade_tape_verified": False,
+               "execution_allowed": False}
+    if not row:
+        return unknown
+    (pair, minute, captured, frames, buys, sells, buy_idr, sell_idr,
+     last_trade, trade_offset, trade_gap, truncated, book_offset, book_epoch,
+     best_bid, best_ask, spread, bid_depth, ask_depth,
+     imbalance, malformed) = row
+    if (type(minute) is not int or type(captured) is not int
+            or not 0 <= now - captured <= 150
+            or abs(minute - source_minute) > 60
+            or type(frames) is not int or not 0 <= frames <= 600
+            or malformed not in (0, 1)
+            or trade_gap not in (0, 1) or truncated not in (0, 1)):
+        return unknown
+    out = dict(unknown)
+    out["status"] = "PARTIAL_SOURCE_OBSERVATION"
+    out["source_capture_epoch"] = captured
+    out["source_malformed"] = bool(malformed)
+    out["trade_source_gap_or_truncation"] = bool(trade_gap or truncated)
+    if frames > 0 and (type(buys) is int and type(sells) is int
+                       and 0 <= buys + sells <= 1000
+                       and type(last_trade) is int
+                       and 0 <= now - last_trade <= 150):
+        buy = _finite_number(buy_idr)
+        sell = _finite_number(sell_idr)
+        if buy is not None and sell is not None:
+            out.update({
+                "trade_activity_observed": True,
+                "source_reported_buy_count": buys,
+                "source_reported_sell_count": sells,
+                "source_reported_buy_idr": format(buy, "f"),
+                "source_reported_sell_idr": format(sell, "f"),
+                "captured_trade_count": buys + sells,
+                "capture_trade_offset": trade_offset,
+                "last_trade_exchange_epoch": last_trade,
+            })
+    if (type(book_epoch) is int
+            and 0 <= now - book_epoch <= 150
+            and type(book_offset) is int and book_offset >= 0):
+        bid = _finite_number(best_bid, positive=True)
+        ask = _finite_number(best_ask, positive=True)
+        bid_idr = _finite_number(bid_depth)
+        ask_idr = _finite_number(ask_depth)
+        pub_spread = _finite_number(spread)
+        if (bid is not None and ask is not None and bid < ask
+                and bid_idr is not None and ask_idr is not None
+                and pub_spread is not None):
+            expected_spread = (ask - bid) / ((ask + bid) / 2) * 10000
+            if abs(expected_spread - pub_spread) < Decimal("0.02"):
+                out.update({
+                    "orderbook_snapshot_observed": True,
+                    "best_bid_idr": str(bid),
+                    "best_ask_idr": str(ask),
+                    "spread_bps": format(pub_spread, ".4f"),
+                    "bid_depth_top5_idr": format(bid_idr, "f"),
+                    "ask_depth_top5_idr": format(ask_idr, "f"),
+                    "orderbook_source_offset": book_offset,
+                    "orderbook_locally_observed_epoch": book_epoch,
+                })
+    if not out["trade_activity_observed"] and not out[
+            "orderbook_snapshot_observed"]:
+        return unknown
+    return out
+
+
+def _ws3_observation_priority(row: dict) -> int:
+    """Tie-break source-backed microstructure, NOT an executable AI score."""
+    micro = row["microstructure_observation"]
+    if not micro.get("orderbook_snapshot_observed"):
+        return 2
+    spread = Decimal(micro["spread_bps"])
+    if spread > Decimal("150"):
+        return 4
+    if micro.get("trade_activity_observed"):
+        if (micro["captured_trade_count"] > 0
+                and spread <= Decimal("70")
+                and Decimal(micro["source_reported_buy_idr"])
+                > Decimal(micro["source_reported_sell_idr"])):
+            return 0  # Source-reported sides ONLY, not buyer aggression.
+        return 1
+    return 3
+
+
 def inspect_original_m03_ws3_watch_readonly(
     *, db_path: Path = DEFAULT_DB, now_epoch: int | None = None,
 ) -> dict:
@@ -471,10 +565,32 @@ def inspect_original_m03_ws3_watch_readonly(
                 "ORDER BY minute_epoch DESC LIMIT 2000",
                 (now - 420, now),
             ).fetchall()
+            micro_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='m03_ws_microstructure_watch_minute'"
+            ).fetchone()
+            micro_rows = db.execute(
+                "SELECT pair,minute_epoch,observed_local_epoch,"
+                "trade_frames,source_buy_count,source_sell_count,"
+                "source_buy_idr,source_sell_idr,last_trade_epoch,"
+                "trade_offset,trade_gap_observed,trade_truncated,"
+                "book_offset,book_local_epoch,best_bid_idr,best_ask_idr,"
+                "spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,"
+                "book_imbalance_top5_ratio,source_malformed "
+                "FROM m03_ws_microstructure_watch_minute "
+                "WHERE minute_epoch BETWEEN ? AND ? "
+                "ORDER BY minute_epoch DESC LIMIT 200",
+                (now - 240, now),
+            ).fetchall() if micro_exists else []
     except (sqlite3.Error, OSError, ValueError):
         return {"status": "M05_WS3_SOURCE_QUERY_UNAVAILABLE",
                 "candidates": []}
 
+    micro_by_pair = {}
+    for row in micro_rows:
+        if (type(row[0]) is str and PAIR_ID.fullmatch(row[0])
+                and row[0] not in micro_by_pair):
+            micro_by_pair[row[0]] = row
     by_pair = defaultdict(list)
     for pair, minute, exchange, raw_price, raw_turnover, offset in rows:
         if (type(pair) is not str or not PAIR_ID.fullmatch(pair)
@@ -513,6 +629,9 @@ def inspect_original_m03_ws3_watch_readonly(
             continue
         delta = latest[3] - reference[3]
         review = _ws3_price_activity_review(samples, latest, reference)
+        review["microstructure_observation"] = _ws3_micro_observation(
+            micro_by_pair.get(pair), now=now, source_minute=latest[0],
+        )
         if (rise < WS3_MIN_PRICE_RISE_PCT
                 and review["momentum_phase"] != "EARLY_ACCELERATION_WATCH"):
             continue
@@ -534,8 +653,12 @@ def inspect_original_m03_ws3_watch_readonly(
             "execution_allowed": False,
             **review,
         })
+        candidates[-1]["microstructure_priority_rank"] = (
+            _ws3_observation_priority(candidates[-1])
+        )
     candidates.sort(key=lambda x: (
         x["momentum_priority_rank"],
+        x["microstructure_priority_rank"],
         -Decimal(x["observed_rise_pct"]),
         -Decimal(x["volume_24h_net_change_idr"]),
         x["pair"],
@@ -550,6 +673,24 @@ def inspect_original_m03_ws3_watch_readonly(
         "owner_order_specific_final_verified": False,
         "execution_allowed": False,
     }
+
+
+def _ws3_micro_notice(candidate: dict) -> str:
+    micro = candidate.get("microstructure_observation")
+    if not isinstance(micro, dict) or micro.get("status") == "NOT_OBSERVED":
+        return "🧪 Trades/book: NOT OBSERVED (no micro source receipt)"
+    trades = (
+        "Trades captured " + str(micro["captured_trade_count"])
+        + " (source BUY " + str(micro["source_reported_buy_count"])
+        + "/SELL " + str(micro["source_reported_sell_count"]) + ")"
+        if micro.get("trade_activity_observed") else "Trades: NOT OBSERVED"
+    )
+    book = (
+        "Book spread " + micro["spread_bps"] + " bps"
+        if micro.get("orderbook_snapshot_observed") else
+        "Book: NOT OBSERVED"
+    )
+    return "🧪 " + trades + " | " + book + " (PARTIAL WS3 CAPTURE)"
 
 
 def format_owner_ws3_radar_compact(candidate: dict) -> str:
@@ -574,8 +715,9 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
         + _idr_compact(candidate["volume_24h_net_change_idr"]),
         "🔎 Momentum: " + candidate["momentum_phase"]
         + " (" + str(candidate["compared_source_minute_samples"]) + " snapshots)",
+        _ws3_micro_notice(candidate),
         "⚠️ Sample comparison only. NOT a closed 1m candle or 1m traded volume.",
-        "⚠️ BUY/SELL direction, spread, depth, maintenance, G1 and AI UNVERIFIED.",
+        "⚠️ Side labels are NOT verified aggressor flow; full trade tape, market depth continuity, G1 and AI UNVERIFIED.",
         "🔎 PUBLIC WATCH ONLY. NOT A BUY RECOMMENDATION. NO ORDER BUTTONS.",
     ))
 
