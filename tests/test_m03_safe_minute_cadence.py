@@ -129,16 +129,15 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                                  "SKIPPED_LATE_OR_EARLY_REJECT")
                 self.assertFalse(body["execution_allowed"])
 
-    def test_no_ws_database_or_invalid_40_limit_fails_before_any_public_fetch(self):
+    def test_missing_ws_argument_or_invalid_40_limit_fails_before_public_fetch(self):
+        # The scheduled source location is still mandatory and distinct;
+        # accepting a path is not evidence that its BTC journal is healthy.
         for args, code in (
             (["--scheduled-public-scanner-once"],
              "M03_SCHEDULED_REQUIRES_BTC_WS_DB"),
             (["--scheduled-public-scanner-once",
               "--bulk-deep-limit", "40"],
              "M03_SCHEDULED_BULK_LIMIT_MUST_BE_20"),
-            (["--scheduled-public-scanner-once",
-              "--ws-db", "/nonexistent/m03-ws-locked.sqlite3"],
-             "M03_SCHEDULED_WS_DB_NOT_FOUND"),
         ):
             with self.subTest(code=code):
                 rc, body, err, light, scheduled = self.invoke(
@@ -149,6 +148,28 @@ class M03SafeMinuteCadenceTests(unittest.TestCase):
                 self.assertIn(code, err)
                 light.assert_not_called()
                 scheduled.assert_not_called()
+
+    def test_missing_btc_database_path_falls_back_to_original_light(self):
+        # Every fifth minute is allowed to WATCH without BTC, but MUST NOT
+        # dispatch the strict DEEP20 join or create the missing BTC journal.
+        missing = "/nonexistent/m03-ws-locked.sqlite3"
+        rc, body, err, light, scheduled = self.invoke(
+            1800000010,
+            ["--scheduled-public-scanner-once",
+             "--ws-db", missing],
+        )
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(err, "")
+        self.assertEqual(body["scheduled_m03_lane"],
+                         "LIGHT_ALL_IDR_EVERY_MINUTE")
+        self.assertEqual(body["m03_deep_deferred_reason"],
+                         "BTC_PUBLIC_SOURCE_UNHEALTHY_LIGHT_WATCH_ONLY")
+        self.assertFalse(body["execution_allowed"])
+        self.assertFalse(body["live_trading_authorized"])
+        self.assertIsNone(body["public_bulk"])
+        light.assert_called_once()
+        scheduled.assert_not_called()
+        self.assertFalse(Path(missing).exists())
 
     def test_scheduled_mode_cannot_construct_paid_sumopod_adapter(self):
         with TemporaryDirectory() as td:

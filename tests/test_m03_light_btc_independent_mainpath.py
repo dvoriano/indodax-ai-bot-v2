@@ -129,6 +129,73 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
         self.assertFalse(deeps)
         self.assertEqual(len(factory), 1)
 
+    def test_missing_btc_sqlite_does_not_prevent_original_light_tick(self):
+        self.ws.unlink()
+        code, out, err, checks, lights, deeps, factory = self.invoke(
+            now=1794000070, btc_ok=False,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")
+        result = json.loads(out)
+        self.assertEqual(result["scheduled_m03_lane"],
+                         "LIGHT_ALL_IDR_EVERY_MINUTE")
+        self.assertEqual(checks, [False])
+        self.assertEqual(len(lights), 1)
+        self.assertFalse(deeps)
+        self.assertFalse(self.ws.exists())
+        self.assertTrue(factory[0].kwargs["m03_light_only_public_watch"])
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["live_trading_authorized"])
+
+    def test_missing_btc_sqlite_downgrades_deep_to_original_light(self):
+        self.ws.unlink()
+        code, out, err, checks, lights, deeps, factory = self.invoke(
+            now=1794000010, btc_ok=True,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")
+        result = json.loads(out)
+        self.assertEqual(result["scheduled_m03_lane"],
+                         "LIGHT_ALL_IDR_EVERY_MINUTE")
+        self.assertEqual(result["m03_deep_deferred_reason"],
+                         "BTC_PUBLIC_SOURCE_UNHEALTHY_LIGHT_WATCH_ONLY")
+        self.assertEqual(checks, [False])
+        self.assertEqual(len(lights), 1)
+        self.assertFalse(deeps)
+        self.assertFalse(self.ws.exists())
+        self.assertTrue(factory[0].kwargs["m03_light_only_public_watch"])
+        self.assertFalse(result["execution_allowed"])
+
+    def test_missing_btc_sqlite_does_not_bypass_owner_egress_policy(self):
+        self.ws.unlink()
+        code, out, err, checks, lights, deeps, factory = self.invoke(
+            now=1794000010, btc_ok=False, public_policy_ok=False,
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("M03_EGRESS_POLICY_UNAVAILABLE", err)
+        self.assertEqual(out, "")
+        self.assertEqual(checks, [False])
+        self.assertFalse(lights)
+        self.assertFalse(deeps)
+        self.assertFalse(factory)
+
+    def test_original_systemd_m03_unit_does_not_require_btc_sqlite(self):
+        unit = (Path(__file__).resolve().parents[1] / "deploy" /
+                "indodax-v2-m03-mainpath.service").read_text()
+        self.assertNotIn(
+            "ConditionPathExists=%h/indodax-ai-bot-v2/runtime/"
+            "public_ws_btc.sqlite3", unit,
+        )
+        self.assertIn(
+            "ConditionPathExists=%h/indodax-ai-bot-v2/"
+            "indodax_ai_bot/__main__.py", unit,
+        )
+        self.assertIn("--scheduled-public-scanner-once", unit)
+        self.assertIn("Restart=no", unit)
+        self.assertIn("INDODAX_TRADING_ENABLED=NO", unit)
+        self.assertIn("INDODAX_ALLOW_LIVE_EXECUTION=NO", unit)
+        self.assertIn("INDODAX_EXECUTION_MODE=DRY_RUN", unit)
+
     def test_public_owner_policy_failure_is_still_denied_before_scanner(self):
         code, out, err, checks, lights, deeps, factory = self.invoke(
             now=1794000010, btc_ok=True, public_policy_ok=False,
