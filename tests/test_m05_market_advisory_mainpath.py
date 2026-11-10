@@ -193,7 +193,7 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertNotIn(chr(92) + "n", fake.sent["text"])
         self.assertIn("\nMARKET WATCH, NOT A BUY ORDER\n", fake.sent["text"])
         self.assertIn("\nPair: INJ_IDR\n", fake.sent["text"])
-        self.assertIn("\nCandle 1m tutup: ", fake.sent["text"])
+        self.assertIn("\nClosed 1m candle: ", fake.sent["text"])
         self.assertIn(" WIB\n", fake.sent["text"])
         self.assertIn("Bid Rp1400 | Ask Rp1404", fake.sent["text"])
         self.assertIn("Spread 28.49 bps", fake.sent["text"])
