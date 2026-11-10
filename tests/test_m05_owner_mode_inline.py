@@ -111,13 +111,13 @@ class OriginalM05OwnerModeInlineTests(unittest.TestCase):
         self.assertEqual(first["handled"], 1)
         manual, auto = self.get_buttons()
         self.assertEqual(self.mode(), "MANUAL")
-        self.assertIn("order tetap OFF", self.sent[0]["text"])
+        self.assertIn("Orders remain OFF", self.sent[0]["text"])
         self.assertFalse(first["execution_allowed"])
         self.epoch = NOW + 1
         result = self.choose(update_id=11, button=auto)
         self.assertEqual(result["handled"], 1)
         self.assertEqual(self.mode(), "AUTO")
-        self.assertIn("Trading tetap OFF", self.calls[-3][1].get("text", "")
+        self.assertIn("Trading remains OFF", self.calls[-3][1].get("text", "")
                       + self.calls[-2][1].get("text", ""))
         self.assertEqual(self.sent[-1]["reply_markup"] if
                          "reply_markup" in self.sent[-1] else None, None)
