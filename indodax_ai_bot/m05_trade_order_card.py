@@ -65,12 +65,12 @@ def render_m05_trade_order_card(
     gross = draft.price * draft.quantity
     price = _idr(draft.price)
     qty = _format_number(draft.quantity)
-    title = f"M05 {mode} {draft.side} (SIMULASI TOMBOL, NO ORDER)"
+    title = f"M05 {mode} {draft.side} (BUTTON SIMULATION, NO ORDER)"
     summary = [
         title,
         f"Pair: {draft.symbol}",
-        f"Harga LIMIT per {token}: {price}",
-        f"Jumlah token: {qty} {token}",
+        f"LIMIT price per {token}: {price}",
+        f"Token quantity: {qty} {token}",
     ]
     if draft.side == "BUY":
         if (allocated_bot_owned_buy_cost_idr is not None
@@ -85,8 +85,8 @@ def render_m05_trade_order_card(
                 or buy_total.adjusted() > 20):
             raise ValueError("M05_BUY_CARD_TOTAL_COST_INVALID")
         summary.extend((
-            f"Nominal pembelian (estimasi): {_idr(buy_total)}",
-            f"Token diperoleh (estimasi): {qty} {token}",
+            f"Estimated BUY amount: {_idr(buy_total)}",
+            f"Estimated tokens received: {qty} {token}",
         ))
     else:
         if expected_buy_total_idr is not None:
@@ -100,12 +100,12 @@ def render_m05_trade_order_card(
                 or not projected_total.is_finite()
                 or projected_total < 0 or projected_total > gross):
             raise ValueError("M05_SELL_CARD_TOTAL_PROCEEDS_INVALID")
-        summary.append(f"Total penjualan (estimasi): {_idr(projected_total)}")
+        summary.append(f"Estimated SELL proceeds: {_idr(projected_total)}")
         if (allocated_bot_owned_buy_cost_idr is None
                 and expected_net_sell_proceeds_idr is None):
             summary.extend((
-                "Modal beli: belum ada lot BUY V2 terverifikasi",
-                "Untung/rugi bersih: belum dapat dihitung",
+                "BUY cost: no verified V2-owned BUY lot",
+                "Net P/L: unavailable without verified BUY cost",
             ))
         else:
             cost = allocated_bot_owned_buy_cost_idr
@@ -131,19 +131,19 @@ def render_m05_trade_order_card(
                 ) if roi >= threshold
             )
             highest_tier = (
-                tiers[-1][0] if tiers else "BELUM MENCAPAI T1"
+                tiers[-1][0] if tiers else "BELOW T1"
             )
-            summary.append(f"Modal beli dialokasikan: {_idr(cost)}")
+            summary.append(f"Allocated BUY cost: {_idr(cost)}")
             if pnl >= 0:
-                summary.append(f"Estimasi untung bersih: {_idr(pnl)}")
+                summary.append(f"Estimated net profit: {_idr(pnl)}")
             else:
-                summary.append(f"Estimasi rugi bersih: {_idr(-pnl)}")
+                summary.append(f"Estimated net loss: {_idr(-pnl)}")
             summary.append(
-                "ROI netto estimasi: "
+                "Estimated net ROI: "
                 + _format_number(roi.quantize(Decimal("0.01"))) + "%"
             )
             summary.append(
-                "Target SELL netto: " + " | ".join(
+                "Net SELL targets: " + " | ".join(
                     name + " " + _format_number(threshold) + "%"
                     for name, threshold in zip(
                         ("T1", "T2", "T3"),
@@ -151,35 +151,35 @@ def render_m05_trade_order_card(
                     )
                 )
             )
-            summary.append("Tier ROI tercapai: " + highest_tier)
+            summary.append("ROI tier reached: " + highest_tier)
             # Show both existing BUY qualification requirements separately.
             # T1/T2/T3 being reached does not waive the nominal Rp floor.
             # A protective SELL is still assessed by RISK separately.
             nominal_met = pnl >= policy.min_net_profit_idr
             percentage_met = roi >= policy.min_net_roi_percent
             summary.append(
-                "Syarat RUPIAH: profit minimal "
-                + _idr(policy.min_net_profit_idr) + " NETTO: "
-                + ("LULUS" if nominal_met else "BELUM LULUS")
+                "IDR minimum: net profit at least "
+                + _idr(policy.min_net_profit_idr) + " NET: "
+                + ("PASS" if nominal_met else "FAIL")
             )
             summary.append(
-                "Syarat PERSENTASE: ROI minimal "
+                "ROI minimum: net ROI at least "
                 + _format_number(policy.min_net_roi_percent)
-                + "% NETTO dari modal BUY: "
-                + ("LULUS" if percentage_met else "BELUM LULUS")
+                + "% of BUY cost: "
+                + ("PASS" if percentage_met else "FAIL")
             )
             summary.append(
-                "Kedua syarat profit normal (RUPIAH DAN PERSENTASE): "
-                + ("TERPENUHI" if eligible_normal_profit
-                   else "BELUM TERPENUHI")
+                "Both normal profit requirements (IDR AND ROI): "
+                + ("MET" if eligible_normal_profit
+                   else "NOT MET")
             )
             if not eligible_normal_profit:
                 summary.append(
-                    "SELL protektif tetap dinilai RISK secara terpisah."
+                    "Protective SELL is evaluated separately by RISK."
                 )
     summary.extend((
         f"ClientOrderID: {draft.client_order_id}",
-        "Angka indikatif, nilai nyata ditentukan fill dan settlement.",
-        "PREVIEW SAJA: tombol tidak mengirim BUY/SELL. Trading OFF.",
+        "Indicative figures; actual values depend on fills and settlement.",
+        "PREVIEW ONLY: buttons do not send BUY/SELL orders. Trading OFF.",
     ))
     return "\n".join(summary)
