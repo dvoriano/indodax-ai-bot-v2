@@ -392,6 +392,13 @@ def prepare_ws3_three_role_watch_handoff_readonly(
                     micro.get("trade_activity_observed") is not False
                     or micro.get("orderbook_snapshot_observed") is not False):
                 raise ValueError("M04_WS3_MICROSTRUCTURE_CONFLICT")
+            if prealert_mode and (
+                    row.get("micro_prealert_observation") is not True
+                    or micro.get("status") != "PARTIAL_SOURCE_OBSERVATION"
+                    or not (micro.get("trade_activity_observed") is True or
+                            micro.get("orderbook_snapshot_observed") is True)
+                    or rise > Decimal("8") or rise < Decimal("0.05")):
+                raise ValueError("M04_WS3_PREALERT_MICRO_EVIDENCE_MISSING")
             if micro.get("status") == "PARTIAL_SOURCE_OBSERVATION" and (
                     micro.get("source_malformed") is True
                     or micro.get("trade_source_gap_or_truncation") is True):
