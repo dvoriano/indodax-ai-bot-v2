@@ -203,9 +203,14 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertFalse(report["execution_allowed"])
 
     def test_empty_source_is_not_genuine_ai_reject(self):
-        # Fresh private SQLite with NO original M03 table.
+        # A separate private SQLite without original M03 minute table.
+        # setUp() intentionally DOES create that table in self.path.
+        no_table = self.path.parent / "no-summary-table.sqlite3"
+        with sqlite3.connect(no_table) as db:
+            db.execute("CREATE TABLE unrelated_source_only(x TEXT)")
+        no_table.chmod(0o600)
         absolute = inspect_original_ws3_three_role_handoff_readonly(
-            db_path=self.path, now_epoch=NOW,
+            db_path=no_table, now_epoch=NOW,
         )
         self.assertEqual(absolute["status"], "M04_WS3_SOURCE_TABLE_ABSENT")
         self.assertEqual(absolute["upstream_source_status"],
