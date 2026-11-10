@@ -29,6 +29,7 @@ def row(role, active, enabled, trusted=True):
 
 def units(*, scanner=True, owner=True, timer=False):
     return {"units": [
+        row("m03_scanner", "inactive", "static"),
         row("m03_scanner_timer", "active" if scanner else "inactive",
             "enabled" if scanner else "disabled"),
         row("m05_telegram", "active" if owner else "inactive",
@@ -65,6 +66,16 @@ class OriginalM1007RuntimeReadiness(unittest.TestCase):
                 )
             """)
         os.chmod(self.db, 0o600)
+        runtime = parent / "runtime"
+        runtime.mkdir(mode=0o700)
+        self.m03db = runtime / "decisions.sqlite3"
+        with sqlite3.connect(self.m03db) as con:
+            con.execute("""
+                CREATE TABLE public_ticker_minute_samples (
+                    observed_epoch INTEGER NOT NULL
+                )
+            """)
+        os.chmod(self.m03db, 0o600)
 
     def sent(self, close):
         with sqlite3.connect(self.db) as con:
@@ -73,17 +84,29 @@ class OriginalM1007RuntimeReadiness(unittest.TestCase):
                 (close,),
             )
 
+    def sample(self, observed_epoch):
+        with sqlite3.connect(self.m03db) as con:
+            con.execute(
+                "INSERT INTO public_ticker_minute_samples VALUES (?)",
+                (observed_epoch,),
+            )
+
     def inspect(self, u=None, p=None):
         return inspect_m10_07_original_mainpath_readonly(
             units_report=units() if u is None else u,
             provider_report=provider() if p is None else p,
-            owner_db=self.db, now_epoch=NOW,
+            owner_db=self.db, m03_db=self.m03db, now_epoch=NOW,
         )
 
     def test_real_source_outbox_and_roles_still_nonlive(self):
         self.sent(NOW - 60)
+        self.sample(NOW - 10)
         report = self.inspect()
         self.assertTrue(report["m03_m05_source_runtime_metadata_join_observed"])
+        self.assertTrue(report["m03_original_service_not_failed_metadata_observed"])
+        self.assertTrue(report["m03_original_market_sample_recent_observed"])
+        self.assertEqual(report["m03_original_last_sample_age_seconds"], 10)
+        self.assertFalse(report["m03_source_freshness_is_independent_provenance"])
         self.assertTrue(report["m04_local_models_and_credential_present"])
         self.assertEqual(report["last_sent_public_advisory_age_seconds"], 60)
         self.assertFalse(report["g1_independent_issuer_verified"])
@@ -91,6 +114,65 @@ class OriginalM1007RuntimeReadiness(unittest.TestCase):
         self.assertFalse(report["m10_07_full_acceptance"])
         self.assertFalse(report["execution_allowed"])
         self.assertEqual(report["billable_provider_calls"], 0)
+
+    def test_failed_m03_service_vetoes_join_despite_fresh_sample_and_owner_sent(self):
+        self.sent(NOW - 30)
+        self.sample(NOW - 10)
+        snapshot = units()
+        for item in snapshot["units"]:
+            if item["role"] == "m03_scanner":
+                item["observed_active"] = "failed"
+        report = self.inspect(snapshot)
+        self.assertTrue(report["m03_original_timer_active_metadata_observed"])
+        self.assertFalse(report["m03_original_service_not_failed_metadata_observed"])
+        self.assertTrue(report["m03_original_market_sample_recent_observed"])
+        self.assertTrue(report["m03_m05_recent_sent_public_advisory_observed"])
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
+
+    def test_no_m03_service_metadata_cannot_be_treated_as_healthy(self):
+        self.sent(NOW - 30)
+        self.sample(NOW - 10)
+        snapshot = units()
+        snapshot["units"] = [
+            r for r in snapshot["units"] if r["role"] != "m03_scanner"
+        ]
+        report = self.inspect(snapshot)
+        self.assertFalse(report["m03_original_service_not_failed_metadata_observed"])
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
+
+    def test_m03_without_fresh_sample_does_not_claim_join(self):
+        self.sent(NOW - 30)
+        report = self.inspect()
+        self.assertTrue(report["m03_original_market_db_trusted"])
+        self.assertFalse(report["m03_original_market_sample_recent_observed"])
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
+        self.sample(NOW - 248519)
+        report = self.inspect()
+        self.assertGreater(report["m03_original_last_sample_age_seconds"], 90)
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
+
+    def test_future_clock_replayed_m03_sample_rejected(self):
+        self.sent(NOW - 30)
+        self.sample(NOW + 1)
+        report = self.inspect()
+        self.assertFalse(report["m03_original_market_sample_recent_observed"])
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
+
+    def test_m03_symlink_or_nonprivate_sample_db_rejected(self):
+        self.sent(NOW - 30)
+        self.sample(NOW - 10)
+        alias = self.m03db.with_name("alias.sqlite3")
+        alias.symlink_to(self.m03db)
+        report = inspect_m10_07_original_mainpath_readonly(
+            units_report=units(), provider_report=provider(),
+            owner_db=self.db, m03_db=alias, now_epoch=NOW,
+        )
+        self.assertFalse(report["m03_original_market_db_trusted"])
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
+        self.m03db.chmod(0o644)
+        report = self.inspect()
+        self.assertFalse(report["m03_original_market_db_trusted"])
+        self.assertFalse(report["m03_m05_source_runtime_metadata_join_observed"])
 
     def test_no_actual_sent_receipt_never_joins(self):
         report = self.inspect()
