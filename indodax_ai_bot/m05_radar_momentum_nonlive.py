@@ -534,6 +534,117 @@ def _ws3_observation_priority(row: dict) -> int:
     return 3
 
 
+def inspect_original_m03_ws3_micro_discovery_readonly(
+    *, db_path: Path = DEFAULT_DB, now_epoch: int | None = None,
+    max_pairs: int = 2,
+) -> dict:
+    """Select up to two source-fresh IDR pairs for real WS3 micro CAPTURE.
+
+    Deliberately independent of M05 Telegram alert thresholds. Acquiring
+    real trades/book is the PRECONDITION for evidence-quality assessment.
+    Reads only ORIGINAL M03 SQLite; no new scanner, transport or data writes.
+    When price acceleration is absent, rotate a bounded set of genuinely
+    liquid recently published pairs to gather truthful market evidence.
+    """
+    now = int(time.time()) if now_epoch is None else now_epoch
+    if (type(now) is not int or now <= 0
+            or type(max_pairs) is not int or not 1 <= max_pairs <= 2):
+        raise ValueError("M03_WS3_MICRO_DISCOVERY_ARGUMENT_INVALID")
+    path = Path(db_path).expanduser().resolve()
+    empty = {
+        "status": "M03_MICRO_DISCOVERY_NO_FRESH_LIQUID_SOURCE",
+        "pairs": [], "fresh_liquid_pair_count": 0,
+        "weak_price_rise_pair_count": 0,
+        "selection_is_m05_alert": False,
+        "trade_activity_observed": False,
+        "orderbook_observed": False,
+        "execution_allowed": False,
+    }
+    if not _owned_private_regular(path):
+        return dict(empty, status="M03_MICRO_DISCOVERY_DB_UNTRUSTED")
+    try:
+        with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2) as db:
+            db.execute("PRAGMA query_only=ON")
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='m03_ws_summary_watch_minute'"
+            ).fetchone()
+            if not exists:
+                return dict(empty, status="M03_MICRO_DISCOVERY_SUMMARY_ABSENT")
+            rows = db.execute(
+                "SELECT pair,minute_epoch,exchange_epoch,last_idr,"
+                "rolling_24h_idr,public_offset "
+                "FROM m03_ws_summary_watch_minute "
+                "WHERE minute_epoch BETWEEN ? AND ? "
+                "ORDER BY minute_epoch DESC LIMIT 2000",
+                (now - 360, now),
+            ).fetchall()
+    except (sqlite3.Error, OSError, ValueError):
+        return dict(empty, status="M03_MICRO_DISCOVERY_QUERY_UNAVAILABLE")
+    by_pair = defaultdict(list)
+    for pair, minute, exchange, raw_price, raw_turnover, offset in rows:
+        if (type(pair) is not str or not PAIR_ID.fullmatch(pair)
+                or pair in MAIN_EXCLUDED_PAIRS
+                or type(minute) is not int or minute % 60 != 0
+                or type(exchange) is not int
+                or type(offset) is not int or offset < 0
+                or not -90 <= exchange - minute < 60
+                or exchange > now):
+            continue
+        price = _finite_number(raw_price, positive=True)
+        turnover = _finite_number(raw_turnover, positive=True)
+        if price is None or turnover is None:
+            continue
+        if len(by_pair[pair]) < 5:
+            by_pair[pair].append((minute, exchange, price, turnover, offset))
+    rising, fallback = [], []
+    for pair, samples in by_pair.items():
+        latest = samples[0]
+        if (not 0 <= now - latest[0] <= WS3_MAX_AGE_SECONDS
+                or not 0 <= now - latest[1] <= WS3_MAX_AGE_SECONDS
+                or latest[3] < MIN_TURNOVER_IDR):
+            continue
+        previous = next((
+            old for old in samples[1:]
+            if 60 <= latest[0] - old[0] <= 300
+            and old[1] < latest[1]
+        ), None)
+        rise = (
+            (latest[2] / previous[2] - 1) * 100
+            if previous is not None else None
+        )
+        delta_positive = (
+            latest[3] > previous[3] if previous is not None else False
+        )
+        if rise is not None and 0 < rise <= Decimal("8"):
+            tier = (
+                0 if rise <= Decimal("3") and delta_positive else
+                1 if delta_positive else 2
+            )
+            rising.append((tier, -rise, -latest[3], pair))
+        else:
+            fallback.append((-latest[3], pair))
+    rising.sort()
+    fallback.sort()
+    chosen = [x[3] for x in rising[:max_pairs]]
+    if len(chosen) < max_pairs and fallback:
+        # Rotation is for sampling diversity ONLY, never an entry ranking.
+        rotation_pool = [pair for _, pair in fallback[:20]]
+        offset = (now // 60) % len(rotation_pool)
+        rotated = rotation_pool[offset:] + rotation_pool[:offset]
+        chosen.extend(rotated[:max_pairs-len(chosen)])
+    return dict(empty,
+        status=("M03_MICRO_DISCOVERY_PAIRS_SELECTED"
+                if chosen else empty["status"]),
+        pairs=chosen, fresh_liquid_pair_count=len(rising)+len(fallback),
+        weak_price_rise_pair_count=len(rising),
+        selection_policy=(
+            "SOURCE_FRESH_POSITIVE_PRICE_STEP_FIRST_"
+            "THEN_ROTATING_LIQUID_BASELINE_NO_M05_ALERT_DEPENDENCY"
+        ),
+    )
+
+
 def inspect_original_m03_ws3_watch_readonly(
     *, db_path: Path = DEFAULT_DB, now_epoch: int | None = None,
 ) -> dict:

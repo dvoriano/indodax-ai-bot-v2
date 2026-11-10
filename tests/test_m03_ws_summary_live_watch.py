@@ -339,6 +339,82 @@ class M03WSLiveWatchTests(unittest.TestCase):
             self.assertEqual(rows[0][0:2], (1, 1))
             self.assertEqual(rows[0][2], "99.5025")
 
+
+    def test_m03_micro_runner_discovers_below_telegram_threshold_and_subscribes(self):
+        from indodax_ai_bot.m03_ws_summary_live_watch import (
+            run_m03_ws3_summary_watch_once,
+        )
+        from indodax_ai_bot.m03_ws_microstructure import (
+            trade_channel, book_channel,
+        )
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_watch_readonly,
+        )
+        class SlowClock:
+            def __init__(self):
+                self.value = 0
+            def __call__(self):
+                self.value += 0.1
+                return self.value
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "decisions.sqlite3"
+            with sqlite3.connect(path) as db:
+                db.execute("""
+                    CREATE TABLE m03_ws_summary_watch_minute(
+                        pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                        exchange_epoch INTEGER NOT NULL, last_idr TEXT NOT NULL,
+                        rolling_24h_idr TEXT NOT NULL, public_offset INTEGER NOT NULL,
+                        PRIMARY KEY(pair,minute_epoch))
+                """)
+                for minute, price, offset in (
+                    (NOW-120, "100", 1), (NOW-60, "100.2", 2)):
+                    db.execute(
+                        "INSERT INTO m03_ws_summary_watch_minute "
+                        "VALUES (?,?,?,?,?,?)",
+                        ("uai_idr", minute, minute+40, price, "500000000", offset),
+                    )
+            path.chmod(0o600)
+            no_alert = inspect_original_m03_ws3_watch_readonly(
+                db_path=path, now_epoch=NOW,
+            )
+            self.assertEqual(no_alert["candidates"], [])
+            incoming = frames(NOW, 100.4, offset=200)
+            incoming.extend([
+                {"id": 3, "result": {"recoverable": True, "offset": 40}},
+                {"id": 4, "result": {"recoverable": True, "offset": 50}},
+                {"result": {"channel": trade_channel("uai_idr"),
+                    "data": {"offset": 41, "data": [
+                        ["uaiidr", NOW, 12, "buy", "100", "25000", "250"],
+                    ]}}},
+                {"result": {"channel": book_channel("uai_idr"),
+                    "data": {"offset": 51, "data": {
+                        "pair": "uaiidr",
+                        "bid": [{"price": 100, "idr_volume": "8000000"}],
+                        "ask": [{"price": 101, "idr_volume": "4000000"}],
+                    }}}},
+            ])
+            fake = FakeWS(incoming)
+            output = run_m03_ws3_summary_watch_once(
+                str(path), ws_module=fake, monotonic=SlowClock(),
+                now_fn=lambda: NOW, observe_seconds=3, micro_enabled=True,
+            )
+            self.assertEqual(output["status"], "M03_WS3_SUMMARY_WATCH_ONLY_OK")
+            self.assertEqual(output["microstructure_discovery_pool_count"], 1)
+            self.assertEqual(output["microstructure_selected_pairs"], ["uai_idr"])
+            self.assertEqual(output["microstructure_pairs_selected"], 1)
+            self.assertEqual(output["microstructure_pairs_saved"], 1)
+            self.assertFalse(output["microstructure_selection_is_telegram_alert"])
+            self.assertEqual(fake.sock.sent[2]["params"]["channel"],
+                             trade_channel("uai_idr"))
+            self.assertEqual(fake.sock.sent[3]["params"]["channel"],
+                             book_channel("uai_idr"))
+            with sqlite3.connect(path) as db:
+                row = db.execute(
+                    "SELECT source_buy_count,spread_bps "
+                    "FROM m03_ws_microstructure_watch_minute"
+                ).fetchone()
+            self.assertEqual(row, (1, "99.5025"))
+
     def test_no_micro_optin_preserves_original_single_summary_subscription(self):
         provider = FakeWS(frames(NOW, 100))
         view = collect_ws3_market_summary_once(

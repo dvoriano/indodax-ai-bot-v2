@@ -569,24 +569,31 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
     if type(micro_enabled) is not bool:
         raise M03WSWatchError("M03_WS_MICRO_MODE_INVALID")
     watch_pairs = ()
+    selection = None
     if micro_enabled:
-        # Original M05 watch inspector from the original M03 SQLite selects
-        # up to 2 source-fresh rising pairs. No second scanner or market GET.
+        # Capture source data BEFORE requiring M05 Telegram alert momentum.
+        # Original M03 SQLite, one original WS3 socket, maximum two pairs.
         from .m05_radar_momentum_nonlive import (
-            inspect_original_m03_ws3_watch_readonly,
+            inspect_original_m03_ws3_micro_discovery_readonly,
         )
-        snap = inspect_original_m03_ws3_watch_readonly(
+        selection = inspect_original_m03_ws3_micro_discovery_readonly(
             db_path=Path(db_path), now_epoch=int((now_fn or time.time)()),
         )
-        watch_pairs = tuple(
-            row["pair"] for row in snap.get("candidates", [])[:2]
-        )
+        watch_pairs = tuple(selection["pairs"])
     source = collect_ws3_market_summary_once(
         ws_module=ws_module, monotonic=monotonic,
         observe_seconds=observe_seconds, micro_pairs=watch_pairs,
         epoch_fn=now_fn,
     )
     now = int((now_fn or time.time)())
-    return persist_ws3_summary_watch(
+    report = persist_ws3_summary_watch(
         DecisionJournal(db_path), source, now_epoch=now,
     )
+    if micro_enabled:
+        report["microstructure_discovery_status"] = selection["status"]
+        report["microstructure_discovery_pool_count"] = (
+            selection["fresh_liquid_pair_count"]
+        )
+        report["microstructure_selected_pairs"] = list(watch_pairs)
+        report["microstructure_selection_is_telegram_alert"] = False
+    return report

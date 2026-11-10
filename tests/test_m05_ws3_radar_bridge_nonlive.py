@@ -227,6 +227,53 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertEqual(micro["status"], "NOT_OBSERVED")
         self.assertFalse(micro["trade_activity_observed"])
 
+
+    def test_micro_discovery_uses_weak_positive_price_not_telegram_alert(self):
+        self.add("uai_idr", -2, 100, 500000000, 1)
+        self.add("uai_idr", -1, "100.20", 500050000, 2)
+        self.assertEqual(self.inspect()["candidates"], [])
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_micro_discovery_readonly,
+        )
+        report = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW,
+        )
+        self.assertEqual(report["pairs"], ["uai_idr"])
+        self.assertEqual(report["status"],
+                         "M03_MICRO_DISCOVERY_PAIRS_SELECTED")
+        self.assertEqual(report["weak_price_rise_pair_count"], 1)
+        self.assertFalse(report["selection_is_m05_alert"])
+        self.assertFalse(report["execution_allowed"])
+
+    def test_micro_discovery_rotates_recent_liquid_baseline_without_rise(self):
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_micro_discovery_readonly,
+        )
+        for i in range(3):
+            pair = ("btc", "eth", "sol")[i] + "_idr"
+            self.add(pair, -1, 100, 500000000 - i*10000000, i + 1)
+        report = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW,
+        )
+        self.assertEqual(len(report["pairs"]), 2)
+        self.assertEqual(report["weak_price_rise_pair_count"], 0)
+        self.assertEqual(report["fresh_liquid_pair_count"], 3)
+        self.assertFalse(report["selection_is_m05_alert"])
+
+    def test_micro_discovery_stale_low_turnover_and_manual_assets_excluded(self):
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_micro_discovery_readonly,
+        )
+        self.add("uai_idr", -5, 101, 500000000, 1)
+        self.add("thin_idr", -1, 100, 100000000, 2)
+        self.add("floki_idr", -1, 100, 900000000, 3)
+        self.add("pepe_idr", -1, 100, 900000000, 4)
+        report = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW,
+        )
+        self.assertEqual(report["pairs"], [])
+        self.assertFalse(report["execution_allowed"])
+
     def test_existing_owner_poller_sender_reuses_durable_claim_and_no_buttons(self):
         self.seed()
         api = FakeTelegram()
