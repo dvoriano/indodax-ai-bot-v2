@@ -17,6 +17,7 @@ from uuid import uuid4
 from .config import ConfigurationError, Settings
 from .journal import DecisionJournal, DecisionConflictError
 from .m03_egress_admission import M03SharedEgressAdmission, M03EgressAdmissionError
+from .public_market import IndodaxPublicMarket
 from .m07_order_adapter import M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import M07PreflightBlocked
 from .m06_scoped_https import _owner_private_file
@@ -527,7 +528,11 @@ def main(argv: list[str] | None = None) -> int:
             if environ.get("INDODAX_M03_REQUIRE_EGRESS_ADMISSION") != "YES":
                 raise ConfigurationError("M03_EGRESS_ADMISSION_REQUIRED")
             try:
-                M03SharedEgressAdmission().allowed_local_limit()
+                # Public admission/REST quota is independent of BTC. The
+                # DEEP20-specific BTC prerequisite is checked at dispatch.
+                M03SharedEgressAdmission().allowed_local_limit(
+                    require_btc_source=False,
+                )
             except M03EgressAdmissionError as exc:
                 raise ConfigurationError(str(exc)) from None
         if (args.m07_offline_intent_once or args.m07_offline_unknown_once
@@ -1833,21 +1838,42 @@ def main(argv: list[str] | None = None) -> int:
                 # don't use stale same-minute data or make a catch-up burst.
                 tick_epoch = int(time.time())
                 tick_second = tick_epoch % 60
+                m03_deep_deferred_btc = False
                 if not 5 <= tick_second <= 20:
                     schedule_lane = "SKIPPED_LATE_OR_EARLY_REJECT"
                     outcome = app.run_cycle(uuid4().hex)
                 elif (tick_epoch // 60) % 5 == 0:
-                    schedule_lane = "DEEP20_EVERY_FIVE_MINUTES"
-                    outcome = app.run_cycle(
-                        uuid4().hex, public_scanner=True,
-                        ws_db_path=args.ws_db,
-                        min_volume_idr=max(
-                            bulk_min_volume_idr, Decimal("150000000")),
-                        deep_limit=20,
-                    )
+                    # BTC is mandatory for DEEP20, never for the LIGHT
+                    # observation-only radar. Preserve PUBLIC policy/quotas
+                    # on BOTH paths, and never promote degraded LIGHT to G1.
+                    try:
+                        M03SharedEgressAdmission().allowed_local_limit()
+                    except M03EgressAdmissionError as exc:
+                        if str(exc) != "M03_STANDING_BTC_SOURCE_UNHEALTHY":
+                            raise ConfigurationError(str(exc)) from None
+                        m03_deep_deferred_btc = True
+                        schedule_lane = "LIGHT_ALL_IDR_EVERY_MINUTE"
+                        outcome = app.run_scan_cycle(
+                            uuid4().hex,
+                            market=IndodaxPublicMarket(
+                                m03_light_only_public_watch=True),
+                        )
+                    else:
+                        schedule_lane = "DEEP20_EVERY_FIVE_MINUTES"
+                        outcome = app.run_cycle(
+                            uuid4().hex, public_scanner=True,
+                            ws_db_path=args.ws_db,
+                            min_volume_idr=max(
+                                bulk_min_volume_idr, Decimal("150000000")),
+                            deep_limit=20,
+                        )
                 else:
                     schedule_lane = "LIGHT_ALL_IDR_EVERY_MINUTE"
-                    outcome = app.run_scan_cycle(uuid4().hex)
+                    outcome = app.run_scan_cycle(
+                        uuid4().hex,
+                        market=IndodaxPublicMarket(
+                            m03_light_only_public_watch=True),
+                    )
             elif args.once and args.public_scanner_mainpath:
                 # Exactly ONE original orchestrator and one original scanner.
                 # No new provider, no issuer, no order. Mandatory BTC WS join
@@ -1877,6 +1903,10 @@ def main(argv: list[str] | None = None) -> int:
                 result["live_trading_authorized"] = False
             if args.scheduled_public_scanner_once:
                 result["scheduled_m03_lane"] = schedule_lane
+                if m03_deep_deferred_btc:
+                    result["m03_deep_deferred_reason"] = (
+                        "BTC_PUBLIC_SOURCE_UNHEALTHY_LIGHT_WATCH_ONLY"
+                    )
                 if schedule_lane == "DEEP20_EVERY_FIVE_MINUTES":
                     # One compact record in the EXISTING V2 journal.
                     # Observations are not owner Final decisions, and the
