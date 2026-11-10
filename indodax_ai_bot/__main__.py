@@ -187,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Original V2 M03 scanner + M04 three-role local config + M05 owner outbox READ ONLY; no extra worker, HTTP, orders or GO")
     group.add_argument("--m04-provider-readiness-once", action="store_true",
                        help="M04 original role/model/credential readiness only: no HTTP, provider billing, issuer or orders")
+    group.add_argument("--m04-ws3-micro-readiness-once", action="store_true",
+                       help="Original V2 M03 WS3 -> M04 immutable role slots and G1/paid blocking reasons READ ONLY; no network or journal")
     group.add_argument("--m11-release-risk-offline-once", action="store_true",
                        help="M11-04 V2 risk ceiling/kill-switch review only; no account IO, GO, trade or service update")
     group.add_argument("--m11-risk-halt-shadow-offline-once", action="store_true",
@@ -467,6 +469,28 @@ def main(argv: list[str] | None = None) -> int:
             result["m04_key_file_status"] = key_status
             print(json.dumps({"m10_07_original_mainpath": result},
                              sort_keys=True))
+            return 0
+        if args.m04_ws3_micro_readiness_once:
+            # ORIGINAL CLI -> SAME DailyScalpingOrchestrator static read-only
+            # source inspection. Do not construct a DecisionJournal, socket,
+            # Sumopod adapter, owner sender, second scanner or order.
+            settings.require_m01_safety()
+            local_source, source_type, key_file_status = (
+                _m04_original_provider_scope()
+            )
+            provider_report = inspect_provider_configuration_offline(local_source)
+            report = DailyScalpingOrchestrator.inspect_m04_ws3_micro_role_readiness_readonly(
+                db_path=Path(args.db), now_epoch=int(time.time()),
+                provider_report=provider_report,
+            )
+            report["provider_config_source"] = source_type
+            report["provider_key_file_status"] = key_file_status
+            print(json.dumps({
+                "m04_ws3_micro_role_readiness": report,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
             return 0
         if args.m04_provider_readiness_once:
             # Direct original V2 CLI, BEFORE creating a DecisionJournal or
