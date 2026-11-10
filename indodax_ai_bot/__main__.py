@@ -6,6 +6,7 @@ from dataclasses import asdict
 import json
 import re
 import sqlite3
+import stat
 import sys
 import time
 import os
@@ -245,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
+    group.add_argument("--m03-ws-summary-replay-offline-once", action="store_true",
+                       help="Two supplied PUBLIC WS summary frames in private /tmp JSON; original orchestrator WATCH-only, NO socket or DB writes")
     group.add_argument("--scheduled-public-scanner-once", action="store_true",
                        help="Opt-in ONE minute tick: lightweight all-IDR scan each minute; original 20-deep G1/M04 public reject path every fifth minute, no orders")
     group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
@@ -286,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--health-max-age-seconds", type=int, default=3600,
                         help="Max age 60..86400s for operator last-batch check; does NOT prove service running")
     parser.add_argument("--pair", default="btc_idr", help="ticker_id e.g. btc_idr")
+    parser.add_argument("--m03-ws-summary-replay-file", default=None,
+                        help="Absolute owner-private 0600 /tmp JSON fixture with exactly two offline WS3 frames")
     parser.add_argument(
         "--deep-pair", default=None,
         help="Observe exactly one currently eligible IDR pair through original --deep-once mainpath; diagnostic only",
@@ -352,6 +357,49 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = Settings.from_env()
+
+        if args.m03_ws_summary_replay_file is not None and not args.m03_ws_summary_replay_offline_once:
+            raise ConfigurationError("M03_WS_REPLAY_FILE_REQUIRES_OFFLINE_ACTION")
+        if args.m03_ws_summary_replay_offline_once:
+            # Strictly offline: BEFORE constructing a DecisionJournal, HTTP
+            # adapter, socket, provider, Telegram or market scanner.
+            settings.require_m01_safety()
+            if args.m03_ws_summary_replay_file is None:
+                raise ConfigurationError("M03_WS_REPLAY_FIXTURE_REQUIRED")
+            fixture = Path(args.m03_ws_summary_replay_file)
+            if (not fixture.is_absolute() or fixture.is_symlink()
+                    or not fixture.resolve().is_relative_to(Path("/tmp"))):
+                raise ConfigurationError("M03_WS_REPLAY_FIXTURE_SCOPE_INVALID")
+            try:
+                fd = os.open(fixture, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    info = os.fstat(fd)
+                    if (not stat.S_ISREG(info.st_mode)
+                            or info.st_uid != os.geteuid()
+                            or info.st_mode & 0o077
+                            or not 2 <= info.st_size <= 196608):
+                        raise ConfigurationError("M03_WS_REPLAY_FIXTURE_UNTRUSTED")
+                    with os.fdopen(fd, "rb", closefd=False) as stream:
+                        raw = stream.read(196609)
+                finally:
+                    os.close(fd)
+                data = json.loads(raw)
+            except (OSError, UnicodeError, ValueError) as exc:
+                if isinstance(exc, ConfigurationError):
+                    raise
+                raise ConfigurationError("M03_WS_REPLAY_FIXTURE_UNAVAILABLE") from None
+            if type(data) is not dict or set(data) != {"frames"}:
+                raise ConfigurationError("M03_WS_REPLAY_ENVELOPE_INVALID")
+            review = DailyScalpingOrchestrator.review_m03_ws_summary_fixture_watch_offline(
+                data["frames"], now_epoch=int(time.time()),
+            )
+            print(json.dumps({
+                "m03_ws_summary_offline_review": review,
+                "final_decision": None,
+                "execution_allowed": False,
+                "live_trading_authorized": False,
+            }, sort_keys=True))
+            return 0
 
         if args.public_ws_supervised_continuous:
             # A single owner-controlled, PUBLIC-only systemd service.

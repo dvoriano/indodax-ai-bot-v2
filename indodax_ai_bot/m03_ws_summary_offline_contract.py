@@ -27,7 +27,10 @@ def _decimal(raw, *, positive: bool) -> str:
         n = Decimal(str(raw))
     except (ValueError, InvalidOperation):
         raise MarketSummaryContractError("WS_SUMMARY_NUMBER_INVALID") from None
-    if not n.is_finite() or (n <= 0 if positive else n < 0):
+    if (not n.is_finite() or (n <= 0 if positive else n < 0)
+            or len(n.as_tuple().digits) > 48
+            or not -30 <= n.adjusted() <= 30):
+        # Untrusted decimal exponents must not expand into gigabyte strings.
         raise MarketSummaryContractError("WS_SUMMARY_NUMBER_INVALID")
     return format(n, "f")
 
@@ -100,4 +103,117 @@ def normalize_documented_market_summary_offline(payload: dict) -> dict:
         "not_authorized_for_g1_or_ai": True,
         "orders_sent": 0,
         "network_requests": 0,
+    }
+
+def review_documented_market_summary_sequence_offline(
+    frames: object, *, now_epoch: int,
+    excluded_pairs: frozenset[str] = frozenset(),
+    max_candidates: int = 30,
+) -> dict:
+    """Compare exactly two supplied WS3 summary fixtures for WATCH research.
+
+    No WS subscription, REST fallback, persistence, trade tape, bid/ask,
+    true minute turnover, G1 receipt, AI provider, Telegram or execution.
+    Offset growth only rejects obvious replay; it does NOT prove no gaps.
+    An exchange timestamp only describes a supplied untrusted fixture.
+    """
+    if (type(now_epoch) is not int or now_epoch <= 0
+            or type(max_candidates) is not int
+            or not 20 <= max_candidates <= 40
+            or not isinstance(excluded_pairs, frozenset)
+            or any(type(p) is not str for p in excluded_pairs)):
+        raise MarketSummaryContractError("WS_SUMMARY_REVIEW_OPTIONS_INVALID")
+    if type(frames) is not list or len(frames) != 2:
+        raise MarketSummaryContractError("WS_SUMMARY_REVIEW_TWO_FRAMES_REQUIRED")
+    first = normalize_documented_market_summary_offline(frames[0])
+    second = normalize_documented_market_summary_offline(frames[1])
+    previous_offset = first["offset"]
+    latest_offset = second["offset"]
+    if latest_offset <= previous_offset:
+        raise MarketSummaryContractError("WS_SUMMARY_REPLAY_OR_OFFSET_REWIND")
+    before = {row["pair"]: row for row in first["samples"]}
+    candidates = []
+    skipped = {
+        "no_previous_pair": 0,
+        "excluded_pair": 0,
+        "stale_or_future_exchange_time": 0,
+        "pair_time_gap_or_replay": 0,
+        "below_rolling_turnover_floor": 0,
+        "nonpositive_observed_price_change": 0,
+    }
+    for row in second["samples"]:
+        pair = row["pair"]
+        if pair in excluded_pairs:
+            skipped["excluded_pair"] += 1
+            continue
+        old = before.get(pair)
+        if old is None:
+            skipped["no_previous_pair"] += 1
+            continue
+        stamp = row["observed_exchange_epoch"]
+        prev_stamp = old["observed_exchange_epoch"]
+        if not 0 <= now_epoch - stamp <= 90:
+            # Conservative: even +1s future timestamps are not trustworthy
+            # for this offline candidate comparison.
+            skipped["stale_or_future_exchange_time"] += 1
+            continue
+        if not 0 < stamp - prev_stamp <= 300:
+            skipped["pair_time_gap_or_replay"] += 1
+            continue
+        turnover = Decimal(row["volume_24h_idr"])
+        if turnover < Decimal("150000000"):
+            skipped["below_rolling_turnover_floor"] += 1
+            continue
+        first_last = Decimal(old["last_idr"])
+        last = Decimal(row["last_idr"])
+        if last <= first_last:
+            skipped["nonpositive_observed_price_change"] += 1
+            continue
+        pct = (last - first_last) * Decimal(100) / first_last
+        rolling_delta = turnover - Decimal(old["volume_24h_idr"])
+        candidates.append({
+            "pair": pair,
+            "earlier_exchange_epoch": prev_stamp,
+            "later_exchange_epoch": stamp,
+            "observed_seconds": stamp - prev_stamp,
+            "price_change_percent_between_two_samples": format(pct, "f"),
+            "rolling_24h_turnover_idr": format(turnover, "f"),
+            "change_in_rolling_24h_turnover_idr": format(rolling_delta, "f"),
+            "actual_minute_buy_sell_flow_verified": False,
+            "bid_ask_spread_verified": False,
+            "trade_authorized": False,
+        })
+    candidates.sort(key=lambda r: (
+        -Decimal(r["price_change_percent_between_two_samples"]),
+        -Decimal(r["change_in_rolling_24h_turnover_idr"]),
+        -Decimal(r["rolling_24h_turnover_idr"]),
+        r["pair"],
+    ))
+    return {
+        "status": "OFFLINE_WS_SUMMARY_M03_WATCH_RESEARCH_UNATTESTED",
+        "source": "INDODAX_WS3_MARKET_SUMMARY_24H_OFFLINE_FIXTURES",
+        "channel": _CHANNEL,
+        "first_offset": previous_offset,
+        "last_offset": latest_offset,
+        "offset_increased_without_sequence_proof": True,
+        "frame_gap_completeness_verified": False,
+        "first_frame_pairs": first["pairs_parsed"],
+        "last_frame_pairs": second["pairs_parsed"],
+        "qualified_watch_candidate_count": min(len(candidates), max_candidates),
+        "candidate_research_rows": candidates[:max_candidates],
+        "skipped_pair_counts": skipped,
+        "watch_only_not_buy_signal": True,
+        "rolling_24h_turnover_delta_is_not_minute_traded_volume": True,
+        "missing_bid_ask_spread_depth_and_trade_tape": True,
+        "no_verified_closed_1m_5m_15m_candles": True,
+        "untrusted_fixture_timestamps_not_live_source": True,
+        "not_authorized_for_original_rest_scanner": True,
+        "g1_receipt_issuance_allowed": False,
+        "g2_provider_call_allowed": False,
+        "owner_final_decision": None,
+        "execution_allowed": False,
+        "orders_sent": 0,
+        "telegram_messages_sent": 0,
+        "network_requests": 0,
+        "sqlite_writes": 0,
     }
