@@ -122,9 +122,9 @@ class M07RuntimeOwnerCardTests(unittest.TestCase):
         self.assertFalse(out["execution_allowed"])
         card = self.owner.claim_manual_trade_preview_delivery(now_epoch=NOW)
         self.assertIsNotNone(card)
-        self.assertIn("Nominal pembelian (estimasi): Rp", card["message_text"])
-        self.assertIn("Token diperoleh (estimasi)", card["message_text"])
-        self.assertIn("SIMULASI TOMBOL, NO ORDER", card["message_text"])
+        self.assertIn("Estimated BUY amount: Rp", card["message_text"])
+        self.assertIn("Estimated tokens received", card["message_text"])
+        self.assertIn("BUTTON SIMULATION, NO ORDER", card["message_text"])
         self.assertEqual(
             self.journal.m07_offline_intent_summary()["manual_sender_nonlive_holds"], 0,
         )
