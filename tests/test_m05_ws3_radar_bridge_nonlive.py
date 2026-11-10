@@ -119,6 +119,40 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
                  exchange_offset_seconds=-91)
         self.assertEqual(self.inspect()["candidates"], [])
 
+
+    def test_three_snapshot_acceleration_is_ranked_before_one_step_pump(self):
+        for minute, price, vol in (
+            (-3, "100", "500000000"),
+            (-2, "100.1", "500020000"),
+            (-1, "100.5", "500150000"),
+        ):
+            self.add("early_idr", minute, price, vol, minute + 30)
+        self.add("pump_idr", -2, "100", "500000000", 20)
+        self.add("pump_idr", -1, "110", "500250000", 21)
+        candidates = self.inspect()["candidates"]
+        self.assertEqual(candidates[0]["pair"], "early_idr")
+        self.assertEqual(candidates[0]["momentum_phase"],
+                         "EARLY_ACCELERATION_WATCH")
+        self.assertEqual(candidates[1]["momentum_phase"],
+                         "EXTENDED_MOVE_REVIEW")
+        self.assertIsNone(candidates[0]["actual_1m_executed_volume_idr"])
+        self.assertIsNone(candidates[0]["orderbook_spread_bps"])
+        self.assertIsNone(candidates[0]["three_ai_role_responses"])
+
+    def test_negative_rolling_turnover_never_becomes_buy_pressure(self):
+        self.add("uai_idr", -2, 100, 500000000, 1)
+        self.add("uai_idr", -1, 101, 499900000, 2)
+        row = self.inspect()["candidates"][0]
+        self.assertFalse(row["rolling_24h_delta_positive"])
+        self.assertEqual(row["momentum_phase"],
+                         "PRICE_RISE_ACTIVITY_UNCONFIRMED")
+        self.assertIsNone(row["trade_buy_sell_counts"])
+
+    def test_weak_single_step_not_called_early_ramp(self):
+        self.add("uai_idr", -2, 100, 500000000, 1)
+        self.add("uai_idr", -1, "100.3", 500050000, 2)
+        self.assertEqual(self.inspect()["candidates"], [])
+
     def test_existing_owner_poller_sender_reuses_durable_claim_and_no_buttons(self):
         self.seed()
         api = FakeTelegram()
