@@ -376,6 +376,140 @@ def inspect_original_m03_radar_readonly(
     return result
 
 
+
+# An explicit source-isolated WS3 radar. It does NOT adapt WS3 data into
+# public_ticker_minute_samples: WS3 has no verified spread or 1m trade volume.
+WS3_MAX_AGE_SECONDS = 150
+WS3_MIN_PRICE_RISE_PCT = Decimal("0.5")
+
+
+def inspect_original_m03_ws3_watch_readonly(
+    *, db_path: Path = DEFAULT_DB, now_epoch: int | None = None,
+) -> dict:
+    """Read the existing original M03 WS3 minute archive, without network I/O.
+
+    WATCH-only, since summary-24h updates cannot establish a real 1m candle,
+    aggressor BUY/SELL, depth, complete universe, or an independent G1 source.
+    """
+    now = int(time.time()) if now_epoch is None else now_epoch
+    if type(now) is not int or now <= 0:
+        raise ValueError("M05_WS3_RADAR_INVALID_CLOCK")
+    path = Path(db_path)
+    if not _owned_private_regular(path):
+        return {"status": "M05_WS3_SOURCE_UNTRUSTED", "candidates": []}
+    try:
+        with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2) as db:
+            db.execute("PRAGMA query_only=ON")
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='m03_ws_summary_watch_minute'"
+            ).fetchone()
+            if not exists:
+                return {"status": "M05_WS3_SOURCE_ABSENT", "candidates": []}
+            rows = db.execute(
+                "SELECT pair,minute_epoch,exchange_epoch,last_idr,"
+                "rolling_24h_idr,public_offset "
+                "FROM m03_ws_summary_watch_minute "
+                "WHERE minute_epoch BETWEEN ? AND ? "
+                "ORDER BY minute_epoch DESC LIMIT 2000",
+                (now - 420, now),
+            ).fetchall()
+    except (sqlite3.Error, OSError, ValueError):
+        return {"status": "M05_WS3_SOURCE_QUERY_UNAVAILABLE",
+                "candidates": []}
+
+    by_pair = defaultdict(list)
+    for pair, minute, exchange, raw_price, raw_turnover, offset in rows:
+        if (type(pair) is not str or not PAIR_ID.fullmatch(pair)
+                or pair in MAIN_EXCLUDED_PAIRS
+                or type(minute) is not int or minute % 60 != 0
+                or type(exchange) is not int or type(offset) is not int
+                or offset < 0 or not 0 <= minute - exchange <= 90
+                or exchange > now):
+            continue
+        price = _finite_number(raw_price, positive=True)
+        turnover = _finite_number(raw_turnover, positive=True)
+        if price is None or turnover is None:
+            continue
+        by_pair[pair].append((minute, exchange, price, turnover, offset))
+
+    candidates = []
+    for pair, samples in by_pair.items():
+        latest = samples[0]
+        if (not 0 <= now - latest[0] <= WS3_MAX_AGE_SECONDS
+                or not 0 <= now - latest[1] <= WS3_MAX_AGE_SECONDS
+                or latest[3] < MIN_TURNOVER_IDR):
+            continue
+        reference = next((
+            old for old in samples[1:]
+            if 60 <= latest[0] - old[0] <= 300
+            and old[1] < latest[1]
+        ), None)
+        if reference is None:
+            continue
+        rise = (latest[2] / reference[2] - 1) * 100
+        if (not rise.is_finite() or rise < WS3_MIN_PRICE_RISE_PCT
+                or rise > Decimal("500")):
+            continue
+        delta = latest[3] - reference[3]
+        candidates.append({
+            "pair": pair,
+            "reference_epoch": reference[1],
+            "observed_epoch": latest[1],
+            "source_elapsed_seconds": latest[1] - reference[1],
+            "reference_price_idr": format(reference[2], "f"),
+            "latest_price_idr": format(latest[2], "f"),
+            "observed_rise_pct": format(rise, ".4f"),
+            "volume_24h_idr": format(latest[3], "f"),
+            "volume_24h_net_change_idr": format(delta, "f"),
+            "source": "INDODAX_PUBLIC_WS3_SUMMARY_24H",
+            "closed_1m_candle_verified": False,
+            "trade_direction_verified": False,
+            "bid_ask_spread_verified": False,
+            "g1_verified": False,
+            "execution_allowed": False,
+        })
+    candidates.sort(key=lambda x: (
+        -Decimal(x["observed_rise_pct"]),
+        -Decimal(x["volume_24h_net_change_idr"]),
+        x["pair"],
+    ))
+    return {
+        "status": "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED",
+        "candidates": candidates[:5],
+        "source_authenticated_for_g1": False,
+        "three_ai_role_responses_observed": False,
+        "owner_order_specific_final_verified": False,
+        "execution_allowed": False,
+    }
+
+
+def format_owner_ws3_radar_compact(candidate: dict) -> str:
+    """English-only owner notice, explicitly different from REST ticker radar."""
+    wib = ZoneInfo("Asia/Jakarta")
+    first = datetime.fromtimestamp(
+        candidate["reference_epoch"], wib
+    ).strftime("%H:%M:%S")
+    last = datetime.fromtimestamp(
+        candidate["observed_epoch"], wib
+    ).strftime("%H:%M:%S")
+    pair = candidate["pair"].upper().replace("_IDR", "/IDR")
+    turnover_delta = Decimal(candidate["volume_24h_net_change_idr"])
+    return "\n".join((
+        f"📡 WS3 WATCH | {pair} · PRICE RISING",
+        f"🔺 Price samples {first} → {last}: {_pct(candidate['observed_rise_pct'])}",
+        f"💰 {_idr_price(candidate['reference_price_idr'])}"
+        f" → {_idr_price(candidate['latest_price_idr'])}",
+        "📊 Rolling 24h turnover: " + _idr_compact(candidate["volume_24h_idr"]),
+        "Δ rolling 24h turnover: "
+        + ("+" if turnover_delta > 0 else "")
+        + _idr_compact(candidate["volume_24h_net_change_idr"]),
+        "⚠️ Sample comparison only. NOT a closed 1m candle or 1m traded volume.",
+        "⚠️ BUY/SELL direction, spread, depth, maintenance, G1 and AI UNVERIFIED.",
+        "🔎 PUBLIC WATCH ONLY. NOT A BUY RECOMMENDATION. NO ORDER BUTTONS.",
+    ))
+
+
 def _claim_once(ledger, pair: str, observed_epoch: int,
                 now_epoch: int) -> bool:
     """At-most-once owner notice attempt; no replay on Telegram uncertainty."""
@@ -517,7 +651,7 @@ def format_owner_radar_compact(candidate: dict) -> str:
 
 def send_one_owner_radar_momentum_nonlive(
     *, api, ledger, now_epoch: int | None = None,
-    db_path: Path = DEFAULT_DB,
+    db_path: Path = DEFAULT_DB, ws3_enabled: bool = False,
 ) -> dict:
     """Existing M05 private Bot API sender, no callback buttons, no order."""
     now = int(time.time()) if now_epoch is None else now_epoch
@@ -527,10 +661,22 @@ def send_one_owner_radar_momentum_nonlive(
     if not isinstance(ledger, OwnerDecisionLedger):
         return {"status": "M05_RADAR_OWNER_LEDGER_UNVERIFIED",
                 "messages_sent": 0}
+    if type(ws3_enabled) is not bool:
+        raise ValueError("M05_WS3_RADAR_MODE_INVALID")
     snap = inspect_original_m03_radar_readonly(
         db_path=db_path, now_epoch=now,
     )
-    if snap["status"] != "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED":
+    # Explicit opt-in ONLY: use WS3 when the original REST radar has no
+    # eligible current WATCH, never claim REST/G1 recovery or merge schemas.
+    if ws3_enabled and not snap.get("candidates"):
+        ws3 = inspect_original_m03_ws3_watch_readonly(
+            db_path=db_path, now_epoch=now,
+        )
+        if ws3["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED":
+            snap = ws3
+    if snap["status"] not in (
+            "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
+            "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"):
         return {"status": "M05_RADAR_ORIGINAL_SOURCE_UNAVAILABLE",
                 "messages_sent": 0}
     if not snap["candidates"]:
@@ -541,7 +687,11 @@ def send_one_owner_radar_momentum_nonlive(
             ledger, candidate["pair"], candidate["observed_epoch"], now
         ):
             continue
-        message = format_owner_radar_compact(candidate)
+        message = (
+            format_owner_ws3_radar_compact(candidate)
+            if snap["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"
+            else format_owner_radar_compact(candidate)
+        )
         # Claim is durable BEFORE send; uncertainty must never replay it.
         try:
             msg = api.call("sendMessage", {
