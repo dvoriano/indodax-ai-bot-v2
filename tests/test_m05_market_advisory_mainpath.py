@@ -197,7 +197,7 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertIn(" WIB\n", fake.sent["text"])
         self.assertIn("Bid Rp1400 | Ask Rp1404", fake.sent["text"])
         self.assertIn("Spread 28.49 bps", fake.sent["text"])
-        self.assertIn("Skor scanner 83/100 | Volume 1m 2.40x", fake.sent["text"])
+        self.assertIn("Scanner score 83/100 | Volume 1m 2.40x", fake.sent["text"])
         self.assertIn("NOT an entry price", fake.sent["text"])
         self.assertIn("not BUY/SELL", fake.sent["text"])
         keyboard = fake.sent["reply_markup"]["inline_keyboard"][0]
