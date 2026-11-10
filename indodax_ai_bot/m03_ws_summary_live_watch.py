@@ -108,8 +108,10 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 rows = raw_data.get("data") if isinstance(raw_data, dict) else None
                 if not isinstance(rows, list) or len(rows) > 800:
                     raise M03WSWatchError("M03_WS_WATCH_SOURCE_SCHEMA_INVALID")
+                # Do not silently discard malformed IDR records.
+                # The parser must reject their shape rather than dropping them.
                 idr_rows = [row for row in rows
-                            if isinstance(row, list) and len(row) == 8
+                            if isinstance(row, list) and row
                             and type(row[0]) is str and row[0].endswith("idr")]
                 if not idr_rows:
                     continue
@@ -129,9 +131,17 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     raise M03WSWatchError("M03_WS_WATCH_FRAME_LIMIT")
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
-                    if (old is None or row["observed_exchange_epoch"] >
-                            old["observed_exchange_epoch"]):
-                        observations[row["pair"]] = row
+                    # Multiple publications can share an exchange second.
+                    # Use strictly newer frame offset to update tied timestamps.
+                    if (old is None
+                            or row["observed_exchange_epoch"] >
+                            old["observed_exchange_epoch"]
+                            or (row["observed_exchange_epoch"] ==
+                                old["observed_exchange_epoch"]
+                                and offset > old["source_public_offset"])):
+                        observations[row["pair"]] = dict(
+                            row, source_public_offset=offset,
+                        )
         if phase != "OBSERVE":
             raise M03WSWatchError("M03_WS_WATCH_HANDSHAKE_TIMEOUT")
         if not observations:
@@ -190,10 +200,15 @@ def persist_ws3_summary_watch(journal: DecisionJournal, snapshot: dict,
         if (not price.is_finite() or price <= 0 or
                 not volume.is_finite() or volume < _MIN_TURNOVER_IDR):
             continue
-        fresh.append((pair, stamp, price, volume))
+        source_offset = row.get("source_public_offset")
+        if type(source_offset) is not int or source_offset < 0:
+            continue
+        fresh.append((pair, stamp, price, volume, source_offset))
     if not fresh:
         raise M03WSWatchError("M03_WS_WATCH_NO_FRESH_LIQUID_IDR_PAIR")
     candidates = []
+    comparable_samples = 0
+    newly_stored_samples = 0
     with journal._connect() as db:
         db.execute("BEGIN IMMEDIATE")
         db.execute(
@@ -205,7 +220,7 @@ def persist_ws3_summary_watch(journal: DecisionJournal, snapshot: dict,
         )
         db.execute("DELETE FROM m03_ws_summary_watch_minute WHERE minute_epoch < ?",
                    (minute-7200,))
-        for pair, stamp, price, volume in fresh:
+        for pair, stamp, price, volume, source_offset in fresh:
             prev = db.execute(
                 "SELECT minute_epoch,exchange_epoch,last_idr,rolling_24h_idr "
                 "FROM m03_ws_summary_watch_minute WHERE pair=? "
@@ -213,15 +228,20 @@ def persist_ws3_summary_watch(journal: DecisionJournal, snapshot: dict,
                 "ORDER BY minute_epoch DESC LIMIT 1",
                 (pair, minute-300, minute-60),
             ).fetchone()
-            db.execute(
+            inserted = db.execute(
                 "INSERT OR IGNORE INTO m03_ws_summary_watch_minute "
                 "(pair,minute_epoch,exchange_epoch,last_idr,rolling_24h_idr,public_offset) "
                 "VALUES(?,?,?,?,?,?)",
-                (pair,minute,stamp,str(price),str(volume),
-                 snapshot["last_public_offset"]),
+                (pair,minute,stamp,str(price),str(volume),source_offset),
             )
+            # The earliest observation is immutable; duplicate deliveries
+            # must not create another WATCH candidate for the same minute.
+            if inserted.rowcount != 1:
+                continue
+            newly_stored_samples += 1
             if prev is None or stamp <= prev[1]:
                 continue
+            comparable_samples += 1
             old_price = Decimal(prev[2])
             old_volume = Decimal(prev[3])
             if price <= old_price or old_price <= 0:
@@ -253,9 +273,17 @@ def persist_ws3_summary_watch(journal: DecisionJournal, snapshot: dict,
         "unique_idr_pairs_in_this_bounded_window": len(snapshot["pairs"]),
         "fresh_liquid_main_idr_pairs": len(fresh),
         "watch_candidate_count": len(candidates),
+        "newly_stored_minute_samples": newly_stored_samples,
+        "prior_source_samples_compared": comparable_samples,
+        "candidate_baseline_status": (
+            "WARMUP_NO_PRIOR_COMPARABLE_PAIR"
+            if comparable_samples == 0 else "PRIOR_SAMPLES_COMPARED"
+        ),
         "watch_candidates_top30": candidates[:30],
         "original_rest_all_idr_scanner_recovered": False,
-        "original_rest_http403_unresolved": True,
+        # This WS-only call never probed REST; avoid inferring today's HTTP
+        # status from previous separate failures.
+        "original_rest_http_status": "NOT_CHECKED_BY_WS3",
         "rolling_24h_delta_is_not_1m_traded_volume": True,
         "full_pair_universe_verified": False,
         "best_bid_ask_spread_depth_verified": False,
