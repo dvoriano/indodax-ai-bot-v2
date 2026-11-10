@@ -319,5 +319,104 @@ class StandingPublicOnlyTests(unittest.TestCase):
             self.m03(NOW)
 
 
+    def test_light_scope_preserves_public_consent_but_not_btc_hold(self):
+        self.issue()
+        self._write(self.hold_path, {"scope": "BTC_PUBLIC_MONITOR_ONLY"})
+        gate = M03SharedEgressAdmission(
+            self.policy_path, clock=lambda: NOW,
+            btc_runtime_dir=self.rt,
+        )
+        self.assertEqual(
+            gate.allowed_local_limit(require_btc_source=False), 90
+        )
+        with self.assertRaisesRegex(
+            M03EgressAdmissionError, "M03_STANDING_BTC_SOURCE_UNHEALTHY"
+        ):
+            gate.allowed_local_limit()
+        with self.assertRaisesRegex(
+            M03EgressAdmissionError, "M03_EGRESS_SOURCE_SCOPE_INVALID"
+        ):
+            gate.allowed_local_limit(require_btc_source=0)
+
+    def test_light_scope_still_rejects_corrupt_owner_policy(self):
+        self.issue()
+        gate = M03SharedEgressAdmission(
+            self.policy_path, clock=lambda: NOW,
+            btc_runtime_dir=self.rt,
+        )
+        valid = json.loads(self.policy_path.read_text())
+        valid["owner_approved_public_only"] = False
+        self._write(self.policy_path, valid)
+        with self.assertRaisesRegex(
+            M03EgressAdmissionError, "M03_EGRESS_UNACCOUNTED_PEERS"
+        ):
+            gate.allowed_local_limit(require_btc_source=False)
+
+    def test_light_real_scanner_uses_original_three_public_gets_during_btc_hold(self):
+        from indodax_ai_bot.public_market import IndodaxPublicMarket
+        from indodax_ai_bot.scanner import DailyPairScanner
+
+        self.issue()
+        self._write(self.hold_path, {"scope": "BTC_PUBLIC_MONITOR_ONLY"})
+        gate = M03SharedEgressAdmission(
+            self.policy_path, clock=lambda: NOW,
+            btc_runtime_dir=self.rt,
+        )
+        seen_gets, seen_caps = [], []
+
+        class FakeBudget:
+            def reserve(self, *, limit_override=None):
+                seen_caps.append(limit_override)
+
+        payloads = {
+            "/api/pairs": [{
+                "id": "btcidr", "ticker_id": "btc_idr",
+                "symbol": "BTCIDR", "base_currency": "idr",
+                "traded_currency": "btc",
+            }],
+            "/api/server_time": {"server_time": NOW * 1000},
+            "/api/ticker_all": {"tickers": {
+                "btc_idr": {
+                    "server_time": NOW, "buy": "100", "sell": "101",
+                    "last": "100", "low": "95", "high": "105",
+                    "vol_idr": "200000000",
+                },
+            }},
+        }
+
+        def fake_fetch(path):
+            seen_gets.append(path)
+            return payloads[path]
+
+        with patch.dict(os.environ, {
+            "INDODAX_M03_REQUIRE_EGRESS_ADMISSION": "YES",
+        }), patch(
+            "indodax_ai_bot.public_market.M03SharedEgressAdmission",
+            return_value=gate,
+        ):
+            light = IndodaxPublicMarket(
+                fetch=fake_fetch, clock=lambda: NOW,
+                rest_budget=FakeBudget(),
+                m03_light_only_public_watch=True,
+            )
+            ranking = DailyPairScanner(light).scan()
+            self.assertEqual(ranking.shortlist[0].pair, "btc_idr")
+            self.assertFalse(ranking.g1_verified)
+            self.assertEqual(seen_gets, [
+                "/api/pairs", "/api/server_time", "/api/ticker_all",
+            ])
+            self.assertEqual(seen_caps, [90, 90, 90])
+            deep = IndodaxPublicMarket(
+                fetch=fake_fetch, clock=lambda: NOW,
+                rest_budget=FakeBudget(),
+            )
+            with self.assertRaisesRegex(
+                Exception, "M03_STANDING_BTC_SOURCE_UNHEALTHY"
+            ):
+                deep._get("/api/pairs")
+            self.assertEqual(len(seen_gets), 3)
+
+
+
 if __name__ == "__main__":
     unittest.main()
