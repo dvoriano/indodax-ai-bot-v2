@@ -412,7 +412,15 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             return _blocked("M04_WS3_INVALID_CANDIDATE_PACKET")
         seen.add(pair)
         packet = {
-            "source_kind": "ORIGINAL_V2_WS3_SUMMARY_WATCH_UNATTESTED",
+            "source_kind": (
+                "ORIGINAL_V2_WS3_MICRO_PREALERT_SOURCE_UNATTESTED"
+                if prealert_mode else
+                "ORIGINAL_V2_WS3_SUMMARY_WATCH_UNATTESTED"
+            ),
+            "telegram_alert_threshold_required": not prealert_mode,
+            "m05_telegram_watch_threshold_met": (
+                row.get("m05_telegram_watch_threshold_met", True)
+            ),
             "pair": pair, "observed_epoch": observed,
             "reference_epoch": reference,
             "price_before_idr": str(before),
@@ -456,9 +464,14 @@ def prepare_ws3_three_role_watch_handoff_readonly(
         ))
     validated.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
     result = _blocked(
-        "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED"
-        if validated else "M04_WS3_HANDOFF_NO_CURRENT_WATCH")
+        ("M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED"
+         if prealert_mode else "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED")
+        if validated else (
+            "M04_WS3_MICRO_PREALERT_NO_CURRENT_SOURCE"
+            if prealert_mode else "M04_WS3_HANDOFF_NO_CURRENT_WATCH"
+        ))
     result["source"] = "EXISTING_ORIGINAL_M03_WS3_DB_ONLY"
+    result["source_is_m05_telegram_alert"] = not prealert_mode
     result["candidates"] = [{
         "pair": pair, "public_evidence": packet,
         "evidence_digest_sha256": digest,
@@ -494,6 +507,7 @@ def prepare_ws3_three_role_watch_handoff_readonly(
     result["three_role_input_slots_prepared"] = len(result["candidates"]) * 3
     result["actual_three_role_ai_calls"] = 0
     result["quality_scored_candidates_before_top2"] = len(validated)
+    result["micro_prealert_source_review"] = prealert_mode
     result["selection_policy"] = (
         "SOURCE_CLEAN_FIRST_QUALITY_SCORE_DESC_MOMENTUM_PHASE_TIEBREAK_"
         "NOT_PREDICTED_ROI_OR_FINAL_AI"
