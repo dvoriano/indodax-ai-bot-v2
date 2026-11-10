@@ -34,6 +34,10 @@ class TwoWindowCutoverOfflineTests(unittest.TestCase):
             b"Environment=INDODAX_ALLOW_LIVE_EXECUTION=NO\n"
             b"Environment=INDODAX_EXECUTION_MODE=DRY_RUN\n")
         self.unit.write_bytes(self.old)
+        # tempfile files inherit the runner's umask (e.g. 0002 => 0664).
+        # A trusted installed user systemd unit must NOT be group-writable.
+        # Fix the OFFLINE fixture, never relax the production owner/mode gate.
+        self.unit.chmod(0o644)
         self.source.write_bytes(self.new)
         self.drop.write_bytes(b"same canonical dropin")
         self.template.write_bytes(self.drop.read_bytes())
@@ -117,6 +121,16 @@ class TwoWindowCutoverOfflineTests(unittest.TestCase):
         self.assertFalse(result["trading_enabled"])
         self.assertEqual(self.commands[-1],
                          ["systemctl", "--user", "restart", m.UNIT_NAME])
+
+    def test_group_writable_original_unit_still_denied(self):
+        # A real 0664 installed file must stay rejected, independent of umask.
+        self.unit.chmod(0o664)
+        with self.assertRaisesRegex(
+            m.CutoverDenied, "M04X_ORIGINAL_UNIT_OWNER_UNTRUSTED"
+        ):
+            m.preflight_readonly()
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.unit.read_bytes(), self.old)
 
     def test_owner_hold_denies_before_service_mutation(self):
         with patch.object(m, "_policy_checks",
