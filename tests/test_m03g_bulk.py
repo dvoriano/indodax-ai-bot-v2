@@ -144,6 +144,68 @@ class M03GBulkPublicTests(unittest.TestCase):
         self.assertEqual(result["same_window"]["provisional_watchlist_preview"], [])
         self.assertFalse(result["execution_allowed"])
 
+    def test_upstream_http_denial_stops_deep20_after_first_pair(self):
+        for reason in (
+            "PUBLIC_REST_HTTP_403_FORBIDDEN",
+            "PUBLIC_REST_HTTP_429_RATE_LIMITED",
+            "PUBLIC_REST_HTTP_5XX_UNAVAILABLE",
+            "PUBLIC_HTTP_OR_JSON_UNAVAILABLE",
+            "PUBLIC_REQUEST_FAILED",
+            "PUBLIC_SHARED_REST_RATE_BUDGET_EXCEEDED",
+            "M03_STANDING_BTC_SOURCE_UNHEALTHY",
+        ):
+            class DeniedMarket(FakeBulkMarket):
+                def observe(self, pair, *, scan_context=None):
+                    self.calls.append(pair)
+                    raise PublicDataError(reason)
+            market = DeniedMarket()
+            with self.subTest(reason=reason), self.assertRaisesRegex(
+                PublicDataError, "BULK_GLOBAL_PUBLIC_SOURCE_FAILURE:"
+            ):
+                bulk_public_deep_scan(market, fake_screen(), limit=20)
+            self.assertEqual(len(market.calls), 1)
+            self.assertEqual(market.calls[0], "btc_idr")
+
+    def test_malformed_single_pair_still_allows_bounded_cohort_diagnostic(self):
+        class OneBadPairMarket(FakeBulkMarket):
+            def observe(self, pair, *, scan_context=None):
+                self.calls.append((pair, scan_context))
+                if pair == "token003_idr":
+                    raise PublicDataError("INVALID_CANDLE_TIME")
+                return observation(pair)
+        market = OneBadPairMarket()
+        report = bulk_public_deep_scan(market, fake_screen(), limit=20)
+        self.assertEqual(len(market.calls), 20)
+        self.assertEqual(report["candidate_rejected_count"], 1)
+        self.assertEqual(report["same_window"]["status"],
+                         "REJECT_INCOMPLETE_OR_EXPIRED_BULK_COVERAGE")
+        self.assertFalse(report["trade_authorized"])
+
+    def test_original_bulk_orchestrator_never_probes_more_pairs_after_http403(self):
+        from indodax_ai_bot.config import Settings
+        from indodax_ai_bot.journal import DecisionJournal
+        from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
+        class OneDeniedMarket(FakeBulkMarket):
+            def observe(self, pair, *, scan_context=None):
+                self.calls.append(pair)
+                raise PublicDataError("PUBLIC_REST_HTTP_403_FORBIDDEN")
+        with TemporaryDirectory() as td:
+            market = OneDeniedMarket()
+            app = DailyScalpingOrchestrator(
+                Settings.from_env(), DecisionJournal(Path(td) / "m03.sqlite3"))
+            with patch.object(app, "_scan_with_early_momentum",
+                              return_value=fake_screen()):
+                outcome = app.run_bulk_deep_cycle(
+                    "M03_DEEP20_DENIAL_OFFLINE", market=market,
+                    deep_limit=20)
+            self.assertEqual(market.calls, ["btc_idr"])
+            self.assertEqual(
+                outcome.reason,
+                "PUBLIC_BULK_BLOCKED:BULK_GLOBAL_PUBLIC_SOURCE_FAILURE:"
+                "PUBLIC_REST_HTTP_403_FORBIDDEN")
+            self.assertIsNone(outcome.bulk)
+            self.assertFalse(outcome.execution_allowed)
+
     def test_invalid_bulk_count_and_missing_context_fail_closed(self):
         scan = fake_screen(40)
         m = FakeBulkMarket()
