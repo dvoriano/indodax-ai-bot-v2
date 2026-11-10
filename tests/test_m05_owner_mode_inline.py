@@ -261,7 +261,11 @@ class OriginalM05OwnerModeInlineTests(unittest.TestCase):
         self.assertNotIn("reply_markup", self.sent[-1])
         self.command(update_id=6, text="/kontrol manual")
         self.assertEqual(self.mode(), "MANUAL")
-        status = self.command(update_id=7, text="/status")
+        self.command(update_id=7, text="/control auto")
+        self.assertEqual(self.mode(), "AUTO")
+        self.command(update_id=8, text="/control manual")
+        self.assertEqual(self.mode(), "MANUAL")
+        status = self.command(update_id=9, text="/status")
         self.assertFalse(status["execution_allowed"])
         self.assertNotIn("reply_markup", self.sent[-1])
 
