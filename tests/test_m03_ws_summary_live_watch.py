@@ -120,6 +120,14 @@ class M03WSLiveWatchTests(unittest.TestCase):
         self.assertNotIn("--scheduled-public-scanner-once", staged)
         self.assertNotIn("https://indodax.com/api", staged)
         self.assertIn("OnCalendar=", timer)
+        override = (root / "deploy" /
+                    "indodax-v2-m03-mainpath.ws3-watch.override.conf").read_text()
+        self.assertIn("[Service]", override)
+        self.assertIn("ExecStart=\nExecStart=/usr/bin/flock", override)
+        self.assertIn("--m03-ws-summary-watch-once", override)
+        self.assertIn("--m03-ws-observe-seconds 40", override)
+        self.assertIn("runtime/decisions.sqlite3", override)
+        self.assertNotIn("--scheduled-public-scanner-once", override)
 
     def test_official_public_summary_is_watch_only_and_archived_separately(self):
         before = self.capture(frames(NOW, 100))
