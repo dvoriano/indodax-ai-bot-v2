@@ -656,9 +656,15 @@ def inspect_original_m03_ws3_watch_readonly(
     now = int(time.time()) if now_epoch is None else now_epoch
     if type(now) is not int or now <= 0:
         raise ValueError("M05_WS3_RADAR_INVALID_CLOCK")
-    path = Path(db_path)
+    # Accept relative paths from operator/read-only CLI callers, but do
+    # not dereference the final file symlink before ownership validation.
+    path = Path(db_path).expanduser()
     if not _owned_private_regular(path):
         return {"status": "M05_WS3_SOURCE_UNTRUSTED", "candidates": []}
+    # sqlite URI paths must be absolute; .as_uri() raises ValueError on
+    # relative paths. .absolute() is intentionally not .resolve() to keep
+    # final-component symlink rejection meaningful.
+    path = path.absolute()
     try:
         with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2) as db:
             db.execute("PRAGMA query_only=ON")
