@@ -72,8 +72,8 @@ class M10TimerAwareOriginalTests(unittest.TestCase):
         self.assertFalse(r["m10_06_full_acceptance"])
         self.assertFalse(r["live_trading_authorized"])
         detail = format_v2_ops_owner_message(r)
-        self.assertIn("TERJADWAL, BATCH TERAKHIR SEGAR", detail)
-        self.assertIn("AKTIF TERJADWAL", detail)
+        self.assertIn("SCHEDULED, LAST BATCH FRESH", detail)
+        self.assertIn("ACTIVE SCHEDULED", detail)
         self.assertNotIn("WS_UNIT_INACTIVE", detail)
 
     def test_disabled_btc_timer_cannot_mask_down_service(self):
@@ -131,8 +131,8 @@ class M10TimerAwareOriginalTests(unittest.TestCase):
         self.assertNotIn("BTC_WS_UNIT_NOT_ACTIVE", r["alert_codes"])
         self.assertNotIn("M03_TIMER_NOT_CONFIRMED_DISABLED", r["alert_codes"])
         compact = _compact_ops_auto_message(r)
-        self.assertIn("TERJADWAL", compact)
-        self.assertIn("Receiver M05 perlu diperiksa", compact)
+        self.assertIn("SCHEDULED", compact)
+        self.assertIn("M05 receiver inactive", compact)
 
 
 if __name__ == "__main__":

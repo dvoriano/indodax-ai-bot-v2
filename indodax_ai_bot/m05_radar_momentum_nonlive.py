@@ -448,12 +448,12 @@ def _idr_compact(value: str) -> str:
         return ("Rp" + _idr_number(
             (amount / Decimal("1000000000")).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP)
-        ) + " miliar")
+        ) + " billion")
     if magnitude >= Decimal("1000000"):
         return ("Rp" + _idr_number(
             (amount / Decimal("1000000")).quantize(
                 Decimal("0.01"), rounding=ROUND_HALF_UP)
-        ) + " juta")
+        ) + " million")
     return _idr_price(value)
 
 
@@ -482,34 +482,34 @@ def format_owner_radar_compact(candidate: dict) -> str:
     direction = "🔺" if price_pct > 0 else "🔻" if price_pct < 0 else "➖"
     pair = candidate["pair"].upper().replace("_IDR", "/IDR")
     if candidate["casebook_early_watch_observed"]:
-        label = "EARLY_WATCH historis"
+        label = "EARLY_WATCH (historical)"
     elif candidate["price_watch"] and candidate["volume_watch"]:
-        label = "HARGA + VOL 24J"
+        label = "PRICE + 24H VOLUME"
     elif candidate["price_watch"]:
-        label = "MOMENTUM HARGA"
+        label = "PRICE MOMENTUM"
     else:
-        label = "PERUBAHAN VOLUME 24J"
+        label = "24H VOLUME CHANGE"
 
     lines = [
         f"📡 RADAR | {pair} · {label}",
-        f"{direction} Harga {from_time}→{to_time}: {_pct(candidate['observed_rise_pct'])}",
+        f"{direction} Price {from_time}→{to_time}: {_pct(candidate['observed_rise_pct'])}",
         f"💰 {_idr_price(candidate['reference_price_idr'])}"
         f" → {_idr_price(candidate['latest_price_idr'])}",
-        "📊 Vol 24j: " + _idr_compact(candidate["volume_24h_idr"]),
+        "📊 24h volume: " + _idr_compact(candidate["volume_24h_idr"]),
     ]
     if candidate["volume_watch"]:
         mins = candidate["volume_comparison_seconds"] // 60
         lines.extend((
-            f"📈 Δ Vol 24j ({mins}m): "
+            f"📈 Δ 24h volume ({mins}m): "
             f"+{_idr_compact(candidate['volume_24h_net_change_idr'])}"
             f" ({_pct(candidate['volume_24h_net_change_pct'])})",
-            "⚠️ Delta 24j BUKAN jumlah transaksi 1 menit atau tekanan BUY/SELL.",
+            "⚠️ The rolling 24h volume delta is NOT 1m executed turnover or BUY/SELL pressure.",
         ))
     if candidate["missing_intermediate_minute_samples"]:
-        lines.append("⚠️ Ada menit tanpa sampel; BUKAN return candle 1m.")
+        lines.append("⚠️ Missing intermediate minute samples; NOT a closed 1m candle return.")
     lines.append(
-        "🔎 WATCH publik, BUKAN REKOMENDASI BUY. "
-        "AI/G1 & maintenance/suspend BELUM TERVERIFIKASI."
+         "🔎 PUBLIC WATCH, NOT A BUY RECOMMENDATION. "
+        "AI/G1 and maintenance/suspension status UNVERIFIED."
     )
     return "\n".join(lines)
 

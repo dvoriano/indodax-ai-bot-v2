@@ -151,7 +151,7 @@ class M05TelegramApiTransportTests(unittest.TestCase):
             self.owner_db, owner_user_id=OWNER
         ).status(user_id=OWNER, chat_id=OWNER)["owner_mode"], "AUTO")
         self.assertEqual(self.ledger.audit_count(), 1)
-        self.assertIn("AUTO tidak mengaktifkan order",
+        self.assertIn("AUTO does not enable order execution",
                       fake.calls[-1][1]["text"])
         self.assertEqual(self.ledger.telegram_next_offset(), 18)
 

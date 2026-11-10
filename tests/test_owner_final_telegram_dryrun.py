@@ -69,7 +69,7 @@ class OwnerFinalTelegramDryRunTest(TestCase):
         self.assertFalse(result["execution_allowed"])
         self.assertEqual([x[0] for x in api_calls],
                          ["getUpdates", "answerCallbackQuery"])
-        self.assertIn("Owner PASS dicatat", api_calls[1][1]["text"])
+        self.assertIn("Owner PASS recorded", api_calls[1][1]["text"])
         duplicate = self.ledger.apply_callback(
             user_id=self.OWNER, chat_id=self.OWNER,
             callback_data=proposal["callbacks"]["PASS"],

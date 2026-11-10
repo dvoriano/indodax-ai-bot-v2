@@ -69,7 +69,7 @@ class OwnerOpsAutoAlertOffline(unittest.TestCase):
         self.assertEqual(len(api.sent), 1)
         self.assertEqual(api.sent[0]["chat_id"], OWNER)
         self.assertIn("Trading OFF", api.sent[0]["text"])
-        self.assertIn("ALERT OTOMATIS M10-06", api.sent[0]["text"])
+        self.assertIn("M10-06 AUTOMATED OPS ALERT", api.sent[0]["text"])
 
     def test_automatic_alert_is_compact_and_details_remain_on_ops(self):
         api = FakeApi()
@@ -79,14 +79,15 @@ class OwnerOpsAutoAlertOffline(unittest.TestCase):
         ])
         self.assertEqual(self.send(api, snapshot)["messages_sent"], 1)
         message = api.sent[0]["text"]
-        self.assertIn("Data BTC lama", message)
-        self.assertIn("Timer M03 perlu review", message)
-        self.assertIn("Detail: /ops", message)
+        self.assertIn("BTC data stale", message)
+        self.assertIn("BTC_WS_BATCH_STALE", message)
+        self.assertIn("M03 timer state requires review", message)
+        self.assertIn("Details: /ops", message)
         self.assertIn("Trading OFF", message)
-        self.assertIn("snapshot, bukan uptime 24 jam", message)
-        self.assertNotIn("Penerimaan owner belum terverifikasi", message)
+        self.assertIn("snapshot, not 24-hour uptime", message)
+        self.assertNotIn("Owner acceptance unverified", message)
         self.assertLessEqual(len(message.splitlines()), 6)
-        self.assertLess(len(message), 275)
+        self.assertLess(len(message), 650)
 
     def test_no_repeat_on_restart_even_after_hour(self):
         self.assertEqual(self.send(FakeApi())["messages_sent"], 1)

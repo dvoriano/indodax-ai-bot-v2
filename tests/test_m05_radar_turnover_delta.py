@@ -146,9 +146,9 @@ class OriginalRollingTickerRadarTests(unittest.TestCase):
         self.assertEqual(payload["chat_id"], 1729)
         self.assertNotIn("reply_markup", payload)
         text = payload["text"]
-        self.assertIn("PERUBAHAN VOLUME 24J", text)
-        self.assertIn("BUKAN jumlah transaksi 1 menit", text)
-        self.assertIn("maintenance/suspend", text)
+        self.assertIn("24H VOLUME CHANGE", text)
+        self.assertIn("NOT 1m executed turnover", text)
+        self.assertIn("maintenance/suspension status", text)
         self.assertIn("RADAR | CYBER/IDR", text)
         self.assertLess(len(text), 420)
         repeat = send_one_owner_radar_momentum_nonlive(

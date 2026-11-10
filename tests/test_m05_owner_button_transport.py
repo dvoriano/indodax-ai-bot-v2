@@ -122,7 +122,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(second["processed"], 0)
         self.assertIsNotNone(self.sent_buttons)
         self.assertEqual(self.sent_buttons["chat_id"], OWNER)
-        self.assertIn("SIMULASI, BUKAN SINYAL PASAR", self.sent_buttons["text"])
+        self.assertIn("SIMULATION, NOT A MARKET SIGNAL", self.sent_buttons["text"])
         self.assertIn("Trading OFF", self.sent_buttons["text"])
         keyboard = self.sent_buttons["reply_markup"]["inline_keyboard"][0]
         self.assertEqual([b["text"] for b in keyboard],
@@ -139,7 +139,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(edits[0]["message_id"], 42)
         self.assertEqual(edits[0]["chat_id"], OWNER)
         permanent = [p for m, p in self.calls if m == "sendMessage"
-                     and "TERCATAT satu kali" in p.get("text", "")]
+                     and "recorded once" in p.get("text", "")]
         self.assertEqual(len(permanent), 1)
         self.assertIn("PASS", permanent[0]["text"])
         self.assertIn("Trading OFF", permanent[0]["text"])
@@ -177,7 +177,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         )
         self.assertEqual(
             len([m for m, p in self.calls if m == "sendMessage"
-                 and "TERCATAT satu kali" in p.get("text", "")]), 1
+                 and "recorded once" in p.get("text", "")]), 1
         )
         self.assertTrue(all(m in {
             "getMe", "getWebhookInfo", "getUpdates",
@@ -202,7 +202,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         )
         self.assertEqual(
             len([m for m, p in self.calls if m == "sendMessage"
-                 and "TERCATAT satu kali" in p.get("text", "")]), 0
+                 and "recorded once" in p.get("text", "")]), 0
         )
 
     def test_reject_generates_one_persistent_confirmation(self):
@@ -213,7 +213,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.incoming = [self.callback(reject_cb)]
         self.tick()
         notices = [p["text"] for m, p in self.calls if m == "sendMessage"
-                   and "TERCATAT satu kali" in p.get("text", "")]
+                   and "recorded once" in p.get("text", "")]
         self.assertEqual(len(notices), 1)
         self.assertIn("REJECT", notices[0])
         self.assertIn("Trading OFF", notices[0])
@@ -248,12 +248,12 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(len([m for m, _ in self.calls
                               if m == "editMessageReplyMarkup"]), 1)
         self.assertEqual(len([m for m, p in self.calls if m == "sendMessage"
-                              and "TERCATAT satu kali" in p.get("text", "")]), 1)
+                              and "recorded once" in p.get("text", "")]), 1)
         self.incoming = [self.callback(buttons[0]["callback_data"])]
         again = self.tick()
         self.assertEqual(again["processed"], 0)
         self.assertEqual(len([m for m, p in self.calls if m == "sendMessage"
-                              and "TERCATAT satu kali" in p.get("text", "")]), 1)
+                              and "recorded once" in p.get("text", "")]), 1)
 
     def test_expired_real_callback_closes_old_buttons_and_notifies_once(self):
         # Reproduces the REAL owner report: command 10:37, callback 10:39
@@ -292,7 +292,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
                   if name == "answerCallbackQuery"]
         self.assertTrue(any("EXPIRED" in x for x in popups))
         notices = [p["text"] for name, p in self.calls if name == "sendMessage"
-                   and "sudah ditutup" in p.get("text", "")]
+                   and "closed" in p.get("text", "")]
         self.assertEqual(notices, [])
 
         self.incoming = [self.callback(
@@ -305,7 +305,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         ]), 1)
         self.assertEqual(len([
             p for name, p in self.calls if name == "sendMessage"
-            and "sudah ditutup" in p.get("text", "")
+            and "closed" in p.get("text", "")
         ]), 0)
         with sqlite3.connect(self.db) as db:
             self.assertEqual(db.execute(
@@ -333,7 +333,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
         self.assertEqual(len([name for name, _ in self.calls
                               if name == "editMessageReplyMarkup"]), 1)
         notices = [p["text"] for name, p in self.calls if name == "sendMessage"
-                   and "sudah ditutup" in p.get("text", "")]
+                   and "closed" in p.get("text", "")]
         self.assertEqual(len(notices), 1)
         self.assertIn("PASS", notices[0])
         self.incoming = [self.callback(token, update=103)]
@@ -342,7 +342,7 @@ class OriginalM05ButtonTransportTests(unittest.TestCase):
                               if name == "editMessageReplyMarkup"]), 1)
         self.assertEqual(len([p for name, p in self.calls
                               if name == "sendMessage"
-                              and "sudah ditutup" in p.get("text", "")]), 1)
+                              and "closed" in p.get("text", "")]), 1)
 
     def test_original_m05_one_service_timer_is_bounded_three_seconds(self):
         source = (

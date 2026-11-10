@@ -77,8 +77,8 @@ class M10M03ServiceOutageTest(unittest.TestCase):
         self.assertTrue(report["btc_ws_scheduled_fresh_metadata_observed"])
         self.assertIn("M03_SCANNER_FAILED", format_v2_ops_owner_message(report))
         compact = _compact_ops_auto_message(report)
-        self.assertIn("Scanner M03 gagal", compact)
-        self.assertIn("TERJADWAL", compact)
+        self.assertIn("M03 scanner service failed", compact)
+        self.assertIn("SCHEDULED", compact)
         self.assertNotIn("HTTP403", compact)  # metadata cannot explain cause
         self.assertFalse(report["live_trading_authorized"])
         self.assertFalse(report["m10_06_full_acceptance"])
@@ -120,7 +120,7 @@ class M10M03ServiceOutageTest(unittest.TestCase):
             self.assertEqual(result["messages_sent"], 1)
             self.assertEqual(len(fake.sent), 1)
             self.assertEqual(fake.sent[0]["chat_id"], 991123)
-            self.assertIn("Scanner M03 gagal", fake.sent[0]["text"])
+            self.assertIn("M03 scanner service failed", fake.sent[0]["text"])
             self.assertIn("Trading OFF", fake.sent[0]["text"])
             self.assertEqual(send_one_owner_ops_alert_nonlive(
                 api=fake, ledger=ledger, report=report, now_epoch=NOW + 4000,

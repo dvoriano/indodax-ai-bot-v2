@@ -24,9 +24,9 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
         for mode in ("MANUAL", "AUTO"):
             with self.subTest(mode=mode):
                 body = render_m05_trade_order_card(draft(), mode=mode)
-                self.assertIn("Nominal pembelian (estimasi): Rp100.000", body)
-                self.assertIn("Token diperoleh (estimasi): 4 INJ", body)
-                self.assertIn("Harga LIMIT per INJ: Rp25.000", body)
+                self.assertIn("Estimated BUY amount: Rp100.000", body)
+                self.assertIn("Estimated tokens received: 4 INJ", body)
+                self.assertIn("LIMIT price per INJ: Rp25.000", body)
                 self.assertIn(f"M05 {mode} BUY ", body)
                 self.assertNotIn("fee", body.lower())
                 self.assertNotIn("komisi", body.lower())
@@ -37,8 +37,8 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             draft(), mode="MANUAL",
             expected_buy_total_idr=D("100200"),
         )
-        self.assertIn("Nominal pembelian (estimasi): Rp100.200", card)
-        self.assertIn("Token diperoleh (estimasi): 4 INJ", card)
+        self.assertIn("Estimated BUY amount: Rp100.200", card)
+        self.assertIn("Estimated tokens received: 4 INJ", card)
         self.assertNotIn("fee", card.lower())
         self.assertNotIn("pajak", card.lower())
         with self.assertRaises(ValueError):
@@ -50,10 +50,10 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
     def test_sell_total_available_but_never_invents_buy_capital(self):
         for mode in ("MANUAL", "AUTO"):
             card = render_m05_trade_order_card(draft("SELL"), mode=mode)
-            self.assertIn("Total penjualan (estimasi): Rp100.000", card)
-            self.assertIn("Modal beli: belum ada lot BUY V2 terverifikasi", card)
-            self.assertIn("Untung/rugi bersih: belum dapat dihitung", card)
-            self.assertNotIn("Estimasi untung bersih: Rp", card)
+            self.assertIn("Estimated SELL proceeds: Rp100.000", card)
+            self.assertIn("BUY cost: no verified V2-owned BUY lot", card)
+            self.assertIn("Net P/L: unavailable without verified BUY cost", card)
+            self.assertNotIn("Estimated net profit: Rp", card)
 
     def test_sell_verified_inputs_display_actual_profit_net_without_fee_line(self):
         for mode in ("MANUAL", "AUTO"):
@@ -62,22 +62,22 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                 allocated_bot_owned_buy_cost_idr=D("90000"),
                 expected_net_sell_proceeds_idr=D("98000"),
             )
-            self.assertIn("Total penjualan (estimasi): Rp98.000", card)
-            self.assertIn("Modal beli dialokasikan: Rp90.000", card)
-            self.assertIn("Estimasi untung bersih: Rp8.000", card)
-            self.assertIn("ROI netto estimasi: 8,89%", card)
-            self.assertIn("Target SELL netto: T1 2% | T2 8% | T3 11%", card)
-            self.assertIn("Tier ROI tercapai: T2", card)
+            self.assertIn("Estimated SELL proceeds: Rp98.000", card)
+            self.assertIn("Allocated BUY cost: Rp90.000", card)
+            self.assertIn("Estimated net profit: Rp8.000", card)
+            self.assertIn("Estimated net ROI: 8,89%", card)
+            self.assertIn("Net SELL targets: T1 2% | T2 8% | T3 11%", card)
+            self.assertIn("ROI tier reached: T2", card)
             self.assertIn(
-                "Syarat RUPIAH: profit minimal Rp10.000 NETTO: BELUM LULUS",
+                "IDR minimum: net profit at least Rp10.000 NET: FAIL",
                 card,
             )
             self.assertIn(
-                "Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS",
+                "ROI minimum: net ROI at least 2% of BUY cost: PASS",
                 card,
             )
             self.assertIn(
-                "Kedua syarat profit normal (RUPIAH DAN PERSENTASE): BELUM TERPENUHI",
+                "Both normal profit requirements (IDR AND ROI): NOT MET",
                 card,
             )
             self.assertNotIn("fee", card.lower())
@@ -104,13 +104,13 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             allocated_bot_owned_buy_cost_idr=assessment.allocated_cost_basis_idr,
             expected_net_sell_proceeds_idr=assessment.expected_net_proceeds_idr,
         )
-        self.assertIn("Total penjualan (estimasi): Rp157.100", card)
-        self.assertIn("Modal beli dialokasikan: Rp145.200", card)
-        self.assertIn("Estimasi untung bersih: Rp11.900", card)
-        self.assertIn("Tier ROI tercapai: T2", card)
-        self.assertIn("Syarat RUPIAH: profit minimal Rp10.000 NETTO: LULUS", card)
-        self.assertIn("Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS", card)
-        self.assertIn("Kedua syarat profit normal (RUPIAH DAN PERSENTASE): TERPENUHI", card)
+        self.assertIn("Estimated SELL proceeds: Rp157.100", card)
+        self.assertIn("Allocated BUY cost: Rp145.200", card)
+        self.assertIn("Estimated net profit: Rp11.900", card)
+        self.assertIn("ROI tier reached: T2", card)
+        self.assertIn("IDR minimum: net profit at least Rp10.000 NET: PASS", card)
+        self.assertIn("ROI minimum: net ROI at least 2% of BUY cost: PASS", card)
+        self.assertIn("Both normal profit requirements (IDR AND ROI): MET", card)
         self.assertNotIn("fee", card.lower())
 
     def test_same_actual_buy_100k_and_sell_net_98k_is_loss_not_8k_profit(self):
@@ -122,13 +122,13 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                 allocated_bot_owned_buy_cost_idr=D("100000"),
                 expected_net_sell_proceeds_idr=D("98000"),
             )
-            self.assertIn("Modal beli dialokasikan: Rp100.000", card)
-            self.assertIn("Total penjualan (estimasi): Rp98.000", card)
-            self.assertIn("Estimasi rugi bersih: Rp2.000", card)
-            self.assertIn("ROI netto estimasi: -2%", card)
-            self.assertIn("Tier ROI tercapai: BELUM MENCAPAI T1", card)
-            self.assertIn("BELUM TERPENUHI", card)
-            self.assertNotIn("Estimasi untung bersih:", card)
+            self.assertIn("Allocated BUY cost: Rp100.000", card)
+            self.assertIn("Estimated SELL proceeds: Rp98.000", card)
+            self.assertIn("Estimated net loss: Rp2.000", card)
+            self.assertIn("Estimated net ROI: -2%", card)
+            self.assertIn("ROI tier reached: BELOW T1", card)
+            self.assertIn("NOT MET", card)
+            self.assertNotIn("Estimated net profit:", card)
 
     def test_10k_and_two_percent_both_required_and_tiers_are_net(self):
         # No strategy changes: target levels come from original
@@ -149,21 +149,21 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                     allocated_bot_owned_buy_cost_idr=D("100000"),
                     expected_net_sell_proceeds_idr=D(net),
                 )
-                self.assertIn("Estimasi untung bersih: " + profit, card)
-                self.assertIn("ROI netto estimasi: " + roi, card)
-                self.assertIn("Tier ROI tercapai: " + tier, card)
+                self.assertIn("Estimated net profit: " + profit, card)
+                self.assertIn("Estimated net ROI: " + roi, card)
+                self.assertIn("ROI tier reached: " + tier, card)
                 self.assertIn(
-                    "Syarat RUPIAH: profit minimal Rp10.000 NETTO: " +
-                    ("LULUS" if allowed else "BELUM LULUS"),
+                    "IDR minimum: net profit at least Rp10.000 NET: " +
+                    ("PASS" if allowed else "FAIL"),
                     card,
                 )
                 self.assertIn(
-                    "Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS",
+                    "ROI minimum: net ROI at least 2% of BUY cost: PASS",
                     card,
                 )
                 self.assertIn(
-                    "Kedua syarat profit normal (RUPIAH DAN PERSENTASE): " +
-                    ("TERPENUHI" if allowed else "BELUM TERPENUHI"),
+                    "Both normal profit requirements (IDR AND ROI): " +
+                    ("MET" if allowed else "NOT MET"),
                     card,
                 )
                 self.assertNotIn("fee", card.lower())
@@ -181,11 +181,11 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
                     allocated_bot_owned_buy_cost_idr=D(cost),
                     expected_net_sell_proceeds_idr=D(net),
                 )
-                self.assertIn("Estimasi untung bersih: " + expected_pnl, card)
-                self.assertIn("ROI netto estimasi: 2%", card)
-                self.assertIn("Syarat RUPIAH: profit minimal Rp10.000 NETTO: LULUS", card)
-                self.assertIn("Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: LULUS", card)
-                self.assertIn("Kedua syarat profit normal (RUPIAH DAN PERSENTASE): TERPENUHI", card)
+                self.assertIn("Estimated net profit: " + expected_pnl, card)
+                self.assertIn("Estimated net ROI: 2%", card)
+                self.assertIn("IDR minimum: net profit at least Rp10.000 NET: PASS", card)
+                self.assertIn("ROI minimum: net ROI at least 2% of BUY cost: PASS", card)
+                self.assertIn("Both normal profit requirements (IDR AND ROI): MET", card)
     
     def test_high_capital_needs_2_percent_even_if_10k_net(self):
         # A 1m capital position making 10k must still fail the 2% ROI gate.
@@ -195,12 +195,12 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             allocated_bot_owned_buy_cost_idr=D("1000000"),
             expected_net_sell_proceeds_idr=D("1010000"),
         )
-        self.assertIn("Estimasi untung bersih: Rp10.000", card)
-        self.assertIn("ROI netto estimasi: 1%", card)
-        self.assertIn("Syarat RUPIAH: profit minimal Rp10.000 NETTO: LULUS", card)
-        self.assertIn("Syarat PERSENTASE: ROI minimal 2% NETTO dari modal BUY: BELUM LULUS", card)
-        self.assertIn("Tier ROI tercapai: BELUM MENCAPAI T1", card)
-        self.assertIn("BELUM TERPENUHI", card)
+        self.assertIn("Estimated net profit: Rp10.000", card)
+        self.assertIn("Estimated net ROI: 1%", card)
+        self.assertIn("IDR minimum: net profit at least Rp10.000 NET: PASS", card)
+        self.assertIn("ROI minimum: net ROI at least 2% of BUY cost: FAIL", card)
+        self.assertIn("ROI tier reached: BELOW T1", card)
+        self.assertIn("NOT MET", card)
 
     def test_sell_loss_show_explicit_loss_not_positive_profit(self):
         card = render_m05_trade_order_card(
@@ -208,16 +208,16 @@ class M05OwnerFinancialDisplayContractTests(unittest.TestCase):
             allocated_bot_owned_buy_cost_idr=D("90000"),
             expected_net_sell_proceeds_idr=D("85000"),
         )
-        self.assertIn("Estimasi rugi bersih: Rp5.000", card)
-        self.assertNotIn("Estimasi untung bersih:", card)
+        self.assertIn("Estimated net loss: Rp5.000", card)
+        self.assertNotIn("Estimated net profit:", card)
 
     def test_decimal_qty_and_indonesian_separators_keep_exact_value(self):
         card = render_m05_trade_order_card(
             draft(price="1070.25", qty="0.5"), mode="MANUAL",
         )
-        self.assertIn("Harga LIMIT per INJ: Rp1.070,25", card)
-        self.assertIn("Nominal pembelian (estimasi): Rp535,125", card)
-        self.assertIn("Token diperoleh (estimasi): 0,5 INJ", card)
+        self.assertIn("LIMIT price per INJ: Rp1.070,25", card)
+        self.assertIn("Estimated BUY amount: Rp535,125", card)
+        self.assertIn("Estimated tokens received: 0,5 INJ", card)
 
     def test_reject_unverified_half_sell_net_and_invalid_profit_values(self):
         for cost, net in (

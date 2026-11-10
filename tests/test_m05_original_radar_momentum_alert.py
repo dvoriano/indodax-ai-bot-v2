@@ -121,9 +121,9 @@ class M03M05RadarOriginalNonlive(unittest.TestCase):
         method, payload = api.calls[0]
         self.assertEqual(method, "sendMessage")
         self.assertNotIn("reply_markup", payload)
-        self.assertIn("BUKAN REKOMENDASI BUY", payload["text"])
-        self.assertIn("EARLY_WATCH historis", payload["text"])
-        self.assertIn("BELUM TERVERIFIKASI", payload["text"])
+        self.assertIn("NOT A BUY RECOMMENDATION", payload["text"])
+        self.assertIn("EARLY_WATCH (historical)", payload["text"])
+        self.assertIn("UNVERIFIED", payload["text"])
         self.assertFalse(sent["execution_allowed"])
         self.assertIsNone(sent["owner_final_decision"])
 
@@ -143,9 +143,9 @@ class M03M05RadarOriginalNonlive(unittest.TestCase):
         api = FakeTelegram()
         self.send(api)
         self.assertIn(
-            "Ada menit tanpa sampel", api.calls[0][1]["text"]
+            "Missing intermediate minute samples", api.calls[0][1]["text"]
         )
-        self.assertIn("BUKAN return candle 1m", api.calls[0][1]["text"])
+        self.assertIn("NOT a closed 1m candle return", api.calls[0][1]["text"])
 
     def test_stale_source_does_not_send(self):
         self.uai()

@@ -45,9 +45,9 @@ class OriginalM04M05TelegramAiStatusTests(unittest.TestCase):
         text = result["text"]
         self.assertIn("V2_PROTECTED_LOCAL_FILE", text)
         self.assertIn("MARKET=glm-5.3-flash", text)
-        self.assertIn("API key: BELUM_TERDETEKSI", text)
-        self.assertIn("online: BELUM_DIVERIFIKASI", text)
-        self.assertIn("Paid AI dipanggil: TIDAK", text)
+        self.assertIn("API key: NOT_DETECTED", text)
+        self.assertIn("online: UNVERIFIED", text)
+        self.assertIn("Paid AI invoked: NO", text)
         self.assertFalse(result["execution_allowed"])
         self.assertIsNone(result["final_decision"])
         paid.assert_not_called()
@@ -64,8 +64,8 @@ class OriginalM04M05TelegramAiStatusTests(unittest.TestCase):
                 "indodax_ai_bot.m04_owner_config.owner_provider_source",
                 return_value=(config, "M04_V2_KEY_FILE_PRESENT_LOCAL_ONLY")):
             result = self.read()
-        self.assertIn("API key: TERKONFIGURASI_LOKAL", result["text"])
-        self.assertIn("3 respons AI nyata: BELUM_TERVERIFIKASI",
+        self.assertIn("API key: LOCALLY_CONFIGURED", result["text"])
+        self.assertIn("Three live AI responses: UNVERIFIED",
                       result["text"])
         self.assertNotIn(config["SUMOPOD_API_KEY"], str(result))
         self.assertFalse(result["execution_allowed"])
@@ -81,7 +81,7 @@ class OriginalM04M05TelegramAiStatusTests(unittest.TestCase):
                 "indodax_ai_bot.m04_owner_config.owner_provider_source",
                 side_effect=AssertionError("NO_MIXED_OWNER_SOURCE")) as local:
             result = self.read()
-        self.assertIn("Sumber: PROCESS_ENV", result["text"])
+        self.assertIn("Source: PROCESS_ENV", result["text"])
         self.assertNotIn("private-process-value", str(result))
         local.assert_not_called()
 
@@ -91,12 +91,12 @@ class OriginalM04M05TelegramAiStatusTests(unittest.TestCase):
                 return_value=None):
             no_config = self.read()
         self.assertIn("M04_CONFIG_NOT_FOUND", no_config["text"])
-        self.assertIn("BELUM_TERDETEKSI", no_config["text"])
+        self.assertIn("NOT_DETECTED", no_config["text"])
         with patch.dict(os.environ, {}, clear=True), patch(
                 "indodax_ai_bot.m04_owner_config.owner_provider_source",
                 side_effect=M04OwnerConfigDenied("DO_NOT_EXPOSE_TOKEN")):
             invalid = self.read()
-        self.assertIn("KONFIGURASI_TIDAK_BISA_DIVERIFIKASI",
+        self.assertIn("CONFIGURATION_UNVERIFIED",
                       invalid["text"])
         self.assertNotIn("DO_NOT_EXPOSE_TOKEN", str(invalid))
 

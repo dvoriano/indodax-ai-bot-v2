@@ -41,13 +41,13 @@ class M05PhoneRadarFormatting(unittest.TestCase):
         self.assertIn("FUN/IDR", message)
         self.assertIn("+8,74%", message)
         self.assertIn("Rp33.933 → Rp36.899", message)
-        self.assertIn("Rp853,29 juta", message)
-        self.assertIn("+Rp61,73 juta (+7,80%)", message)
+        self.assertIn("Rp853,29 million", message)
+        self.assertIn("+Rp61,73 million (+7,80%)", message)
         self.assertIn("20:15→20:20", message)
         self.assertNotIn("00000000", message)
-        self.assertIn("BUKAN REKOMENDASI BUY", message)
-        self.assertIn("BELUM TERVERIFIKASI", message)
-        self.assertIn("BUKAN jumlah transaksi 1 menit", message)
+        self.assertIn("NOT A BUY RECOMMENDATION", message)
+        self.assertIn("UNVERIFIED", message)
+        self.assertIn("NOT 1m executed turnover", message)
         self.assertNotIn("PASS/REJECT", message)
         self.assertLessEqual(len(message.splitlines()), 7)
         self.assertLess(len(message), 390)
@@ -66,11 +66,11 @@ class M05PhoneRadarFormatting(unittest.TestCase):
             volume_24h_net_change_idr="101204341",
             volume_24h_net_change_pct="3.78",
         ))
-        self.assertIn("PERUBAHAN VOLUME 24J", message)
-        self.assertIn("🔻 Harga 20:11→20:16: -0,29%", message)
+        self.assertIn("24H VOLUME CHANGE", message)
+        self.assertIn("🔻 Price 20:11→20:16: -0,29%", message)
         self.assertIn("Rp2.035 → Rp2.029", message)
-        self.assertIn("Rp2,78 miliar", message)
-        self.assertIn("+Rp101,2 juta (+3,78%)", message)
+        self.assertIn("Rp2,78 billion", message)
+        self.assertIn("+Rp101,2 million (+3,78%)", message)
         self.assertNotIn("REKOMENDASI BUY:", message)
         self.assertLess(len(message), 390)
 
@@ -82,10 +82,10 @@ class M05PhoneRadarFormatting(unittest.TestCase):
             casebook_early_watch_observed=True,
             missing_intermediate_minute_samples=True,
         ))
-        self.assertIn("EARLY_WATCH historis", message)
-        self.assertIn("Ada menit tanpa sampel", message)
-        self.assertIn("BUKAN return candle 1m", message)
-        self.assertNotIn("Δ Vol 24j", message)
+        self.assertIn("EARLY_WATCH (historical)", message)
+        self.assertIn("Missing intermediate minute samples", message)
+        self.assertIn("NOT a closed 1m candle return", message)
+        self.assertNotIn("Δ 24h volume", message)
         self.assertLessEqual(len(message.splitlines()), 7)
 
     def test_price_subrupiah_precision_not_lost(self):
@@ -108,11 +108,11 @@ class M05PhoneRadarFormatting(unittest.TestCase):
             volume_24h_net_change_idr="51659240",
             volume_24h_net_change_pct="7.41",
         ))
-        self.assertIn("PERUBAHAN VOLUME 24J", message)
+        self.assertIn("24H VOLUME CHANGE", message)
         self.assertIn("-0,74%", message)
-        self.assertIn("Rp749,15 juta", message)
-        self.assertIn("BUKAN jumlah transaksi 1 menit", message)
-        self.assertIn("tekanan BUY/SELL", message)
+        self.assertIn("Rp749,15 million", message)
+        self.assertIn("NOT 1m executed turnover", message)
+        self.assertIn("BUY/SELL pressure", message)
 
 
 if __name__ == "__main__":

@@ -77,7 +77,7 @@ class OriginalM05V2OpsOwner(unittest.TestCase):
         for token in ("BATCH_INCOMPLETE", "BATCH_REJECTED",
                       "BATCH_STALE", "WS_UNIT_INACTIVE",
                       "4/10", "M03 timer: DISABLED",
-                      "Trading OFF", "restart/GO tidak diizinkan"):
+                      "Trading OFF", "restart/GO not authorized"):
             self.assertIn(token, message)
         self.assertNotIn("owner_user_id", str(result))
         self.assertLess(len(message), 900)
@@ -132,8 +132,8 @@ class OriginalM05V2OpsOwner(unittest.TestCase):
         )
         base["btc_ws_unit_active_metadata_observed"] = True
         txt = format_v2_ops_owner_message(base)
-        self.assertIn("snapshot, bukan heartbeat 24 jam", txt)
-        self.assertIn("Peringatan belum terbukti terkirim otomatis", txt)
+        self.assertIn("snapshot, not 24-hour uptime", txt)
+        self.assertIn("Automatic alert delivery not verified", txt)
         self.assertIn("Trading OFF", txt)
         self.assertNotIn("READY_TO_TRADE", txt)
 

@@ -309,19 +309,19 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
     All text is fixed or derived from strictly bounded integer/session data.
     Untrusted strings in the original sidecar/units are never echoed.
     """
-    prefix = "M10-06 V2 operasional READ-ONLY (snapshot, bukan heartbeat 24 jam)."
+    prefix = "M10-06 V2 READ-ONLY operations (snapshot, not 24-hour uptime)."
     if (not isinstance(report, dict)
             or report.get("status") != "V2_OPERATIONS_READONLY_OBSERVATION"
             or report.get("scope") != "ONE_V2_ORIGINAL_WS_SIDECAR_AND_FIXED_USER_UNITS"):
-        return prefix + "\nSTATUS_UNVERIFIED. Tidak ada GO. Trading OFF."
+        return prefix + "\nSTATUS_UNVERIFIED. No GO authorization. Trading OFF."
 
     alerts = report.get("alert_codes")
     if not isinstance(alerts, list) or len(alerts) > 32:
-        return prefix + "\nALERT_DATA_UNVERIFIED. Tidak ada GO. Trading OFF."
+        return prefix + "\nALERT_DATA_UNVERIFIED. No GO authorization. Trading OFF."
     labels = []
     for item in alerts:
         if type(item) is not str or item not in _M05_OPS_ALERT_LABELS:
-            return prefix + "\nALERT_DATA_UNVERIFIED. Tidak ada GO. Trading OFF."
+            return prefix + "\nALERT_DATA_UNVERIFIED. No GO authorization. Trading OFF."
         label = _M05_OPS_ALERT_LABELS[item]
         if label not in labels:
             labels.append(label)
@@ -331,22 +331,22 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
     batch_view = batch_view if isinstance(batch_view, dict) else {}
     count_view = batch_view.get("requested_sessions")
     label_window = ("2x30s" if count_view == 2 else "4x30s"
-                    if count_view == 4 else "PERSISTEN")
+                    if count_view == 4 else "PERSISTENT")
     state = (
-        "AKTIF " + label_window + " (checkpoint metadata)"
+        "ACTIVE " + label_window + " (checkpoint metadata)"
         if report.get("btc_ws_continuous_fresh_metadata_observed") is True
-        else "AKTIF (metadata saja)"
+        else "ACTIVE (metadata only)"
         if report.get("btc_ws_unit_active_metadata_observed") is True
-        else "TERJADWAL, BATCH TERAKHIR SEGAR (snapshot)"
+        else "SCHEDULED, LAST BATCH FRESH (snapshot)"
         if report.get("btc_ws_scheduled_fresh_metadata_observed") is True
-        else "TIDAK AKTIF/UNVERIFIED"
+        else "INACTIVE/UNVERIFIED"
     )
     timer = (
-        "AKTIF TERJADWAL (metadata saja)"
+        "ACTIVE SCHEDULED (metadata only)"
         if report.get("m03_timer_active_metadata_observed") is True
-        else "DISABLED (metadata saja)"
+        else "DISABLED (metadata only)"
         if report.get("m03_timer_disabled_metadata_observed") is True
-        else "BELUM TERVERIFIKASI"
+        else "UNVERIFIED"
     )
     original = report.get("btc_ws_last_batch")
     original = original if isinstance(original, dict) else {}
@@ -361,16 +361,16 @@ def format_v2_ops_owner_message(report: dict | None) -> str:
         sessions = "UNKNOWN"
     else:
         sessions = str(count) + "/" + str(requested)
-    warnings = ", ".join(labels) if labels else "TIDAK TERDETEKSI (snapshot saja)"
+    warnings = ", ".join(labels) if labels else "NONE DETECTED (snapshot only)"
     message = (
-        prefix + "\nBTC WS: " + state + "; batch terakhir: " + status +
-        "; sesi aman: " + sessions + "." +
+        prefix + "\nBTC WS: " + state + "; last batch: " + status +
+        "; completed sessions: " + sessions + "." +
         "\nM03 timer: " + timer + "." +
-        "\nPeringatan: " + warnings + "." +
-        "\nPeringatan belum terbukti terkirim otomatis; restart/GO tidak diizinkan. Trading OFF."
+        "\nAlerts: " + warnings + "." +
+        "\nAutomatic alert delivery not verified; restart/GO not authorized. Trading OFF."
     )
     return message if len(message) <= 900 else (
-        prefix + "\nALERT_DATA_UNVERIFIED. Tidak ada GO. Trading OFF."
+        prefix + "\nALERT_DATA_UNVERIFIED. No GO authorization. Trading OFF."
     )
 
 

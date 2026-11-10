@@ -30,20 +30,20 @@ _ALLOWED_CODES = frozenset((
 # Friendly labels for the same fixed, allowlisted operational reason codes.
 # Keep the owner /ops command available for detailed read-only diagnostics.
 _SHORT_REASONS = {
-    "BTC_WS_BATCH_INCOMPLETE_OR_INCONSISTENT": "Batch BTC tidak lengkap",
-    "BTC_WS_BATCH_REJECTED": "Batch BTC ditolak",
-    "BTC_WS_BATCH_STALE": "Data BTC lama",
-    "BTC_WS_BATCH_FUTURE_CLOCK": "Jam data BTC bermasalah",
-    "BTC_WS_BATCH_STATUS_UNAVAILABLE": "Status BTC tidak tersedia",
-    "BTC_WS_BATCH_FIELDS_UNTRUSTED": "Status BTC tidak tepercaya",
-    "BTC_WS_REJECT_RESTART_FLAG_CONFLICT": "Flag restart BTC tidak cocok",
-    "BTC_WS_UNIT_NOT_ACTIVE": "WS tidak aktif",
-    "BTC_WS_UNIT_STATUS_UNVERIFIED": "Status service WS belum valid",
-    "M05_TIMER_NOT_ACTIVE": "Receiver M05 perlu diperiksa",
-    "M05_TIMER_STATUS_UNVERIFIED": "Timer M05 belum terverifikasi",
-    "M03_TIMER_NOT_CONFIRMED_DISABLED": "Timer M03 perlu review",
-    "M03_TIMER_STATUS_UNVERIFIED": "Timer M03 belum terverifikasi",
-    "M03_SCANNER_SERVICE_FAILED": "Scanner M03 gagal",
+    "BTC_WS_BATCH_INCOMPLETE_OR_INCONSISTENT": "BTC batch incomplete",
+    "BTC_WS_BATCH_REJECTED": "BTC batch rejected",
+    "BTC_WS_BATCH_STALE": "BTC data stale",
+    "BTC_WS_BATCH_FUTURE_CLOCK": "BTC timestamp invalid",
+    "BTC_WS_BATCH_STATUS_UNAVAILABLE": "BTC status unavailable",
+    "BTC_WS_BATCH_FIELDS_UNTRUSTED": "BTC status fields untrusted",
+    "BTC_WS_REJECT_RESTART_FLAG_CONFLICT": "BTC restart flag conflict",
+    "BTC_WS_UNIT_NOT_ACTIVE": "BTC WS unit inactive",
+    "BTC_WS_UNIT_STATUS_UNVERIFIED": "BTC WS unit unverified",
+    "M05_TIMER_NOT_ACTIVE": "M05 receiver inactive",
+    "M05_TIMER_STATUS_UNVERIFIED": "M05 timer unverified",
+    "M03_TIMER_NOT_CONFIRMED_DISABLED": "M03 timer state requires review",
+    "M03_TIMER_STATUS_UNVERIFIED": "M03 timer unverified",
+    "M03_SCANNER_SERVICE_FAILED": "M03 scanner service failed",
 }
 
 
@@ -57,20 +57,20 @@ def _compact_ops_auto_message(snap: dict) -> str:
             and 0 <= completed <= requested <= 10):
         sessions = f"{completed}/{requested}"
     else:
-        sessions = "belum valid"
+        sessions = "UNVERIFIED"
     window_label = ("2x30s" if requested == 2 else "4x30s"
                     if requested == 4 else "UNKNOWN")
     state = (
-        "PERSISTEN · " + window_label + " (metadata)"
+        "PERSISTENT · " + window_label + " (metadata)"
         if snap.get("btc_ws_continuous_fresh_metadata_observed") is True
-        else "AKTIF (metadata)"
+        else "ACTIVE (metadata)"
         if snap.get("btc_ws_unit_active_metadata_observed") is True
-        else "TERJADWAL · batch segar"
+        else "SCHEDULED · fresh batch"
         if snap.get("btc_ws_scheduled_fresh_metadata_observed") is True
-        else "TIDAK AKTIF / belum valid"
+        else "INACTIVE / unverified"
     )
     codes = sorted(set(snap["alert_codes"]))
-    reasons = [_SHORT_REASONS[c] for c in codes]
+    reasons = [_SHORT_REASONS[c] + " [" + c + "]" for c in codes]
     top = ", ".join(reasons[:3])
     if len(reasons) > 3:
         top += f" (+{len(reasons) - 3} lagi)"
@@ -78,8 +78,8 @@ def _compact_ops_auto_message(snap: dict) -> str:
         "🛠 OPS PITIDEN | READ ONLY\n"
         f"BTC WS: {state} · batch {sessions}\n"
         f"⚠️ {top}\n"
-        "Detail: /ops (snapshot, bukan uptime 24 jam)\n"
-        "Trading OFF · tanpa restart/GO."
+        "Details: /ops (snapshot, not 24-hour uptime)\n"
+        "Trading OFF · no restart/GO authorized."
     )
 
 
@@ -151,7 +151,7 @@ def send_one_owner_ops_alert_nonlive(*, api, ledger, report=None,
     try:
         api.call("sendMessage", {
             "chat_id": ledger.owner_user_id,
-            "text": "ALERT OTOMATIS M10-06 (READ ONLY)\n" + message,
+            "text": "M10-06 AUTOMATED OPS ALERT (READ ONLY)\n" + message,
         })
     except TelegramTransportError:
         return {"status": "M10_ALERT_DELIVERY_UNCERTAIN_NO_RETRY",

@@ -129,7 +129,7 @@ class M05DedicatedInboundTests(unittest.TestCase):
         self.assertEqual(self.ledger.status(
             user_id=OWNER, chat_id=OWNER
         )["owner_mode"], "AUTO")
-        self.assertIn("AUTO tidak mengaktifkan order", fake.calls[-1][1]["text"])
+        self.assertIn("AUTO does not enable order execution", fake.calls[-1][1]["text"])
         self.assertFalse(result["execution_allowed"])
 
     def test_old_caipiti_id_denied_before_any_api_call(self):
