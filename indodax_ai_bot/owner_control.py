@@ -1008,7 +1008,7 @@ class OwnerDecisionLedger:
                    for ch in v) for v in labels):
             return _blocked("INVALID_MARKET_ADVISORY_LABEL")
         expires = min(now_epoch + TTL_MAX, source_expires_epoch)
-        reference_text = "Harga referensi: tidak tersedia dari scan ini.\n"
+        reference_text = "Reference price: unavailable from this scan.\n"
         if public_reference is not None:
             if (not isinstance(public_reference, dict)
                     or set(public_reference) != {
@@ -1040,7 +1040,7 @@ class OwnerDecisionLedger:
                 ask_text = format(ask, "f")
                 spread_text = format(spread.quantize(Decimal("0.01")), "f")
                 volume_text = (
-                    "tidak tersedia" if volume is None
+                    "unavailable" if volume is None
                     else format(volume.quantize(Decimal("0.01")), "f") + "x"
                 )
             except (InvalidOperation, TypeError, ValueError, ArithmeticError):
@@ -1049,12 +1049,12 @@ class OwnerDecisionLedger:
                 epoch, ZoneInfo("Asia/Jakarta")
             ).strftime("%H:%M:%S WIB")
             reference_text = (
-                "Referensi PUBLIC saat scan " + quote_wib + "\n"
+                "PUBLIC quote at scan time " + quote_wib + "\n"
                 "Bid Rp" + bid_text + " | Ask Rp" + ask_text +
                 " | Spread " + spread_text + " bps\n"
-                "Skor scanner " + str(score) + "/100 | Volume 1m "
+                "Scanner score " + str(score) + "/100 | Volume 1m "
                 + volume_text + "\n"
-                "BUKAN harga entry atau quote saat ini.\n"
+                "NOT an entry price or current quote.\n"
             )
         proposal_id = secrets.token_hex(12)
         secret = secrets.token_hex(16)
@@ -1067,17 +1067,17 @@ class OwnerDecisionLedger:
         ).strftime("%d-%m-%Y %H:%M WIB")
         message = (
             "Indodax V2 | M03/M04 public advisory\n"
-            "WATCH PASAR, BUKAN PERINTAH BUY\n"
+            "MARKET WATCH, NOT A BUY ORDER\n"
             "Pair: " + pair.upper() + "\n"
-            "Candle 1m tutup: " + closed_wib + "\n"
+            "Closed 1m candle: " + closed_wib + "\n"
             "Setup M03: " + setup + "\n"
             + reference_text +
-            "Analisis M04: " + market_status + "\n"
+            "M04 analysis: " + market_status + "\n"
             "RISK: " + risk_status + "\n"
             "Fingerprint: " + digest[:16] + "\n"
-            "G1/account/order: UNVERIFIED. Ini WATCH pasar saja, "
-            "belum ada draft BUY/SELL.\n"
-            "PASS/REJECT hanya keputusan review owner, bukan BUY/SELL."
+             "G1/account/order: UNVERIFIED. This is MARKET WATCH only; "
+            "no BUY/SELL order draft exists.\n"
+            "PASS/REJECT records owner review only, not BUY/SELL."
         )
         with self._tx() as db:
             mode = db.execute(
@@ -1171,13 +1171,13 @@ class OwnerDecisionLedger:
             ("M05_OWNER_BUTTON_TRANSPORT_TEST:" + proposal_id).encode()
         ).hexdigest()
         msg = (
-            "M05 BUTTON TEST | SIMULASI, BUKAN SINYAL PASAR\n"
-            "Hanya uji komunikasi Telegram owner PASS/REJECT.\n"
-            "Tidak ada pair pasar, G1, AI berbayar, saldo, harga, "
-            "jumlah maupun order.\n"
-            "Tombol berlaku maksimal 90 detik dari perintah.\n"
-            "PASS dan REJECT hanya menyimpan hasil uji di SQLite V2. "
-            "BUY/SELL TIDAK AKAN DIKIRIM. Trading OFF."
+            "M05 BUTTON TEST | SIMULATION, NOT A MARKET SIGNAL\n"
+            "Owner-private Telegram PASS/REJECT communication test only.\n"
+            "No live market pair, G1, paid AI, balance, price, "
+            "quantity, or order.\n"
+            "Buttons remain valid for at most 90 seconds after the command.\n"
+            "PASS and REJECT only store test results in V2 SQLite. "
+            "NO BUY/SELL ORDER WILL BE SENT. Trading OFF."
         )
         with self._tx() as db:
             mode = db.execute(
