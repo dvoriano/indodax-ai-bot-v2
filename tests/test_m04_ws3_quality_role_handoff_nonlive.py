@@ -61,6 +61,10 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
                             for x in row["role_slots"]))
         self.assertEqual(row["public_evidence"]["orderbook"], "NOT_OBSERVED")
         self.assertEqual(row["public_evidence"]["trade_activity"], "NOT_OBSERVED")
+        self.assertGreater(row["quality_score_out_of_100"], 0)
+        self.assertFalse(row["quality_review_observational_only"]["buy_recommended"])
+        self.assertFalse(row["public_evidence"]["quality_score_is_trade_probability"])
+        self.assertEqual(r["quality_scored_candidates_before_top2"], 1)
 
     def test_no_source_no_ai_slots(self):
         r = inspect_original_ws3_three_role_handoff_readonly(
@@ -109,6 +113,68 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertTrue(all(x["model_output"] is None
                             for x in row["role_slots"]))
         self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        self.assertGreaterEqual(row["quality_score_out_of_100"], 50)
+        self.assertEqual(
+            row["quality_review_observational_only"]["signals"][
+                "trade_activity_source_observed"], True,
+        )
+        self.assertNotIn(
+            "fresh_orderbook_snapshot_not_observed", row["missing_evidence"]
+        )
+        self.assertIn(
+            "complete_trade_tape_and_aggressor_flow_unverified",
+            row["missing_evidence"],
+        )
+        self.assertFalse(row["public_evidence"]["quality_review"]["execution_allowed"])
+
+
+    def test_two_watch_candidates_rank_actual_micro_quality_before_price_pump(self):
+        """Same M03 source, more verified activity and narrow book outranks pump."""
+        self.seed()
+        self.row("eth_idr", -2, 100, 900000000)
+        self.row("eth_idr", -1, 106, 901000000)
+        with sqlite3.connect(self.path) as db:
+            db.execute("""
+                CREATE TABLE m03_ws_microstructure_watch_minute(
+                  pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                  observed_local_epoch INTEGER NOT NULL,
+                  trade_frames INTEGER NOT NULL,
+                  source_buy_count INTEGER,source_sell_count INTEGER,
+                  source_buy_idr TEXT,source_sell_idr TEXT,
+                  last_trade_epoch INTEGER,trade_offset INTEGER,
+                  trade_gap_observed INTEGER NOT NULL,
+                  trade_truncated INTEGER NOT NULL,
+                  book_offset INTEGER,book_local_epoch INTEGER,
+                  best_bid_idr TEXT,best_ask_idr TEXT,spread_bps TEXT,
+                  bid_depth_top5_idr TEXT,ask_depth_top5_idr TEXT,
+                  book_imbalance_top5_ratio TEXT,
+                  source_malformed INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch))
+            """)
+            db.execute(
+                "INSERT INTO m03_ws_microstructure_watch_minute VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("uai_idr", NOW-60, NOW-5, 2, 3, 1,
+                 "500000", "100000", NOW-8, 40,
+                 0, 0, 51, NOW-5, "100", "100.2", "19.9800",
+                 "9000000", "7000000", "1.2857", 0)
+            )
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(report["candidate_count"], 2)
+        first, second = report["candidates"]
+        self.assertEqual(first["pair"], "uai_idr")
+        self.assertEqual(second["pair"], "eth_idr")
+        self.assertGreater(
+            first["quality_score_out_of_100"],
+            second["quality_score_out_of_100"]
+        )
+        self.assertFalse(first["quality_review_observational_only"]["buy_recommended"])
+        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        for row in report["candidates"]:
+            digests = {s["evidence_digest_sha256"] for s in row["role_slots"]}
+            self.assertEqual(digests, {row["evidence_digest_sha256"]})
 
     def test_rejects_tampered_pair_price_or_g1(self):
         self.seed()
