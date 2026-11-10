@@ -371,8 +371,21 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             "rolling_24h_turnover_idr": str(turnover),
             "rolling_24h_net_delta_idr": str(delta),
             "momentum_phase": row["momentum_phase"],
-            "trade_activity": "NOT_OBSERVED",
-            "orderbook": "NOT_OBSERVED",
+            "trade_activity": (
+                "PARTIAL_WS3_CAPTURE" if row.get(
+                    "microstructure_observation", {},
+                ).get("trade_activity_observed") else "NOT_OBSERVED"
+            ),
+            "orderbook": (
+                "PARTIAL_LOCAL_WS3_BOOK_SNAPSHOT" if row.get(
+                    "microstructure_observation", {},
+                ).get("orderbook_snapshot_observed") else "NOT_OBSERVED"
+            ),
+            "microstructure_source_evidence": row.get(
+                "microstructure_observation", {"status": "NOT_OBSERVED"},
+            ),
+            "trade_side_aggressor_qualified": False,
+            "complete_trade_tape_verified": False,
             "closed_candles": "UNVERIFIED",
             "independent_g1_issuer_verified": False,
             "execution_allowed": False,

@@ -277,6 +277,111 @@ class M03WSLiveWatchTests(unittest.TestCase):
         ):
             self.capture(parts)
 
+
+    def test_real_micro_trade_book_on_same_original_socket_and_db(self):
+        import json
+        from indodax_ai_bot.m03_ws_microstructure import (
+            trade_channel, book_channel,
+        )
+        book = {
+            "pair": "uaiidr",
+            "bid": [{"price": "100", "idr_volume": "7000000"}],
+            "ask": [{"price": "101", "idr_volume": "3000000"}],
+        }
+        source = frames(NOW, 100)
+        source.extend([
+            {"id": 3, "result": {"recoverable": True, "offset": 40}},
+            {"id": 4, "result": {"recoverable": True, "offset": 50}},
+            {"result": {"channel": trade_channel("uai_idr"),
+                        "data": {"offset": 41, "data": [
+                            ["uaiidr", NOW, 5, "buy", 100, "10000", "100"],
+                            ["uaiidr", NOW, 6, "sell", 100, "2000", "20"],
+                        ]}}},
+            {"result": {"channel": book_channel("uai_idr"),
+                        "data": {"offset": 51, "data": book}}},
+        ])
+        provider = FakeWS(source)
+        class SlowClock:
+            def __init__(self):
+                self.clock = 0
+            def __call__(self):
+                self.clock += 0.1
+                return self.clock
+        view = collect_ws3_market_summary_once(
+            ws_module=provider, monotonic=SlowClock(), epoch_fn=lambda: NOW,
+            observe_seconds=3, micro_pairs=("uai_idr",),
+        )
+        self.assertEqual(len(provider.sock.sent), 4)
+        self.assertEqual(provider.sock.sent[2]["params"]["channel"],
+                         trade_channel("uai_idr"))
+        self.assertEqual(provider.sock.sent[3]["params"]["channel"],
+                         book_channel("uai_idr"))
+        micro = view["microstructure"][0]
+        self.assertEqual(micro["source_buy_count"], 1)
+        self.assertEqual(micro["source_sell_count"], 1)
+        self.assertEqual(micro["source_buy_idr"], "10000")
+        self.assertEqual(micro["book"]["spread_bps"], "99.5025")
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "decisions.sqlite3"
+            report = persist_ws3_summary_watch(
+                DecisionJournal(path), view, now_epoch=NOW,
+            )
+            self.assertEqual(report["microstructure_pairs_saved"], 1)
+            self.assertFalse(report["microstructure_full_trade_tape_verified"])
+            self.assertFalse(report["g1_receipt_issuance_allowed"])
+            with sqlite3.connect(path) as db:
+                rows = db.execute("""
+                    SELECT source_buy_count,source_sell_count,
+                           spread_bps,trade_gap_observed
+                    FROM m03_ws_microstructure_watch_minute
+                """).fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][0:2], (1, 1))
+            self.assertEqual(rows[0][2], "99.5025")
+
+    def test_no_micro_optin_preserves_original_single_summary_subscription(self):
+        provider = FakeWS(frames(NOW, 100))
+        view = collect_ws3_market_summary_once(
+            ws_module=provider, monotonic=Clock(), observe_seconds=3,
+        )
+        self.assertEqual(len(provider.sock.sent), 2)
+        self.assertNotIn("microstructure", view)
+        with TemporaryDirectory() as temp:
+            db_path = Path(temp) / "decisions.sqlite3"
+            persist_ws3_summary_watch(
+                DecisionJournal(db_path), view, now_epoch=NOW,
+            )
+            with sqlite3.connect(db_path) as db:
+                exists = db.execute("""
+                    SELECT count(*) FROM sqlite_master
+                    WHERE type='table'
+                    AND name='m03_ws_microstructure_watch_minute'
+                """).fetchone()[0]
+                self.assertEqual(exists, 0)
+
+    def test_micro_denied_ack_does_not_fake_trade_or_fail_summary(self):
+        source = frames(NOW, 100)
+        source.extend([
+            {"id": 3, "error": {"reason": "denied"}},
+            {"id": 4, "error": {"reason": "denied"}},
+        ])
+        class SlowClock:
+            def __init__(self):
+                self.clock = 0
+            def __call__(self):
+                self.clock += 0.1
+                return self.clock
+        view = collect_ws3_market_summary_once(
+            ws_module=FakeWS(source), monotonic=SlowClock(),
+            epoch_fn=lambda: NOW, micro_pairs=("uai_idr",),
+            observe_seconds=3,
+        )
+        self.assertEqual(view["frames_observed"], 1)
+        row = view["microstructure"][0]
+        self.assertTrue(row["source_malformed"])
+        self.assertIsNone(row["source_buy_count"])
+        self.assertIsNone(row["book"])
+
     def test_missing_liquidity_and_excluded_main_pair_not_in_watch(self):
         parts = frames(NOW, 100, pair="flokiidr")
         view = self.capture(parts)

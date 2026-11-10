@@ -247,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
+    parser.add_argument("--m03-ws-microstructure-watch", action="store_true",
+                        help="Opt-in same WS3 socket per-pair trade activity and orderbook for at most 2 recent original M03 watches, no REST/G1/AI/trade")
     parser.add_argument("--m03-ws-observe-seconds", type=int, default=12,
                         help="Bounded PUBLIC WS3 WATCH observation seconds 3..45; only with --m03-ws-summary-watch-once")
     group.add_argument("--m03-ws-summary-watch-once", action="store_true",
@@ -367,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if not args.m03_ws_summary_watch_once and args.m03_ws_observe_seconds != 12:
             raise ConfigurationError("M03_WS_WATCH_DURATION_REQUIRES_WS3_MODE")
+        if args.m03_ws_microstructure_watch and not args.m03_ws_summary_watch_once:
+            raise ConfigurationError("M03_WS_MICRO_REQUIRES_WS3_SUMMARY_MODE")
         if args.m03_ws_summary_watch_once:
             # Explicit M03 public monitoring alternative, not a REST fix.
             # One bounded WS3 session and SAME original DecisionJournal DB.
@@ -375,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ConfigurationError("M03_WS_WATCH_WINDOW_INVALID")
             report = run_m03_ws3_summary_watch_once(
                 args.db, observe_seconds=args.m03_ws_observe_seconds,
+                micro_enabled=args.m03_ws_microstructure_watch,
             )
             print(json.dumps({
                 "m03_ws_summary_watch": report,
