@@ -25,6 +25,9 @@ from .m05_radar_momentum_nonlive import (
     inspect_original_m03_radar_readonly,
 )
 from .scanner import MAIN_EXCLUDED_PAIRS
+from .m03_solo_idr_cycle_policy import (
+    SoloIDRPolicyInvalid, candidate_quality_watch,
+)
 from .three_role_ai import ROLES
 
 
@@ -358,7 +361,40 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             if not delta.is_finite() or (
                     delta != 0 and delta.adjusted() > 20):
                 raise ValueError("M04_WS3_DELTA_INVALID")
-        except (ValueError, KeyError, TypeError, ArithmeticError, InvalidOperation):
+            # The original source-bound IDR quality policy is now actually
+            # called from M04; previously it was only a standalone module.
+            # This ranks PUBLIC evidence, not predicted ROI / BUY confidence.
+            quality = candidate_quality_watch(
+                candidate=row, now_epoch=now_epoch,
+                current_order_budget_idr=None,
+            )
+            if quality["status"] != "PUBLIC_WATCH_QUALITY_RANKED_NOT_BUY_READY":
+                raise ValueError("M04_WS3_QUALITY_INVALID")
+            if quality["pair"] != pair or not 0 <= (
+                    quality["review_score_out_of_100"]) <= 100:
+                raise ValueError("M04_WS3_QUALITY_INCONSISTENT")
+            micro = row.get("microstructure_observation")
+            if not isinstance(micro, dict):
+                raise ValueError("M04_WS3_MICROSTRUCTURE_INVALID")
+            if (micro.get("execution_allowed") is not False
+                    or micro.get("status") not in (
+                        "NOT_OBSERVED", "PARTIAL_SOURCE_OBSERVATION"
+                    )):
+                raise ValueError("M04_WS3_MICROSTRUCTURE_AUTHORITY_INVALID")
+            if micro.get("status") == "NOT_OBSERVED" and (
+                    micro.get("trade_activity_observed") is not False
+                    or micro.get("orderbook_snapshot_observed") is not False):
+                raise ValueError("M04_WS3_MICROSTRUCTURE_CONFLICT")
+            if micro.get("status") == "PARTIAL_SOURCE_OBSERVATION" and (
+                    micro.get("source_malformed") is True
+                    or micro.get("trade_source_gap_or_truncation") is True):
+                # Insufficient source continuity: still form a review packet,
+                # but place it behind clean source candidates.
+                quality = dict(quality, reject_reasons=list(
+                    quality["reject_reasons"]
+                ) + ["MICRO_SOURCE_GAP_OR_MALFORMED_REVIEW"])
+        except (ValueError, KeyError, TypeError, ArithmeticError,
+                InvalidOperation, SoloIDRPolicyInvalid):
             return _blocked("M04_WS3_INVALID_CANDIDATE_PACKET")
         seen.add(pair)
         packet = {
@@ -371,6 +407,8 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             "rolling_24h_turnover_idr": str(turnover),
             "rolling_24h_net_delta_idr": str(delta),
             "momentum_phase": row["momentum_phase"],
+            "quality_review": quality,
+            "quality_score_is_trade_probability": False,
             "trade_activity": (
                 "PARTIAL_WS3_CAPTURE" if row.get(
                     "microstructure_observation", {},
@@ -393,9 +431,16 @@ def prepare_ws3_three_role_watch_handoff_readonly(
         digest = sha256(json.dumps(
             packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")).hexdigest()
-        validated.append((row["momentum_priority_rank"], -rise, pair,
-                          packet, digest))
-    validated.sort(key=lambda x: (x[0], x[1], x[2]))
+        # Score is a non-executable deterministic WATCH ranking, not AI
+        # output. Malformed/gapped source must not outrank clean receipts.
+        quality_penalty = 100 if "MICRO_SOURCE_GAP_OR_MALFORMED_REVIEW" in (
+            quality["reject_reasons"]
+        ) else 0
+        validated.append((
+            quality_penalty, -quality["review_score_out_of_100"],
+            row["momentum_priority_rank"], -rise, pair, packet, digest
+        ))
+    validated.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
     result = _blocked(
         "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED"
         if validated else "M04_WS3_HANDOFF_NO_CURRENT_WATCH")
@@ -403,22 +448,43 @@ def prepare_ws3_three_role_watch_handoff_readonly(
     result["candidates"] = [{
         "pair": pair, "public_evidence": packet,
         "evidence_digest_sha256": digest,
+        "quality_review_observational_only": packet["quality_review"],
+        "quality_score_out_of_100": packet["quality_review"]["review_score_out_of_100"],
+        "quality_rank_reason": (
+            "SOURCE_GAP_OR_MALFORMED_REVIEW_DEPRIORITIZED"
+            if source_penalty else
+            "QUALITY_EVIDENCE_SCORE_WITH_MOMENTUM_TIEBREAK"
+        ),
         "role_slots": [{
             "role": role, "evidence_digest_sha256": digest,
             "dispatch": _ROLE_DISPATCH, "model_output": None,
         } for role in ROLES],
-        "missing_evidence": [
-            "actual_trade_buy_sell_flow",
-            "orderbook_spread_and_depth",
-            "closed_1m_5m_15m_candles",
-            "complete_15m_1h_tape_and_independent_g1",
-            "verified_capital_fees_and_account_ownership",
-        ],
+        "missing_evidence": (
+            (["partial_real_trade_activity_source_not_observed"]
+             if packet["trade_activity"] == "NOT_OBSERVED" else [])
+            + (["fresh_orderbook_snapshot_not_observed"]
+               if packet["orderbook"] == "NOT_OBSERVED" else [])
+            + [
+                "complete_trade_tape_and_aggressor_flow_unverified",
+                "stable_orderbook_depth_and_slippage_unverified",
+                "closed_1m_5m_15m_candles",
+                "complete_15m_1h_tape_and_independent_g1",
+                "verified_capital_fees_and_account_ownership",
+            ]
+        ),
         "execution_allowed": False,
-    } for _, _, pair, packet, digest in validated[:max_candidates]]
+    } for source_penalty, _, _, _, pair, packet, digest in (
+        validated[:max_candidates]
+    )]
     result["candidate_count"] = len(result["candidates"])
     result["three_role_input_slots_prepared"] = len(result["candidates"]) * 3
     result["actual_three_role_ai_calls"] = 0
+    result["quality_scored_candidates_before_top2"] = len(validated)
+    result["selection_policy"] = (
+        "SOURCE_CLEAN_FIRST_QUALITY_SCORE_DESC_MOMENTUM_PHASE_TIEBREAK_"
+        "NOT_PREDICTED_ROI_OR_FINAL_AI"
+    )
+    result["real_trade_book_data_can_be_partial"] = True
     return result
 
 
