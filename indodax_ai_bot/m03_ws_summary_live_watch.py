@@ -85,6 +85,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     "method": 1, "params": {"channel": _CHANNEL}, "id": 2,
                 }))
                 phase = "SUBSCRIBE"
+                auth_deadline = clock() + 8
             elif phase == "SUBSCRIBE":
                 if msg.get("id") != 2:
                     continue
@@ -101,8 +102,22 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     continue
                 if msg["result"].get("channel") != _CHANNEL:
                     continue
+                # The official channel may also contain non-IDR quoted
+                # markets; exclude those without claiming full coverage.
+                raw_data = msg["result"].get("data")
+                rows = raw_data.get("data") if isinstance(raw_data, dict) else None
+                if not isinstance(rows, list) or len(rows) > 800:
+                    raise M03WSWatchError("M03_WS_WATCH_SOURCE_SCHEMA_INVALID")
+                idr_rows = [row for row in rows
+                            if isinstance(row, list) and len(row) == 8
+                            and type(row[0]) is str and row[0].endswith("idr")]
+                if not idr_rows:
+                    continue
+                filtered = {"result": {"channel": _CHANNEL,
+                            "data": {"data": idr_rows,
+                                     "offset": raw_data.get("offset")}}}
                 try:
-                    parsed = normalize_documented_market_summary_offline(msg)
+                    parsed = normalize_documented_market_summary_offline(filtered)
                 except MarketSummaryContractError:
                     raise M03WSWatchError("M03_WS_WATCH_SOURCE_SCHEMA_INVALID") from None
                 offset = parsed["offset"]
