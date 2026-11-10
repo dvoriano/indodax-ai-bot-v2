@@ -501,6 +501,19 @@ def inspect_original_ws3_three_role_handoff_readonly(
     snap = inspect_original_m03_ws3_watch_readonly(
         db_path=db_path, now_epoch=now,
     )
+    # Preserve the precise upstream READ-ONLY file/query failure. No-source
+    # or permission failure is not an AI market REJECT and must not get
+    # hidden under the generic "untrusted watch candidate" validation.
+    upstream_statuses = {
+        "M05_WS3_SOURCE_UNTRUSTED": "M04_WS3_SOURCE_FILE_UNTRUSTED",
+        "M05_WS3_SOURCE_ABSENT": "M04_WS3_SOURCE_TABLE_ABSENT",
+        "M05_WS3_SOURCE_QUERY_UNAVAILABLE": "M04_WS3_SOURCE_QUERY_UNAVAILABLE",
+    }
+    source_status = snap.get("status") if isinstance(snap, dict) else None
+    if source_status in upstream_statuses:
+        result = _blocked(upstream_statuses[source_status])
+        result["upstream_source_status"] = source_status
+        return result
     return prepare_ws3_three_role_watch_handoff_readonly(
         snapshot=snap, now_epoch=now,
     )
