@@ -176,6 +176,68 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
             digests = {s["evidence_digest_sha256"] for s in row["role_slots"]}
             self.assertEqual(digests, {row["evidence_digest_sha256"]})
 
+
+    def test_owner_relative_db_path_handoff_is_not_misclassified_untrusted(self):
+        """Real owner command passes Path('runtime/decisions.sqlite3')."""
+        import os
+        self.seed()
+        relative_path = Path(os.path.relpath(self.path, start=Path.cwd()))
+        self.assertFalse(relative_path.is_absolute())
+        raw = inspect_original_m03_ws3_watch_readonly(
+            db_path=relative_path, now_epoch=NOW,
+        )
+        self.assertEqual(raw["status"],
+                         "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED")
+        self.assertEqual(len(raw["candidates"]), 1)
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=relative_path, now_epoch=NOW,
+        )
+        self.assertEqual(report["status"],
+                         "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED")
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(
+            [r["role"] for r in report["candidates"][0]["role_slots"]],
+            ["MARKET", "RISK", "STRATEGY"],
+        )
+        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_empty_source_is_not_genuine_ai_reject(self):
+        # Fresh private SQLite with NO original M03 table.
+        absolute = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(absolute["status"], "M04_WS3_SOURCE_TABLE_ABSENT")
+        self.assertEqual(absolute["upstream_source_status"],
+                         "M05_WS3_SOURCE_ABSENT")
+        self.assertEqual(absolute["candidate_count"], 0)
+        self.assertFalse(absolute["execution_allowed"])
+
+    def test_untrusted_source_path_has_precise_no_order_diagnostic(self):
+        bad = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.path.parent / "not-existing.sqlite3",
+            now_epoch=NOW,
+        )
+        self.assertEqual(bad["status"], "M04_WS3_SOURCE_FILE_UNTRUSTED")
+        self.assertEqual(bad["upstream_source_status"],
+                         "M05_WS3_SOURCE_UNTRUSTED")
+        self.assertFalse(bad["order_sent"])
+        self.assertFalse(bad["execution_allowed"])
+
+    def test_legitimate_source_without_current_price_rise_is_no_watch(self):
+        self.row("btc_idr", -2, 100, 900000000)
+        self.row("btc_idr", -1, 100, 900010000)
+        import os
+        relative_path = Path(os.path.relpath(self.path, start=Path.cwd()))
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=relative_path, now_epoch=NOW,
+        )
+        self.assertEqual(report["status"],
+                         "M04_WS3_HANDOFF_NO_CURRENT_WATCH")
+        self.assertNotIn("upstream_source_status", report)
+        self.assertEqual(report["candidate_count"], 0)
+        self.assertFalse(report["execution_allowed"])
+
     def test_rejects_tampered_pair_price_or_g1(self):
         self.seed()
         for key, invalid in (("latest_price_idr", "150"),
