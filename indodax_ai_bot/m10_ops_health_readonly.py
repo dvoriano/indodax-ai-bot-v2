@@ -61,6 +61,8 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
     result: dict[str, Any] = {
         "last_batch_status": "UNKNOWN",
         "last_batch_age_seconds": None,
+        # Validated checkpoint epoch is used by owner alert deduplication.
+        "last_completed_batch_epoch": None,
         "requested_sessions": None,
         "attempted_sessions": None,
         "completed_safe_sessions": None,
@@ -96,6 +98,7 @@ def _batch_observation(document: dict[str, Any] | None, now_epoch: int) -> tuple
     age = now_epoch - epoch
     result.update({
         "last_batch_status": status,
+        "last_completed_batch_epoch": epoch,
         "requested_sessions": requested,
         "attempted_sessions": attempted,
         "completed_safe_sessions": completed,
