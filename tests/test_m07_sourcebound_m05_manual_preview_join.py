@@ -103,10 +103,10 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
             now_epoch=NOW,
         )
         self.assertIsNotNone(card)
-        self.assertIn("M05 MANUAL BUY (SIMULASI TOMBOL, NO ORDER)", card["message_text"])
+        self.assertIn("M05 MANUAL BUY (BUTTON SIMULATION, NO ORDER)", card["message_text"])
         self.assertIn("BTCIDR", card["message_text"])
-        self.assertIn("Nominal pembelian (estimasi): Rp", card["message_text"])
-        self.assertIn("Token diperoleh (estimasi): ", card["message_text"])
+        self.assertIn("Estimated BUY amount: Rp", card["message_text"])
+        self.assertIn("Estimated tokens received: ", card["message_text"])
         self.assertNotIn("fee", card["message_text"].lower())
         self.assertNotIn("pajak", card["message_text"].lower())
         self.assertIn("Trading OFF", card["message_text"])
