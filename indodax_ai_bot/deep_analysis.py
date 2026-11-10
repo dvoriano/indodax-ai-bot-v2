@@ -1718,6 +1718,29 @@ def deep_scan(market: IndodaxPublicMarket, screening: ScannerResult, *, limit: i
     )
 
 
+# Any of these failures indicates a shared HTTP transport/egress outage,
+# NOT an isolated malformed candle/book for an individual pair. Retrying
+# a different pair against the same denied origin is an avoidable burst.
+_BULK_GLOBAL_SOURCE_ERROR_CODES = frozenset((
+    "PUBLIC_REST_HTTP_403_FORBIDDEN",
+    "PUBLIC_REST_HTTP_429_RATE_LIMITED",
+    "PUBLIC_REST_HTTP_5XX_UNAVAILABLE",
+    "PUBLIC_HTTP_OR_JSON_UNAVAILABLE",
+    "PUBLIC_REQUEST_FAILED",
+    "PUBLIC_SHARED_REST_RATE_BUDGET_EXCEEDED",
+    "PUBLIC_SHARED_REST_RATE_DB_UNAVAILABLE",
+))
+
+
+def _bulk_global_source_failure(reason: str) -> bool:
+    return (reason in _BULK_GLOBAL_SOURCE_ERROR_CODES
+            or reason.startswith((
+                "M03_EGRESS_",
+                "M03_STANDING_BTC_",
+                "PUBLIC_SHARED_REST_",
+            )))
+
+
 def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                           *, limit: int = 20,
                           on_candidate: Callable[[DeepCandidate, PublicObservation], DeepCandidate] | None = None) -> dict:
@@ -1765,6 +1788,14 @@ def bulk_public_deep_scan(market: IndodaxPublicMarket, screening: ScannerResult,
                 window_expired = True
                 break
         except PublicDataError as exc:
+            # Source-originated HTTP403/429/5xx or shared egress/transport
+            # failure is a whole-batch condition. Never fan out another
+            # 4-GET pair request after a denial; no retries, G1 or order.
+            # Isolated malformed pair payloads still become per-pair rejects.
+            if _bulk_global_source_failure(str(exc)):
+                raise PublicDataError(
+                    "BULK_GLOBAL_PUBLIC_SOURCE_FAILURE:" + str(exc)
+                ) from None
             candidates.append(DeepCandidate(
                 pair, None, "REJECT_SOURCE_ERROR", str(exc)))
             continue
