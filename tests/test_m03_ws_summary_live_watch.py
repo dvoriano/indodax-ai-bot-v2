@@ -118,6 +118,95 @@ class M03WSLiveWatchTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM decisions"
                 ).fetchone()[0], 0)
 
+    def test_latest_same_second_quote_uses_source_offset_per_pair(self):
+        incoming = frames(NOW, 100, offset=124)
+        second = {
+            "result": {
+                "channel": "market:summary-24h",
+                "data": {
+                    "offset": 125,
+                    "data": [["uaiidr", NOW, 110, 90, 200, 90,
+                              "250000000", "1500"]],
+                },
+            },
+        }
+        provider = FakeWS(incoming + [second])
+        snapshot = collect_ws3_market_summary_once(
+            ws_module=provider, monotonic=Clock(), observe_seconds=3,
+        )
+        self.assertEqual(snapshot["frames_observed"], 2)
+        by_pair = {x["pair"]: x for x in snapshot["pairs"]}
+        self.assertEqual(by_pair["uai_idr"]["last_idr"], "110")
+        self.assertEqual(by_pair["uai_idr"]["source_public_offset"], 125)
+        self.assertEqual(by_pair["btc_idr"]["source_public_offset"], 124)
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "decisions.sqlite3"
+            persist_ws3_summary_watch(
+                DecisionJournal(path), snapshot, now_epoch=NOW,
+            )
+            with sqlite3.connect(path) as db:
+                rows = dict(db.execute(
+                    "SELECT pair,public_offset FROM "
+                    "m03_ws_summary_watch_minute"
+                ).fetchall())
+            self.assertEqual(rows["uai_idr"], 125)
+            self.assertEqual(rows["btc_idr"], 124)
+
+    def test_duplicate_same_minute_cannot_reemit_candidate_or_rewrite_quote(self):
+        before = self.capture(frames(NOW, 100, offset=124))
+        after = self.capture(frames(NOW + 60, 110, offset=125))
+        replay = self.capture(frames(NOW + 60, 130, offset=126))
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "decisions.sqlite3"
+            journal = DecisionJournal(path)
+            persist_ws3_summary_watch(journal, before, now_epoch=NOW)
+            first = persist_ws3_summary_watch(
+                journal, after, now_epoch=NOW+60,
+            )
+            self.assertEqual(first["watch_candidate_count"], 1)
+            self.assertEqual(first["prior_source_samples_compared"], 2)
+            duplicate = persist_ws3_summary_watch(
+                journal, replay, now_epoch=NOW+60,
+            )
+            self.assertEqual(duplicate["watch_candidate_count"], 0)
+            self.assertEqual(duplicate["newly_stored_minute_samples"], 0)
+            self.assertEqual(
+                duplicate["candidate_baseline_status"],
+                "WARMUP_NO_PRIOR_COMPARABLE_PAIR",
+            )
+            with sqlite3.connect(path) as db:
+                saved = db.execute(
+                    "SELECT last_idr FROM m03_ws_summary_watch_minute "
+                    "WHERE pair='uai_idr' ORDER BY minute_epoch DESC LIMIT 1"
+                ).fetchone()
+            self.assertEqual(saved[0], "110")
+
+    def test_malformed_idr_row_is_not_silently_discarded(self):
+        incoming = frames(NOW, 100)
+        incoming[2]["result"]["data"]["data"][0] = [
+            "uaiidr", NOW, 100, 90, 200, 90, "250000000",
+        ]
+        with self.assertRaisesRegex(
+            M03WSWatchError, "M03_WS_WATCH_SOURCE_SCHEMA_INVALID",
+        ):
+            self.capture(incoming)
+
+    def test_first_scan_explains_baseline_warmup_without_claiming_rest_recovered(self):
+        data = self.capture(frames(NOW, 100))
+        with TemporaryDirectory() as temporary:
+            result = persist_ws3_summary_watch(
+                DecisionJournal(Path(temporary)/"decisions.sqlite3"),
+                data, now_epoch=NOW,
+            )
+            self.assertEqual(
+                result["candidate_baseline_status"],
+                "WARMUP_NO_PRIOR_COMPARABLE_PAIR",
+            )
+            self.assertEqual(result["original_rest_http_status"],
+                             "NOT_CHECKED_BY_WS3")
+            self.assertEqual(result["watch_candidate_count"], 0)
+            self.assertFalse(result["original_rest_all_idr_scanner_recovered"])
+
     def test_stale_source_does_not_enter_watch_database(self):
         view = self.capture(frames(NOW-3600, 110))
         with TemporaryDirectory() as temporary:
