@@ -6,7 +6,9 @@
 # No private API, paid AI, source trust promotion, BUY or SELL.
 [Unit]
 Description=Indodax V2 M03 minute ticker casebook with periodic deep20 -> strict G1/M04 REJECT
-ConditionPathExists=%h/indodax-ai-bot-v2/runtime/public_ws_btc.sqlite3
+# LIGHT all-IDR WATCH runs even when BTC WS journal is absent;
+# DEEP20 source admission checks BTC health at dispatch and fails closed.
+# Keep canonical V2 source existence check below, not a BTC data gate.
 ConditionPathExists=%h/indodax-ai-bot-v2/indodax_ai_bot/__main__.py
 
 [Service]
