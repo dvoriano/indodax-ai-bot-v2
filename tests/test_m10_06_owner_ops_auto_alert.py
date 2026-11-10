@@ -80,6 +80,7 @@ class OwnerOpsAutoAlertOffline(unittest.TestCase):
         self.assertEqual(self.send(api, snapshot)["messages_sent"], 1)
         message = api.sent[0]["text"]
         self.assertIn("BTC data stale", message)
+        self.assertIn("BTC_WS_BATCH_STALE", message)
         self.assertIn("M03 timer state requires review", message)
         self.assertIn("Details: /ops", message)
         self.assertIn("Trading OFF", message)
