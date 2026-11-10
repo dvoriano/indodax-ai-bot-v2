@@ -250,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Two supplied PUBLIC WS summary frames in private /tmp JSON; original orchestrator WATCH-only, NO socket or DB writes")
     group.add_argument("--scheduled-public-scanner-once", action="store_true",
                        help="Opt-in ONE minute tick: lightweight all-IDR scan each minute; original 20-deep G1/M04 public reject path every fifth minute, no orders")
+    parser.add_argument("--m03-light-only", action="store_true",
+                        help="Explicit reversible original M03 canary: scheduled all-IDR LIGHT WATCH every aligned minute, never DEEP20 or G1/AI/trade")
     group.add_argument("--deep-once", action="store_true", help="PUBLIC bounded 2-pair 1m/5m/15m indicator pilot; no BUY orders")
     group.add_argument("--public-history-research-once", action="store_true",
                        help="One PUBLIC 1m OHLC 90-360m time-split price-only research; never trades")
@@ -568,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
                     "M11_SHADOW_READONLY_FIXTURE_UNVERIFIED") from None
             print(json.dumps(report, sort_keys=True, separators=(",", ":")))
             return 0  # Synthetic SHADOW report only. Never LIVE release.
+        if args.m03_light_only and not args.scheduled_public_scanner_once:
+            raise ConfigurationError("M03_LIGHT_ONLY_REQUIRES_SCHEDULED_ORIGINAL")
         if args.scheduled_public_scanner_once:
             # Owner's user-systemd opt-in must be explicit and current.
             # Block before creating any decision or owner ledger, and BEFORE
@@ -1891,7 +1895,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not 5 <= tick_second <= 20:
                     schedule_lane = "SKIPPED_LATE_OR_EARLY_REJECT"
                     outcome = app.run_cycle(uuid4().hex)
-                elif (tick_epoch // 60) % 5 == 0:
+                elif (tick_epoch // 60) % 5 == 0 and not args.m03_light_only:
                     # BTC is mandatory for DEEP20, never for the LIGHT
                     # observation-only radar. Preserve PUBLIC policy/quotas
                     # on BOTH paths, and never promote degraded LIGHT to G1.
@@ -1958,6 +1962,7 @@ def main(argv: list[str] | None = None) -> int:
                 result["live_trading_authorized"] = False
             if args.scheduled_public_scanner_once:
                 result["scheduled_m03_lane"] = schedule_lane
+                result["m03_light_only_canary_active"] = bool(args.m03_light_only)
                 if m03_deep_deferred_btc:
                     result["m03_deep_deferred_reason"] = (
                         "BTC_PUBLIC_SOURCE_UNHEALTHY_LIGHT_WATCH_ONLY"
