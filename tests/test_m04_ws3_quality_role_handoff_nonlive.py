@@ -1,8 +1,17 @@
 """WS3 original V2 evidence to MARKET/RISK/STRATEGY uncalled role slots."""
 from pathlib import Path
+from contextlib import redirect_stdout
+from copy import deepcopy
+from io import StringIO
+import json
+import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from indodax_ai_bot.__main__ import main
+from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 
 from indodax_ai_bot.m04_radar_three_role_handoff_readonly import (
     inspect_original_ws3_three_role_handoff_readonly,
@@ -381,6 +390,112 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
                 snapshot=snap, now_epoch=NOW)
             self.assertEqual(r["status"], "M04_WS3_INVALID_CANDIDATE_PACKET")
             self.assertEqual(r["candidate_count"], 0)
+
+
+    def _micro_readiness_seed(self):
+        self.row("uai_idr", -2, 100, 700000000)
+        self.row("uai_idr", -1, "100.2", 700050000)
+        self.insert_micro_for_pair("uai_idr")
+
+    def test_original_cli_micro_to_role_readiness_never_pays_or_writes(self):
+        self._micro_readiness_seed()
+        safe = {
+            "INDODAX_TRADING_ENABLED": "NO",
+            "INDODAX_ALLOW_LIVE_EXECUTION": "NO",
+            "INDODAX_EXECUTION_MODE": "DRY_RUN",
+        }
+        credential = "secret-for-test-never-print"
+        provider_source = {
+            "SUMOPOD_API_KEY": credential,
+            "SUMOPOD_MODEL_MARKET": "glm-5.3-flash",
+            "SUMOPOD_MODEL_RISK": "glm-5.3-flash",
+            "SUMOPOD_MODEL_STRATEGY": "glm-5.3-flash",
+        }
+        out = StringIO()
+        with patch.dict(os.environ, safe, clear=True), patch(
+            "indodax_ai_bot.__main__._m04_original_provider_scope",
+            return_value=(provider_source, "OWNER_PRIVATE_CONFIG",
+                          "M04_V2_KEY_FILE_PRESENT_LOCAL_ONLY"),
+        ), patch(
+            "indodax_ai_bot.__main__.DecisionJournal",
+            side_effect=AssertionError("UNAUTHORIZED_JOURNAL_CREATE"),
+        ) as journal, patch(
+            "indodax_ai_bot.__main__.IndodaxPublicMarket",
+            side_effect=AssertionError("NO_PUBLIC_REST"),
+        ) as rest, patch(
+            "indodax_ai_bot.sumopod_provider._post",
+            side_effect=AssertionError("NO_PROVIDER_HTTP"),
+        ) as provider, patch(
+            "indodax_ai_bot.__main__.time.time", return_value=NOW,
+        ), redirect_stdout(out):
+            result_code = main([
+                "--m04-ws3-micro-readiness-once", "--db", str(self.path),
+            ])
+        self.assertEqual(result_code, 0)
+        journal.assert_not_called()
+        rest.assert_not_called()
+        provider.assert_not_called()
+        raw = out.getvalue()
+        self.assertNotIn(credential, raw)
+        report = json.loads(raw)["m04_ws3_micro_role_readiness"]
+        self.assertEqual(
+            report["status"], "M04_WS3_READINESS_ROLES_WAITING_G1_AND_PAID_GO",
+        )
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(report["role_slots_validated"], 3)
+        self.assertEqual(
+            report["candidates"][0]["role_input_order"],
+            ["MARKET", "RISK", "STRATEGY"],
+        )
+        self.assertFalse(report["candidates"][0]["candidate_buy_qualified"])
+        self.assertFalse(report["g1_independent_issuer_verified"])
+        self.assertFalse(report["model_dispatch_allowed"])
+        self.assertEqual(report["actual_three_role_responses"], 0)
+        self.assertEqual(report["paid_provider_calls"], 0)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_original_readiness_rejects_tampered_digest_and_role_order(self):
+        self._micro_readiness_seed()
+        clean = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        for tamper in ("digest", "role", "claim_g1"):
+            forged = deepcopy(clean)
+            if tamper == "digest":
+                forged["candidates"][0]["evidence_digest_sha256"] = "0" * 64
+            elif tamper == "role":
+                forged["candidates"][0]["role_slots"][1]["role"] = "MARKET"
+            else:
+                forged["candidates"][0]["public_evidence"][
+                    "independent_g1_issuer_verified"] = True
+            with self.subTest(tamper=tamper), patch(
+                "indodax_ai_bot.m04_radar_three_role_handoff_readonly."
+                "inspect_original_ws3_micro_prealert_three_role_handoff_readonly",
+                return_value=forged,
+            ):
+                result = DailyScalpingOrchestrator.inspect_m04_ws3_micro_role_readiness_readonly(
+                    db_path=self.path, now_epoch=NOW, provider_report={},
+                )
+                self.assertEqual(
+                    result["status"], "M04_WS3_READINESS_PACKET_INTEGRITY_FAILED",
+                )
+                self.assertEqual(result["candidate_count"], 0)
+                self.assertFalse(result["model_dispatch_allowed"])
+
+    def test_original_readiness_no_micro_and_missing_db_remain_nonlive(self):
+        self.seed()
+        no_micro = DailyScalpingOrchestrator.inspect_m04_ws3_micro_role_readiness_readonly(
+            db_path=self.path, now_epoch=NOW, provider_report={},
+        )
+        self.assertEqual(no_micro["status"], "M04_WS3_READINESS_NO_CURRENT_PREALERT")
+        self.assertEqual(no_micro["role_slots_validated"], 0)
+        self.path.unlink()
+        unavailable = DailyScalpingOrchestrator.inspect_m04_ws3_micro_role_readiness_readonly(
+            db_path=self.path, now_epoch=NOW, provider_report={},
+        )
+        self.assertEqual(unavailable["status"], "M04_WS3_READINESS_SOURCE_NOT_ACCEPTED")
+        self.assertEqual(unavailable["candidate_count"], 0)
+        self.assertFalse(unavailable["model_dispatch_allowed"])
 
 
 if __name__ == "__main__":
