@@ -59,8 +59,16 @@ class M03SharedEgressAdmission:
             if btc_runtime_dir is not None else
             Path.home() / "indodax-ai-bot-v2" / "runtime")
 
-    def allowed_local_limit(self) -> int:
+    def allowed_local_limit(self, *, require_btc_source: bool = True) -> int:
+        """Enforce the same PUBLIC consent and quota for every caller.
+
+        Only the scheduled LIGHT all-IDR WATCH lane may explicitly opt out
+        of the independent BTC health prerequisite. The default remains
+        BTC-gated for DEEP20, source-sensitive research and older callers.
+        """
         try:
+            if type(require_btc_source) is not bool:
+                raise M03EgressAdmissionError("M03_EGRESS_SOURCE_SCOPE_INVALID")
             now = self.clock()
             if (type(now) not in (int, float)
                     or not 0 < now < 1e12):
@@ -123,7 +131,8 @@ class M03SharedEgressAdmission:
                 # market evidence. All quota and identity rules still apply.
                 if type(issued) is not int or not 0 < issued <= now:
                     raise M03EgressAdmissionError("M03_EGRESS_STANDING_INVALID")
-                self._check_standing_btc(now)
+                if require_btc_source:
+                    self._check_standing_btc(now)
                 return min(_V2_LOCAL_REST_CAP, 168 - used)
             expires = policy["expires_at_epoch"]
             if (type(issued) is not int or type(expires) is not int

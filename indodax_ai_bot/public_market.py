@@ -152,7 +152,11 @@ class IndodaxPublicMarket:
 
     def __init__(self, *, fetch: Callable[[str], Any] | None = None,
                  clock: Callable[[], float] = time, timeout: float = 8.0,
-                 rest_budget: SharedPublicRestBudget | None = None) -> None:
+                 rest_budget: SharedPublicRestBudget | None = None,
+                 m03_light_only_public_watch: bool = False) -> None:
+        if type(m03_light_only_public_watch) is not bool:
+            raise PublicDataError("M03_LIGHT_PUBLIC_SCOPE_INVALID")
+        self._m03_light_only_public_watch = m03_light_only_public_watch
         self._clock = clock
         self._timeout = timeout
         self._fetch = fetch or self._http_json
@@ -203,8 +207,9 @@ class IndodaxPublicMarket:
     def _get(self, path: str) -> Any:
         self.public_get_attempt_count += 1
         try:
-            allowed = (self._m03_admission.allowed_local_limit()
-                       if self._m03_admission is not None else None)
+            allowed = (self._m03_admission.allowed_local_limit(
+                require_btc_source=not self._m03_light_only_public_watch,
+            ) if self._m03_admission is not None else None)
         except M03EgressAdmissionError as exc:
             raise PublicDataError(str(exc)) from None
         if self._rest_budget is not None:
