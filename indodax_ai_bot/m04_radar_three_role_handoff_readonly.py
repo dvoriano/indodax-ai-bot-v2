@@ -317,13 +317,20 @@ def prepare_ws3_three_role_watch_handoff_readonly(
     if (type(now_epoch) is not int or now_epoch <= 0
             or type(max_candidates) is not int or not 1 <= max_candidates <= 2):
         return _blocked("M04_WS3_INVALID_SCOPE")
+    prealert_mode = (
+        isinstance(snapshot, dict) and snapshot.get("status") ==
+        "M03_WS3_MICRO_PREALERT_REVIEW_UNATTESTED"
+    )
     if (not isinstance(snapshot, dict)
-            or snapshot.get("status") != "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"
+            or snapshot.get("status") not in (
+                "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED",
+                "M03_WS3_MICRO_PREALERT_REVIEW_UNATTESTED",
+            )
             or snapshot.get("source_authenticated_for_g1") is not False
             or snapshot.get("three_ai_role_responses_observed") is not False
             or snapshot.get("execution_allowed") is not False
             or not isinstance(snapshot.get("candidates"), list)
-            or len(snapshot["candidates"]) > 5):
+            or len(snapshot["candidates"]) > (40 if prealert_mode else 5)):
         return _blocked("M04_WS3_UNTRUSTED_SOURCE")
     validated = []
     seen = set()
