@@ -195,7 +195,7 @@ class TelegramOwnerPoller:
                 return ("OWNER_MODE_MENU_QUEUED", "sendMessage",
                         result["text"])
             # No source/account data is fabricated: UI gives NOT_CONNECTED.
-            reply = result.get("text", "Perintah belum tersedia. Trading OFF.")
+            reply = result.get("text", "Command unavailable. Trading OFF.")
             if not isinstance(reply, str) or len(reply) > 1024:
                 raise TelegramTransportError("M05_TELEGRAM_UNSAFE_REPLY")
             return ("OWNER_COMMAND_HANDLED", "sendMessage", reply)
@@ -250,11 +250,11 @@ class TelegramOwnerPoller:
                 return (
                     "OWNER_MODE_" + mode + "_RECORDED",
                     "answerCallbackQuery",
-                    "Mode " + mode + " tersimpan. Trading tetap OFF.",
+                    "Mode " + mode + " saved. Trading remains OFF.",
                 )
             return (
                 "OWNER_MODE_MENU_INVALID", "answerCallbackQuery",
-                "Tombol mode kedaluwarsa/terpakai. Kirim /kontrol lagi.",
+                "Mode button expired or already used. Send /control again.",
             )
         # A successful owner PASS is stored as PASS, not rewritten to
         # REJECT. This is a consent-only shadow: execution remains OFF.
@@ -291,7 +291,7 @@ class TelegramOwnerPoller:
                     raise TelegramTransportError(
                         "M07_CLICK_NONLIVE_HARDLOCK_CHANGED")
                 click_status = checked["status"]
-            reply = "Tombol " + label + " dicatat sebagai UJI. Tidak ada order."
+            reply = "Button " + label + " recorded as TEST only. No order sent."
             if click_status is not None:
                 reply += " M07: " + click_status[:70]
             return (
@@ -323,7 +323,7 @@ class TelegramOwnerPoller:
                 if notice.get("accepted") is not True:
                     raise TelegramTransportError("M05_OWNER_UI_FEEDBACK_CLAIM_FAILED")
                 outcome = "OWNER_CALLBACK_" + choice + "_RECORDED"
-            reply = "Owner " + choice + " dicatat. Simulasi saja, order OFF."
+            reply = "Owner " + choice + " recorded. Simulation only; orders OFF."
         else:
             if choice is not None or result.get("final_decision") is not None:
                 raise TelegramTransportError("M05_TELEGRAM_UNAUTHORIZED_FINAL")
@@ -342,11 +342,11 @@ class TelegramOwnerPoller:
                 label = notice["ui_notice_label"]
                 reply = (
                     "M05 review " + label +
-                    " sudah ditutup. Tidak ada keputusan baru. Trading OFF."
+                    " closed. No new decision recorded. Trading OFF."
                 )
             else:
                 outcome = "OWNER_CALLBACK_INVALID_OR_EXPIRED"
-                reply = "Proposal tidak berlaku. Tidak ada order."
+                reply = "Proposal invalid or expired. No order sent."
         return (outcome, "answerCallbackQuery", reply)
 
     def poll_once(self, *, limit: int = 10,
@@ -474,9 +474,9 @@ class TelegramOwnerPoller:
                                     "Mode "
                                     + ("AUTO" if outcome ==
                                        "OWNER_MODE_AUTO_RECORDED" else "MANUAL")
-                                    + " tersimpan. Scanner tetap independen "
-                                    "dari mode. Tidak ada order; "
-                                    "LIVE masih OFF."
+                                    + " saved. Scanner remains independent "
+                                    "of execution mode. No order sent; "
+                                    "LIVE remains OFF."
                                 ),
                             })
                     except TelegramTransportError:
@@ -528,8 +528,8 @@ class TelegramOwnerPoller:
                                 else "M05 review " +
                                 ("PASS" if outcome == "OWNER_CALLBACK_PASS_RECORDED"
                                  else "REJECT") +
-                                " TERCATAT satu kali. SIMULASI saja, "
-                                "tidak ada BUY/SELL. Trading OFF."
+                                " recorded once. Simulation only; "
+                                "no BUY/SELL order sent. Trading OFF."
                             )
                             self._api.call("sendMessage", {
                                 "chat_id": self._ledger.owner_user_id,
