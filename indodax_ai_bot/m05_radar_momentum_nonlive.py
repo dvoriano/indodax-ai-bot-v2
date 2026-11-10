@@ -500,7 +500,7 @@ def format_owner_radar_compact(candidate: dict) -> str:
     if candidate["volume_watch"]:
         mins = candidate["volume_comparison_seconds"] // 60
         lines.extend((
-            "f"📈 Δ 24h volume ({mins}m): "
+            f"📈 Δ 24h volume ({mins}m): "
             f"+{_idr_compact(candidate['volume_24h_net_change_idr'])}"
             f" ({_pct(candidate['volume_24h_net_change_pct'])})",
             "⚠️ The rolling 24h volume delta is NOT 1m executed turnover or BUY/SELL pressure.",
