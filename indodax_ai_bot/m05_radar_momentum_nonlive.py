@@ -382,6 +382,63 @@ def inspect_original_m03_radar_readonly(
 WS3_MAX_AGE_SECONDS = 150
 WS3_MIN_PRICE_RISE_PCT = Decimal("0.5")
 
+WS3_EARLY_MOVE_MIN_PCT = Decimal("0.35")
+WS3_EXTENDED_MOVE_PCT = Decimal("8")
+
+
+def _ws3_price_activity_review(samples: list, latest: tuple,
+                               previous: tuple) -> dict:
+    """Review only real minute-bucket WS3 quote samples.
+
+    Rolling 24h turnover snapshots are not 1m executed volume or BUY/SELL
+    activity. An early ramp requires three adjacent observed minutes and
+    two positive, accelerating price steps with positive 24h turnover delta.
+    """
+    delta = latest[3] - previous[3]
+    step = (latest[2] / previous[2] - 1) * 100
+    older = next((
+        x for x in samples[2:]
+        if x[0] == previous[0] - 60 and x[1] < previous[1]
+    ), None) if latest[0] - previous[0] == 60 else None
+    prior = (previous[2] / older[2] - 1) * 100 if older else None
+    total = (latest[2] / older[2] - 1) * 100 if older else None
+    accelerating = (prior is not None and total is not None
+                    and prior > 0 and step > prior
+                    and total >= WS3_EARLY_MOVE_MIN_PCT and delta > 0)
+    if step >= WS3_EXTENDED_MOVE_PCT or (
+            total is not None and total >= WS3_EXTENDED_MOVE_PCT):
+        phase, priority = "EXTENDED_MOVE_REVIEW", 3
+    elif accelerating:
+        phase, priority = "EARLY_ACCELERATION_WATCH", 0
+    elif delta > 0:
+        phase, priority = "PRICE_RISE_ROLLING_DELTA_POSITIVE", 1
+    else:
+        phase, priority = "PRICE_RISE_ACTIVITY_UNCONFIRMED", 2
+    return {
+        "momentum_phase": phase,
+        "momentum_priority_rank": priority,
+        "compared_source_minute_samples": 3 if older else 2,
+        "prior_price_step_pct": format(prior, ".4f") if prior is not None else None,
+        "latest_price_step_pct": format(step, ".4f"),
+        "two_step_price_change_pct": format(total, ".4f")
+        if total is not None else None,
+        "rolling_24h_delta_positive": delta > 0,
+        "actual_1m_executed_volume_idr": None,
+        "trade_buy_sell_counts": None,
+        "trade_buy_sell_idr": None,
+        "orderbook_spread_bps": None,
+        "orderbook_depth_imbalance": None,
+        "three_ai_role_responses": None,
+        "missing_microstructure": [
+            "TRADE_ACTIVITY_NOT_OBSERVED",
+            "ORDERBOOK_NOT_OBSERVED",
+            "CLOSED_1M_CANDLE_UNVERIFIED",
+            "G1_INDEPENDENT_ATTESTATION_UNVERIFIED",
+            "THREE_AI_RESPONSES_NOT_CALLED",
+        ],
+    }
+
+
 
 def inspect_original_m03_ws3_watch_readonly(
     *, db_path: Path = DEFAULT_DB, now_epoch: int | None = None,
@@ -452,10 +509,13 @@ def inspect_original_m03_ws3_watch_readonly(
         if reference is None:
             continue
         rise = (latest[2] / reference[2] - 1) * 100
-        if (not rise.is_finite() or rise < WS3_MIN_PRICE_RISE_PCT
-                or rise > Decimal("500")):
+        if not rise.is_finite() or rise <= 0 or rise > Decimal("500"):
             continue
         delta = latest[3] - reference[3]
+        review = _ws3_price_activity_review(samples, latest, reference)
+        if (rise < WS3_MIN_PRICE_RISE_PCT
+                and review["momentum_phase"] != "EARLY_ACCELERATION_WATCH"):
+            continue
         candidates.append({
             "pair": pair,
             "reference_epoch": reference[1],
@@ -472,8 +532,10 @@ def inspect_original_m03_ws3_watch_readonly(
             "bid_ask_spread_verified": False,
             "g1_verified": False,
             "execution_allowed": False,
+            **review,
         })
     candidates.sort(key=lambda x: (
+        x["momentum_priority_rank"],
         -Decimal(x["observed_rise_pct"]),
         -Decimal(x["volume_24h_net_change_idr"]),
         x["pair"],
@@ -481,6 +543,8 @@ def inspect_original_m03_ws3_watch_readonly(
     return {
         "status": "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED",
         "candidates": candidates[:5],
+        "quality_reviewed_candidate_count": len(candidates),
+        "ranked_review_shortlist_top40": candidates[:40],
         "source_authenticated_for_g1": False,
         "three_ai_role_responses_observed": False,
         "owner_order_specific_final_verified": False,
@@ -508,6 +572,8 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
         "Δ rolling 24h turnover: "
         + ("+" if turnover_delta > 0 else "")
         + _idr_compact(candidate["volume_24h_net_change_idr"]),
+        "🔎 Momentum: " + candidate["momentum_phase"]
+        + " (" + str(candidate["compared_source_minute_samples"]) + " snapshots)",
         "⚠️ Sample comparison only. NOT a closed 1m candle or 1m traded volume.",
         "⚠️ BUY/SELL direction, spread, depth, maintenance, G1 and AI UNVERIFIED.",
         "🔎 PUBLIC WATCH ONLY. NOT A BUY RECOMMENDATION. NO ORDER BUTTONS.",

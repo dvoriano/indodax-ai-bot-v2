@@ -302,6 +302,130 @@ def inspect_original_radar_three_role_handoff_readonly(
     )
 
 
+
+
+def prepare_ws3_three_role_watch_handoff_readonly(
+    *, snapshot: dict, now_epoch: int, max_candidates: int = 2,
+) -> dict[str, Any]:
+    """Source-bound, uncalled MARKET/RISK/STRATEGY input slots for WS3.
+
+    Original handoff, no second scanner, fake spread, paid AI, G1 or orders.
+    """
+    if (type(now_epoch) is not int or now_epoch <= 0
+            or type(max_candidates) is not int or not 1 <= max_candidates <= 2):
+        return _blocked("M04_WS3_INVALID_SCOPE")
+    if (not isinstance(snapshot, dict)
+            or snapshot.get("status") != "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"
+            or snapshot.get("source_authenticated_for_g1") is not False
+            or snapshot.get("three_ai_role_responses_observed") is not False
+            or snapshot.get("execution_allowed") is not False
+            or not isinstance(snapshot.get("candidates"), list)
+            or len(snapshot["candidates"]) > 5):
+        return _blocked("M04_WS3_UNTRUSTED_SOURCE")
+    validated = []
+    seen = set()
+    for row in snapshot["candidates"]:
+        try:
+            pair, observed, reference = (
+                row["pair"], row["observed_epoch"], row["reference_epoch"])
+            if (type(pair) is not str or not PAIR_ID.fullmatch(pair)
+                    or pair in MAIN_EXCLUDED_PAIRS or pair in seen
+                    or type(observed) is not int
+                    or not 0 <= now_epoch - observed <= 150
+                    or type(reference) is not int or not 0 < reference < observed
+                    or row["source"] != "INDODAX_PUBLIC_WS3_SUMMARY_24H"
+                    or row["g1_verified"] is not False
+                    or row["trade_direction_verified"] is not False
+                    or row["bid_ask_spread_verified"] is not False
+                    or row["execution_allowed"] is not False
+                    or row["momentum_phase"] not in (
+                        "EARLY_ACCELERATION_WATCH",
+                        "EXTENDED_MOVE_REVIEW",
+                        "PRICE_RISE_ROLLING_DELTA_POSITIVE",
+                        "PRICE_RISE_ACTIVITY_UNCONFIRMED")
+                    or type(row["momentum_priority_rank"]) is not int
+                    or not 0 <= row["momentum_priority_rank"] <= 3):
+                raise ValueError("M04_WS3_INVALID_PUBLIC_CANDIDATE")
+            before = _positive_decimal(row["reference_price_idr"])
+            after = _positive_decimal(row["latest_price_idr"])
+            turnover = _positive_decimal(row["volume_24h_idr"])
+            if turnover < MIN_TURNOVER_IDR:
+                raise ValueError("M04_WS3_LOW_TURNOVER")
+            rise = _positive_decimal(row["observed_rise_pct"])
+            if abs((after / before - 1) * 100 - rise) > Decimal("0.02"):
+                raise ValueError("M04_WS3_PRICE_CHANGED")
+            delta = Decimal(row["volume_24h_net_change_idr"])
+            if not delta.is_finite() or (
+                    delta != 0 and delta.adjusted() > 20):
+                raise ValueError("M04_WS3_DELTA_INVALID")
+        except (ValueError, KeyError, TypeError, ArithmeticError, InvalidOperation):
+            return _blocked("M04_WS3_INVALID_CANDIDATE_PACKET")
+        seen.add(pair)
+        packet = {
+            "source_kind": "ORIGINAL_V2_WS3_SUMMARY_WATCH_UNATTESTED",
+            "pair": pair, "observed_epoch": observed,
+            "reference_epoch": reference,
+            "price_before_idr": str(before),
+            "price_after_idr": str(after),
+            "observed_price_rise_pct": str(rise),
+            "rolling_24h_turnover_idr": str(turnover),
+            "rolling_24h_net_delta_idr": str(delta),
+            "momentum_phase": row["momentum_phase"],
+            "trade_activity": "NOT_OBSERVED",
+            "orderbook": "NOT_OBSERVED",
+            "closed_candles": "UNVERIFIED",
+            "independent_g1_issuer_verified": False,
+            "execution_allowed": False,
+        }
+        digest = sha256(json.dumps(
+            packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("ascii")).hexdigest()
+        validated.append((row["momentum_priority_rank"], -rise, pair,
+                          packet, digest))
+    validated.sort(key=lambda x: (x[0], x[1], x[2]))
+    result = _blocked(
+        "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED"
+        if validated else "M04_WS3_HANDOFF_NO_CURRENT_WATCH")
+    result["source"] = "EXISTING_ORIGINAL_M03_WS3_DB_ONLY"
+    result["candidates"] = [{
+        "pair": pair, "public_evidence": packet,
+        "evidence_digest_sha256": digest,
+        "role_slots": [{
+            "role": role, "evidence_digest_sha256": digest,
+            "dispatch": _ROLE_DISPATCH, "model_output": None,
+        } for role in ROLES],
+        "missing_evidence": [
+            "actual_trade_buy_sell_flow",
+            "orderbook_spread_and_depth",
+            "closed_1m_5m_15m_candles",
+            "complete_15m_1h_tape_and_independent_g1",
+            "verified_capital_fees_and_account_ownership",
+        ],
+        "execution_allowed": False,
+    } for _, _, pair, packet, digest in validated[:max_candidates]]
+    result["candidate_count"] = len(result["candidates"])
+    result["three_role_input_slots_prepared"] = len(result["candidates"]) * 3
+    result["actual_three_role_ai_calls"] = 0
+    return result
+
+
+def inspect_original_ws3_three_role_handoff_readonly(
+    *, now_epoch: int | None = None, db_path: Path = DEFAULT_DB,
+) -> dict[str, Any]:
+    """Existing WS3 inspector to existing M04 handoff, no network or writes."""
+    from .m05_radar_momentum_nonlive import (
+        inspect_original_m03_ws3_watch_readonly,
+    )
+    now = int(time.time()) if now_epoch is None else now_epoch
+    if type(now) is not int or now <= 0:
+        return _blocked("M04_WS3_INVALID_CLOCK")
+    snap = inspect_original_m03_ws3_watch_readonly(
+        db_path=db_path, now_epoch=now,
+    )
+    return prepare_ws3_three_role_watch_handoff_readonly(
+        snapshot=snap, now_epoch=now,
+    )
+
 def main() -> int:
     print(json.dumps(
         inspect_original_radar_three_role_handoff_readonly(),
