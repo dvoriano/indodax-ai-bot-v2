@@ -94,6 +94,20 @@ class OwnerOpsAutoAlertOffline(unittest.TestCase):
         self.assertEqual(self.send(api, now=NOW + 7200)["messages_sent"], 0)
         self.assertEqual(api.sent, [])
 
+    def test_same_warning_new_checkpoint_respects_hourly_spacing(self):
+        first = report(["BTC_WS_BATCH_REJECTED"], epoch=NOW - 30)
+        newer = report(["BTC_WS_BATCH_REJECTED"], epoch=NOW + 3571)
+        self.assertEqual(self.send(FakeApi(), first)["messages_sent"], 1)
+        self.assertEqual(
+            self.send(FakeApi(), newer, now=NOW + 3599)["messages_sent"], 0
+        )
+        self.assertEqual(
+            self.send(FakeApi(), newer, now=NOW + 3601)["messages_sent"], 1
+        )
+        self.assertEqual(
+            self.send(FakeApi(), newer, now=NOW + 7201)["messages_sent"], 0
+        )
+
     def test_changed_warning_throttled_then_sent(self):
         self.send(FakeApi())
         changed = report(["BTC_WS_BATCH_STALE"])
