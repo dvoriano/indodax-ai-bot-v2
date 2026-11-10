@@ -85,6 +85,50 @@ class M03WSLiveWatchTests(unittest.TestCase):
         self.assertEqual(value["frames_observed"], 1)
         return value
 
+    def test_40_second_timer_watch_is_bounded_and_source_only(self):
+        provider = FakeWS(frames(NOW, 110))
+        result = collect_ws3_market_summary_once(
+            ws_module=provider, monotonic=Clock(), observe_seconds=40,
+        )
+        self.assertEqual(result["requested_observation_seconds"], 40)
+        self.assertEqual(result["frames_observed"], 1)
+        self.assertTrue(provider.sock.closed)
+        for invalid in (0, 2, 46, True, None):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(
+                    M03WSWatchError, "M03_WS_WATCH_WINDOW_INVALID",
+                ):
+                    collect_ws3_market_summary_once(
+                        ws_module=FakeWS(frames(NOW, 100)),
+                        monotonic=Clock(), observe_seconds=invalid,
+                    )
+
+    def test_staged_unit_reuses_original_m03_service_and_persistent_v2_db(self):
+        root = Path(__file__).resolve().parents[1]
+        staged = (root / "deploy" /
+                  "indodax-v2-m03-mainpath.ws3-watch.service").read_text()
+        timer = (root / "deploy" /
+                 "indodax-v2-m03-mainpath.timer").read_text()
+        self.assertIn("--m03-ws-summary-watch-once", staged)
+        self.assertIn("--m03-ws-observe-seconds 40", staged)
+        self.assertIn("runtime/decisions.sqlite3", staged)
+        self.assertIn("indodax-v2-m03-mainpath.lock", staged)
+        self.assertIn("Type=oneshot", staged)
+        self.assertIn("Restart=no", staged)
+        self.assertIn("TimeoutStartSec=70s", staged)
+        self.assertNotIn("ExecStartPre=", staged)
+        self.assertNotIn("--scheduled-public-scanner-once", staged)
+        self.assertNotIn("https://indodax.com/api", staged)
+        self.assertIn("OnCalendar=", timer)
+        override = (root / "deploy" /
+                    "indodax-v2-m03-mainpath.ws3-watch.override.conf").read_text()
+        self.assertIn("[Service]", override)
+        self.assertIn("ExecStart=\nExecStart=/usr/bin/flock", override)
+        self.assertIn("--m03-ws-summary-watch-once", override)
+        self.assertIn("--m03-ws-observe-seconds 40", override)
+        self.assertIn("runtime/decisions.sqlite3", override)
+        self.assertNotIn("--scheduled-public-scanner-once", override)
+
     def test_official_public_summary_is_watch_only_and_archived_separately(self):
         before = self.capture(frames(NOW, 100))
         after = self.capture(frames(NOW + 60, 110, offset=125))

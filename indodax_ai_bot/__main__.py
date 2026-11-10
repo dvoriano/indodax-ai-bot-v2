@@ -247,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--public-once", action="store_true", help="Use official Indodax PUBLIC REST only; no private key/order")
     group.add_argument("--verify-public", action="store_true", help="One-shot public source verification: nonzero exit on public source errors")
     group.add_argument("--scan-once", action="store_true", help="PUBLIC all-IDR screening; no BUY signals, keys or trading")
+    parser.add_argument("--m03-ws-observe-seconds", type=int, default=12,
+                        help="Bounded PUBLIC WS3 WATCH observation seconds 3..45; only with --m03-ws-summary-watch-once")
     group.add_argument("--m03-ws-summary-watch-once", action="store_true",
                        help="One bounded official WS3 market-summary WATCH into the original V2 SQLite; no REST, bid/ask, G1, AI or order")
     group.add_argument("--m03-ws-summary-replay-offline-once", action="store_true",
@@ -363,11 +365,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = Settings.from_env()
 
+        if not args.m03_ws_summary_watch_once and args.m03_ws_observe_seconds != 12:
+            raise ConfigurationError("M03_WS_WATCH_DURATION_REQUIRES_WS3_MODE")
         if args.m03_ws_summary_watch_once:
             # Explicit M03 public monitoring alternative, not a REST fix.
             # One bounded WS3 session and SAME original DecisionJournal DB.
             settings.require_m01_safety()
-            report = run_m03_ws3_summary_watch_once(args.db)
+            if not 3 <= args.m03_ws_observe_seconds <= 45:
+                raise ConfigurationError("M03_WS_WATCH_WINDOW_INVALID")
+            report = run_m03_ws3_summary_watch_once(
+                args.db, observe_seconds=args.m03_ws_observe_seconds,
+            )
             print(json.dumps({
                 "m03_ws_summary_watch": report,
                 "rest_scanner_recovered": False,

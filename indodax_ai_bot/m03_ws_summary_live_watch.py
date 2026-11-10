@@ -34,7 +34,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
     A frame may describe just a subset of all IDR markets: never claim
     that this is a complete all-pair REST scan.
     """
-    if type(observe_seconds) is not int or not 3 <= observe_seconds <= 20:
+    if type(observe_seconds) is not int or not 3 <= observe_seconds <= 45:
         raise M03WSWatchError("M03_WS_WATCH_WINDOW_INVALID")
     if ws_module is None:
         try:
@@ -127,7 +127,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     continue
                 last_offset = offset
                 received_frames += 1
-                if received_frames > 100:
+                if received_frames > 300:
                     raise M03WSWatchError("M03_WS_WATCH_FRAME_LIMIT")
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
@@ -151,6 +151,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
             "channel": _CHANNEL,
             "pairs": list(observations.values()),
             "frames_observed": received_frames,
+            "requested_observation_seconds": observe_seconds,
             "last_public_offset": last_offset,
             "public_ws_authentication_observed": True,
             "not_full_universe_proof": True,
@@ -298,10 +299,12 @@ def persist_ws3_summary_watch(journal: DecisionJournal, snapshot: dict,
 
 
 def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
-                                   monotonic=None, now_fn=None) -> dict:
+                                   monotonic=None, now_fn=None,
+                                   observe_seconds: int = 12) -> dict:
     """One original V2 DB, one bounded official public WS session, no REST."""
     source = collect_ws3_market_summary_once(
         ws_module=ws_module, monotonic=monotonic,
+        observe_seconds=observe_seconds,
     )
     now = int((now_fn or time.time)())
     return persist_ws3_summary_watch(
