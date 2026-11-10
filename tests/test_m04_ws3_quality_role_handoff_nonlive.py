@@ -67,6 +67,49 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
             db_path=self.path, now_epoch=NOW)
         self.assertEqual(r["candidate_count"], 0)
 
+
+    def test_existing_three_ai_slots_include_only_observed_micro_sample(self):
+        self.seed()
+        with sqlite3.connect(self.path) as db:
+            db.execute("""
+                CREATE TABLE m03_ws_microstructure_watch_minute(
+                  pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                  observed_local_epoch INTEGER NOT NULL,
+                  trade_frames INTEGER NOT NULL,
+                  source_buy_count INTEGER,source_sell_count INTEGER,
+                  source_buy_idr TEXT,source_sell_idr TEXT,
+                  last_trade_epoch INTEGER,trade_offset INTEGER,
+                  trade_gap_observed INTEGER NOT NULL,
+                  trade_truncated INTEGER NOT NULL,
+                  book_offset INTEGER,book_local_epoch INTEGER,
+                  best_bid_idr TEXT,best_ask_idr TEXT,spread_bps TEXT,
+                  bid_depth_top5_idr TEXT,ask_depth_top5_idr TEXT,
+                  book_imbalance_top5_ratio TEXT,
+                  source_malformed INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch))
+            """)
+            db.execute("""
+                INSERT INTO m03_ws_microstructure_watch_minute
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                "uai_idr", NOW - 60, NOW - 5, 1, 3, 1,
+                "500000", "100000", NOW - 8, 40,
+                0, 0, 51, NOW - 5, "100", "101", "99.5025",
+                "9000000", "4000000", "2.2500", 0,
+            ))
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        row = report["candidates"][0]
+        packet = row["public_evidence"]
+        self.assertEqual(packet["trade_activity"], "PARTIAL_WS3_CAPTURE")
+        self.assertEqual(packet["orderbook"], "PARTIAL_LOCAL_WS3_BOOK_SNAPSHOT")
+        self.assertFalse(packet["trade_side_aggressor_qualified"])
+        self.assertFalse(packet["complete_trade_tape_verified"])
+        self.assertTrue(all(x["model_output"] is None
+                            for x in row["role_slots"]))
+        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+
     def test_rejects_tampered_pair_price_or_g1(self):
         self.seed()
         for key, invalid in (("latest_price_idr", "150"),
