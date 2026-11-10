@@ -40,7 +40,7 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
         }
 
     @staticmethod
-    def _outcome(*, bulk=None):
+    def _make_synthetic_outcome(*, bulk=None):
         return SimpleNamespace(
             trace_id="OFFLINE_FIXED_TRACE",
             final_decision=None,
@@ -80,10 +80,10 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
             "sys.stderr", new_callable=io.StringIO,
         ) as err:
             orchestrator.return_value.run_scan_cycle.return_value = (
-                self._outcome()
+                self._make_synthetic_outcome()
             )
             orchestrator.return_value.run_cycle.return_value = (
-                self._outcome(bulk={
+                self._make_synthetic_outcome(bulk={
                     "coverage_status": "NO_BULK_EVIDENCE",
                     "g1_verified": False,
                     "execution_allowed": False,
