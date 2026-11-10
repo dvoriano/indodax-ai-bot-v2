@@ -546,6 +546,54 @@ def inspect_original_ws3_three_role_handoff_readonly(
         snapshot=snap, now_epoch=now,
     )
 
+
+
+def inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+    *, now_epoch: int | None = None, db_path: Path = DEFAULT_DB,
+) -> dict[str, Any]:
+    """Score partial WS3 MICRO observations before M05 price alert threshold.
+
+    Reads the existing M03 minute summary and micro tables via the original
+    M05 source inspector, then prepares at most two immutable MARKET/RISK/
+    STRATEGY input packets. No new scanner, socket, owner notice or AI call.
+    """
+    from .m05_radar_momentum_nonlive import (
+        inspect_original_m03_ws3_watch_readonly,
+    )
+    now = int(time.time()) if now_epoch is None else now_epoch
+    if type(now) is not int or now <= 0:
+        return _blocked("M04_WS3_PREALERT_INVALID_CLOCK")
+    snap = inspect_original_m03_ws3_watch_readonly(
+        db_path=db_path, now_epoch=now,
+    )
+    upstream_statuses = {
+        "M05_WS3_SOURCE_UNTRUSTED": "M04_WS3_SOURCE_FILE_UNTRUSTED",
+        "M05_WS3_SOURCE_ABSENT": "M04_WS3_SOURCE_TABLE_ABSENT",
+        "M05_WS3_SOURCE_QUERY_UNAVAILABLE": "M04_WS3_SOURCE_QUERY_UNAVAILABLE",
+    }
+    status = snap.get("status") if isinstance(snap, dict) else None
+    if status in upstream_statuses:
+        result = _blocked(upstream_statuses[status])
+        result["upstream_source_status"] = status
+        return result
+    if status != "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED":
+        return _blocked("M04_WS3_PREALERT_SOURCE_UNEXPECTED")
+    sources = snap.get("micro_prealert_candidates_top40")
+    if (not isinstance(sources, list) or len(sources) > 40
+            or snap.get("micro_prealert_is_owner_telegram_alert") is not False):
+        return _blocked("M04_WS3_PREALERT_UNVERIFIED_SOURCE")
+    snapshot = {
+        "status": "M03_WS3_MICRO_PREALERT_REVIEW_UNATTESTED",
+        "source_authenticated_for_g1": False,
+        "three_ai_role_responses_observed": False,
+        "execution_allowed": False,
+        "candidates": sources,
+    }
+    return prepare_ws3_three_role_watch_handoff_readonly(
+        snapshot=snapshot, now_epoch=now,
+    )
+
+
 def main() -> int:
     print(json.dumps(
         inspect_original_radar_three_role_handoff_readonly(),
