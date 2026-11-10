@@ -111,7 +111,7 @@ class OriginalOwnerCommandTests(unittest.TestCase):
             "owner_review_pass_count"], 0)
         self.assertEqual(h["observed_owner_review"][
             "owner_review_reject_count"], 1)
-        self.assertIn("bukan transaksi", h["text"])
+        self.assertIn("not exchange trades", h["text"])
         self.assertIn("Trading OFF", h["text"])
         self.assertFalse(h["execution_allowed"])
         self.assertIsNone(h["final_decision"])
@@ -134,9 +134,9 @@ class OriginalOwnerCommandTests(unittest.TestCase):
                 self.assertFalse(reply["execution_allowed"])
                 self.assertTrue(reply["text"])
                 self.assertLess(len(reply["text"]), 1024)
-        self.assertIn("saldo", self.call_ui("/balance")["text"].lower())
+        self.assertIn("balance", self.call_ui("/balance")["text"].lower())
         self.assertIn("G1", self.call_ui("/ai")["text"])
-        self.assertIn("tidak", self.call_ui("/buy")["text"].lower())
+        self.assertIn("no order sent", self.call_ui("/buy")["text"].lower())
 
     def test_owner_only_private_and_restart_persistence(self):
         self.queue_one()
@@ -205,14 +205,14 @@ class OriginalOwnerCommandTests(unittest.TestCase):
         )
         responses = [p["text"] for method, p in recorded
                      if method == "sendMessage"]
-        self.assertIn("M05 market advisory lokal", responses[0])
-        self.assertIn("bukan transaksi", responses[1])
+        self.assertIn("M05 local market advisories", responses[0])
+        self.assertIn("not exchange trades", responses[1])
         self.assertIn("MARKET, RISK, STRATEGY", responses[2])
         self.assertIn("Trading", responses[3])
-        self.assertIn("Saldo IDR", responses[4])
+        self.assertIn("Spendable IDR balance", responses[4])
         self.assertEqual(self.ledger.telegram_next_offset(), 615)
         self.assertTrue(all("Trading OFF" in text or
-                            "Tidak mengirim order" in text
+                            "No order sent" in text
                             for text in responses if "order" in text))
         recorded.clear()
         with patch.object(TelegramBotApiClient, "call", new=fake_call):
