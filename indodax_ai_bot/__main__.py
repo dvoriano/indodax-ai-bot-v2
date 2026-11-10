@@ -1073,14 +1073,15 @@ def main(argv: list[str] | None = None) -> int:
             # explicit diagnostic, not a pre-final owner REJECT. Do not invent
             # a source receipt or promote candidate trust.
         if args.scheduled_public_scanner_once:
-            # Require BTC source even on light minutes so the same service
-            # cannot silently run without its planned M04 read-only join.
+            # Keep original path distinct, but the BTC SQLite is only
+            # required by DEEP20. Never refuse a LIGHT WATCH tick because
+            # an independent BTC collector has not produced a journal.
             if not args.ws_db:
                 raise ConfigurationError("M03_SCHEDULED_REQUIRES_BTC_WS_DB")
             if Path(args.ws_db).resolve() == Path(args.db).resolve():
                 raise ConfigurationError("M03_SCHEDULED_WS_DB_MUST_BE_SEPARATE")
-            if not Path(args.ws_db).is_file():
-                raise ConfigurationError("M03_SCHEDULED_WS_DB_NOT_FOUND")
+            # Missing BTC journal is handled at DEEP20 dispatch by
+            # downgrading to LIGHT; no fake source, G1 or buy permission.
         # M04-V: only explicit bulk CLI opt-in constructs the THREE-ROLE
         # Sumopod adapter from protected process environment. It is always
         # payment-disabled at this milestone and public G1 cannot qualify it.
@@ -1894,12 +1895,18 @@ def main(argv: list[str] | None = None) -> int:
                     # BTC is mandatory for DEEP20, never for the LIGHT
                     # observation-only radar. Preserve PUBLIC policy/quotas
                     # on BOTH paths, and never promote degraded LIGHT to G1.
-                    try:
-                        M03SharedEgressAdmission().allowed_local_limit()
-                    except M03EgressAdmissionError as exc:
-                        if str(exc) != "M03_STANDING_BTC_SOURCE_UNHEALTHY":
-                            raise ConfigurationError(str(exc)) from None
+                    if not Path(args.ws_db).is_file():
+                        # Required source is absent: do not construct a
+                        # separate database or fake a successful BTC join.
                         m03_deep_deferred_btc = True
+                    else:
+                        try:
+                            M03SharedEgressAdmission().allowed_local_limit()
+                        except M03EgressAdmissionError as exc:
+                            if str(exc) != "M03_STANDING_BTC_SOURCE_UNHEALTHY":
+                                raise ConfigurationError(str(exc)) from None
+                            m03_deep_deferred_btc = True
+                    if m03_deep_deferred_btc:
                         schedule_lane = "LIGHT_ALL_IDR_EVERY_MINUTE"
                         outcome = app.run_scan_cycle(
                             uuid4().hex,
