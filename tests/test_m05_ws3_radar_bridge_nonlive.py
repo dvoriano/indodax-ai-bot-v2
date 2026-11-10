@@ -153,6 +153,80 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.add("uai_idr", -1, "100.3", 500050000, 2)
         self.assertEqual(self.inspect()["candidates"], [])
 
+
+    def test_source_observed_trade_and_book_joins_ws3_watch_without_g1(self):
+        self.seed()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("""
+                CREATE TABLE m03_ws_microstructure_watch_minute(
+                  pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                  observed_local_epoch INTEGER NOT NULL,
+                  trade_frames INTEGER NOT NULL,
+                  source_buy_count INTEGER,source_sell_count INTEGER,
+                  source_buy_idr TEXT,source_sell_idr TEXT,
+                  last_trade_epoch INTEGER,trade_offset INTEGER,
+                  trade_gap_observed INTEGER NOT NULL,
+                  trade_truncated INTEGER NOT NULL,
+                  book_offset INTEGER,book_local_epoch INTEGER,
+                  best_bid_idr TEXT,best_ask_idr TEXT,spread_bps TEXT,
+                  bid_depth_top5_idr TEXT,ask_depth_top5_idr TEXT,
+                  book_imbalance_top5_ratio TEXT,
+                  source_malformed INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch))
+            """)
+            db.execute("""
+                INSERT INTO m03_ws_microstructure_watch_minute
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                "uai_idr", NOW - 60, NOW - 5, 1, 2, 1,
+                "500000", "90000", NOW - 8, 42,
+                0, 0, 51, NOW - 5, "100", "101", "99.5025",
+                "7000000", "4000000", "1.7500", 0,
+            ))
+        row = self.inspect()["candidates"][0]
+        micro = row["microstructure_observation"]
+        self.assertTrue(micro["trade_activity_observed"])
+        self.assertTrue(micro["orderbook_snapshot_observed"])
+        self.assertEqual(micro["source_reported_buy_count"], 2)
+        self.assertEqual(micro["source_reported_sell_count"], 1)
+        self.assertEqual(micro["spread_bps"], "99.5025")
+        self.assertFalse(micro["complete_trade_tape_verified"])
+        self.assertFalse(row["trade_direction_verified"])
+        self.assertFalse(row["g1_verified"])
+
+    def test_old_micro_rows_cannot_upgrade_watch_or_fake_flow(self):
+        self.seed()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("""
+                CREATE TABLE m03_ws_microstructure_watch_minute(
+                  pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                  observed_local_epoch INTEGER NOT NULL,
+                  trade_frames INTEGER NOT NULL,
+                  source_buy_count INTEGER,source_sell_count INTEGER,
+                  source_buy_idr TEXT,source_sell_idr TEXT,
+                  last_trade_epoch INTEGER,trade_offset INTEGER,
+                  trade_gap_observed INTEGER NOT NULL,
+                  trade_truncated INTEGER NOT NULL,
+                  book_offset INTEGER,book_local_epoch INTEGER,
+                  best_bid_idr TEXT,best_ask_idr TEXT,spread_bps TEXT,
+                  bid_depth_top5_idr TEXT,ask_depth_top5_idr TEXT,
+                  book_imbalance_top5_ratio TEXT,
+                  source_malformed INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch))
+            """)
+            db.execute("""
+                INSERT INTO m03_ws_microstructure_watch_minute
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                "uai_idr", NOW - 60, NOW - 300, 1, 2, 1,
+                "500000", "90000", NOW - 301, 42,
+                0, 0, 51, NOW - 300, "100", "101", "99.5025",
+                "7000000", "4000000", "1.7500", 0,
+            ))
+        micro = self.inspect()["candidates"][0]["microstructure_observation"]
+        self.assertEqual(micro["status"], "NOT_OBSERVED")
+        self.assertFalse(micro["trade_activity_observed"])
+
     def test_existing_owner_poller_sender_reuses_durable_claim_and_no_buttons(self):
         self.seed()
         api = FakeTelegram()
