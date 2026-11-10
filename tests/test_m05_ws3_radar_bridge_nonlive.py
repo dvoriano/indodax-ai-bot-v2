@@ -52,12 +52,13 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         )
         self.owner_path.chmod(0o600)
 
-    def add(self, pair, minute_delta, price, turnover, offset):
+    def add(self, pair, minute_delta, price, turnover, offset,
+            *, exchange_offset_seconds=42):
         minute = NOW + minute_delta * 60
         with sqlite3.connect(self.db_path) as db:
             db.execute(
                 "INSERT INTO m03_ws_summary_watch_minute VALUES (?,?,?,?,?,?)",
-                (pair, minute, minute - 8,
+                (pair, minute, minute + exchange_offset_seconds,
                  str(price), str(turnover), offset),
             )
 
@@ -88,6 +89,35 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertFalse(snap["candidates"][0]["bid_ask_spread_verified"])
         self.assertFalse(snap["source_authenticated_for_g1"])
         self.assertFalse(snap["execution_allowed"])
+
+    def test_live_exchange_timestamp_inside_minute_is_accepted(self):
+        # A real WS3 20:52:42 event is later than the bucket start 20:52:00.
+        self.seed()
+        row = self.inspect()["candidates"][0]
+        self.assertEqual(row["observed_epoch"], NOW - 60 + 42)
+        self.assertEqual(row["source_elapsed_seconds"], 60)
+        self.assertGreater(row["observed_epoch"], NOW - 60)
+
+    def test_recent_previous_minute_publication_is_allowed(self):
+        self.add("uai_idr", -2, 100, 500000000, 1,
+                 exchange_offset_seconds=-20)
+        self.add("uai_idr", -1, 101, 500030000, 2,
+                 exchange_offset_seconds=-15)
+        snap = self.inspect()
+        self.assertEqual(len(snap["candidates"]), 1)
+        self.assertEqual(snap["candidates"][0]["pair"], "uai_idr")
+
+    def test_invalid_exchange_offset_after_minute_end_rejected(self):
+        self.add("uai_idr", -2, 100, 500000000, 1)
+        self.add("uai_idr", -1, 101, 500030000, 2,
+                 exchange_offset_seconds=60)
+        self.assertEqual(self.inspect()["candidates"], [])
+
+    def test_unreasonably_old_exchange_offset_rejected(self):
+        self.add("uai_idr", -2, 100, 500000000, 1)
+        self.add("uai_idr", -1, 101, 500030000, 2,
+                 exchange_offset_seconds=-91)
+        self.assertEqual(self.inspect()["candidates"], [])
 
     def test_existing_owner_poller_sender_reuses_durable_claim_and_no_buttons(self):
         self.seed()

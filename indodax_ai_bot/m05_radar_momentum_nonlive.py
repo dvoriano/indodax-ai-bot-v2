@@ -424,7 +424,11 @@ def inspect_original_m03_ws3_watch_readonly(
                 or pair in MAIN_EXCLUDED_PAIRS
                 or type(minute) is not int or minute % 60 != 0
                 or type(exchange) is not int or type(offset) is not int
-                or offset < 0 or not 0 <= minute - exchange <= 90
+                or offset < 0
+                # M03 buckets by LOCAL insertion minute, while exchange
+                # timestamps may occur DURING that minute or up to 90s
+                # before it. Never require exchange <= minute start.
+                or not -90 <= exchange - minute < 60
                 or exchange > now):
             continue
         price = _finite_number(raw_price, positive=True)
