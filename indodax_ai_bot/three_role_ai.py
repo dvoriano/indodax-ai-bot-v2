@@ -16,7 +16,7 @@ from time import time
 from typing import Any
 
 from .contracts import FinalDecision
-from .g1_receipt import G1ReceiptVerifier
+from .g1_receipt import G1ReceiptVerifier, validate_g1_coverage_manifest
 
 ROLES = ("MARKET", "RISK", "STRATEGY")
 
@@ -524,6 +524,14 @@ class ThreeRoleShadow:
                 if isinstance(bulk.get("strategy_quote_claims_by_pair"), dict)
                 else None
             ),
+            # A signed digest must include the independent issuer's actual
+            # upstream coverage manifest, not just self-asserted trust flags.
+            # Public M03 REST/WS intentionally never creates this manifest.
+            "g1_coverage_manifest": deepcopy(
+                (bulk.get("g1_coverage_manifests_by_pair") or {}).get(preview[0])
+                if isinstance(bulk.get("g1_coverage_manifests_by_pair"), dict)
+                else None
+            ),
         }
         # M03 final max-2 preview is quality/stage ranked, so its candidate
         # may sit below scalar-score top10. Prefer the SAME-cycle selected
@@ -610,6 +618,22 @@ class ThreeRoleShadow:
                     closed_epoch=epoch, source_digest=digest, now=now,
                 )):
             return _reject("G1_ISSUER_RECEIPT_UNVERIFIED", digest=digest,
+                           candidate_pair=source["pair"])
+        # A valid MAC authenticates a configured INTERNAL issuer, but does
+        # not by itself demonstrate upstream trade-window completeness.
+        # Require exactly closed candles and independently claimed 15m/1h
+        # replay coverage sealed into the SAME frozen digest. The provenance
+        # issuer still needs real, separate source acceptance in production.
+        manifest = source["g1_coverage_manifest"]
+        if manifest is None:
+            return _reject("G1_WINDOW_COVERAGE_UNKNOWN", digest=digest,
+                           candidate_pair=source["pair"])
+        claims = bulk["g1_attestation"]["claims"]
+        if not validate_g1_coverage_manifest(
+            manifest, issuer_id=claims["issuer_id"],
+            pair=source["pair"], closed_epoch=epoch,
+        ):
+            return _reject("G1_WINDOW_COVERAGE_INVALID", digest=digest,
                            candidate_pair=source["pair"])
         if self._caller is None:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,

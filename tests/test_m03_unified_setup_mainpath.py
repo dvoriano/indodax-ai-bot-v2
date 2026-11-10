@@ -23,7 +23,7 @@ from indodax_ai_bot.deep_analysis import (
 from indodax_ai_bot.three_role_ai import ThreeRoleShadow
 from indodax_ai_bot.g1_receipt import G1ReceiptVerifier, canonical_receipt_bytes
 from indodax_ai_bot.scanner import DailyPairScanner
-from test_m04a_three_role_shadow import RoleCaller, TEST_G1_SECRET
+from test_m04a_three_role_shadow import RoleCaller, TEST_G1_SECRET, synthetic_issuer_coverage_manifest
 from test_m03b_deep import observation
 from test_m03g_bulk import FakeBulkMarket, fake_screen
 from test_m03_volume_screen import boosted_fake
@@ -240,6 +240,12 @@ class M03UnifiedSetupMainpathTests(unittest.TestCase):
         for key in ("g1_verified", "source_trust_verified", "trade_history_complete"):
             data[key] = True
             data["eligible_cohort"][key] = True
+        # Synthetic, independent-by-CONTRACT only: no real G1 data or GO.
+        data["g1_coverage_manifests_by_pair"] = {
+            "token018_idr": synthetic_issuer_coverage_manifest(
+                "token018_idr", data["eligible_cohort"]["closed_1m_epoch"],
+            ),
+        }
         before = ThreeRoleShadow(clock=lambda: 1800000140).run("trace", data)
         self.assertEqual(before["reason"], "G1_ISSUER_RECEIPT_UNVERIFIED")
         digest = before["source_digest_sha256"]

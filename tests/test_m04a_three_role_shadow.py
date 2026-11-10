@@ -19,6 +19,43 @@ from indodax_ai_bot.g1_receipt import G1ReceiptVerifier, canonical_receipt_bytes
 from test_m03g_bulk import FakeBulkMarket, fake_screen
 
 
+def synthetic_issuer_coverage_manifest(pair: str, epoch: int) -> dict:
+    """TEST FIXTURE ONLY: numeric continuity never proves real upstream G1."""
+    def proof(label: str) -> str:
+        return sha256(f"synthetic-only:{pair}:{epoch}:{label}".encode()).hexdigest()
+
+    return {
+        "schema_version": 1,
+        "issuer_id": "synthetic-unit-issuer",
+        "pair": pair,
+        "closed_1m_epoch": epoch,
+        "upstream_origin_receipt_sha256": proof("upstream"),
+        "btc_regime_receipt_sha256": proof("btc"),
+        "closed_candles": {
+            name: {
+                "start_epoch": epoch - epoch % seconds - seconds,
+                "end_epoch": epoch - epoch % seconds,
+                "source_receipt_sha256": proof("candle-" + name),
+            }
+            for name, seconds in (("1m", 60), ("5m", 300), ("15m", 900))
+        },
+        "tape_windows": {
+            name: {
+                "start_epoch": epoch - seconds,
+                "end_epoch": epoch,
+                "first_offset": 101 if name == "1h" else 161,
+                "last_offset": 200,
+                "publication_count": 100 if name == "1h" else 40,
+                "gap_count": 0,
+                "unrecovered_gap_count": 0,
+                "replay_reconciled": True,
+                "coverage_receipt_sha256": proof("tape-" + name),
+            }
+            for name, seconds in (("15m", 900), ("1h", 3600))
+        },
+    }
+
+
 def source(*, trusted=False, preview=True):
     result = bulk_public_deep_scan(FakeBulkMarket(), fake_screen())
     if preview:
@@ -44,6 +81,9 @@ def source(*, trusted=False, preview=True):
                 for name in ("listing", "spendable_balance", "fee_slippage",
                              "owned_position", "market_liquidity")
             }
+        }
+        result["g1_coverage_manifests_by_pair"] = {
+            "btc_idr": synthetic_issuer_coverage_manifest("btc_idr", epoch)
         }
     return result
 

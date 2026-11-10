@@ -79,3 +79,88 @@ class G1ReceiptVerifier:
             return False
         expected = hmac.new(self._secret, payload, sha256).hexdigest()
         return hmac.compare_digest(expected, mac)
+
+
+def validate_g1_coverage_manifest(
+    manifest: Any, *, issuer_id: str, pair: str, closed_epoch: int,
+) -> bool:
+    """Validate a SOURCE-BOUND *claim* of complete G1 source coverage.
+
+    This is a necessary, NEVER sufficient gate. The manifest alone is not
+    independently verified. The caller MUST authenticate the trusted INTERNAL
+    issuer's MAC over the immutable source digest containing this manifest,
+    then separately establish that the issuer actually audited upstream tape.
+    No proof can be manufactured from WS3/public REST snapshots or flags.
+    Production has no trusted issuer configured.
+    """
+    if (type(manifest) is not dict or set(manifest) != {
+            "schema_version", "issuer_id", "pair", "closed_1m_epoch",
+            "upstream_origin_receipt_sha256", "closed_candles",
+            "tape_windows", "btc_regime_receipt_sha256",
+        } or type(manifest.get("schema_version")) is not int
+            or manifest["schema_version"] != 1
+            or manifest.get("issuer_id") != issuer_id
+            or manifest.get("pair") != pair
+            or type(closed_epoch) is not int or closed_epoch <= 0
+            or closed_epoch % 60 != 0
+            or type(manifest.get("closed_1m_epoch")) is not int
+            or manifest["closed_1m_epoch"] != closed_epoch
+            or not isinstance(issuer_id, str) or not _ISSUER.fullmatch(issuer_id)
+            or not isinstance(pair, str)
+            or not re.fullmatch(r"[a-z0-9]+_idr", pair)):
+        return False
+
+    def digest(value: Any) -> bool:
+        return type(value) is str and bool(_HEX64.fullmatch(value)) and value != "0" * 64
+
+    if (not digest(manifest["upstream_origin_receipt_sha256"])
+            or not digest(manifest["btc_regime_receipt_sha256"])):
+        return False
+
+    candles = manifest["closed_candles"]
+    if type(candles) is not dict or set(candles) != {"1m", "5m", "15m"}:
+        return False
+    for label, span in (("1m", 60), ("5m", 300), ("15m", 900)):
+        row = candles[label]
+        # The last *finished* 5m/15m candle may close before the 1m.
+        expected = closed_epoch - closed_epoch % span
+        if (type(row) is not dict or set(row) != {
+                "start_epoch", "end_epoch", "source_receipt_sha256",
+            } or type(row["start_epoch"]) is not int
+                or type(row["end_epoch"]) is not int
+                or row["start_epoch"] != expected - span
+                or row["end_epoch"] != expected
+                or not digest(row["source_receipt_sha256"])):
+            return False
+
+    tape = manifest["tape_windows"]
+    if type(tape) is not dict or set(tape) != {"15m", "1h"}:
+        return False
+    for label, seconds in (("15m", 900), ("1h", 3600)):
+        row = tape[label]
+        if (type(row) is not dict or set(row) != {
+                "start_epoch", "end_epoch", "first_offset", "last_offset",
+                "publication_count", "gap_count", "unrecovered_gap_count",
+                "replay_reconciled", "coverage_receipt_sha256",
+            } or any(type(row.get(k)) is not int for k in (
+                "start_epoch", "end_epoch", "first_offset", "last_offset",
+                "publication_count", "gap_count", "unrecovered_gap_count",
+            )) or row["start_epoch"] != closed_epoch - seconds
+                or row["end_epoch"] != closed_epoch
+                or row["first_offset"] <= 0
+                or row["last_offset"] < row["first_offset"]
+                or row["publication_count"] <= 0
+                # Offset counts are publication units, not trade counts.
+                # Only an upstream issuer can establish semantics/coverage.
+                or row["last_offset"] - row["first_offset"] + 1 != row["publication_count"]
+                or row["gap_count"] != 0
+                or row["unrecovered_gap_count"] != 0
+                or row["replay_reconciled"] is not True
+                or not digest(row["coverage_receipt_sha256"])):
+            return False
+    fifteen, hour = tape["15m"], tape["1h"]
+    return (
+        hour["first_offset"] <= fifteen["first_offset"]
+        <= fifteen["last_offset"] <= hour["last_offset"]
+        and fifteen["publication_count"] <= hour["publication_count"]
+    )
