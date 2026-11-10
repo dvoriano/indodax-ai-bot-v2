@@ -27,7 +27,10 @@ def _decimal(raw, *, positive: bool) -> str:
         n = Decimal(str(raw))
     except (ValueError, InvalidOperation):
         raise MarketSummaryContractError("WS_SUMMARY_NUMBER_INVALID") from None
-    if not n.is_finite() or (n <= 0 if positive else n < 0):
+    if (not n.is_finite() or (n <= 0 if positive else n < 0)
+            or len(n.as_tuple().digits) > 48
+            or not -30 <= n.adjusted() <= 30):
+        # Untrusted decimal exponents must not expand into gigabyte strings.
         raise MarketSummaryContractError("WS_SUMMARY_NUMBER_INVALID")
     return format(n, "f")
 
