@@ -52,7 +52,7 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
             bulk=bulk, ai_shadow=None, owner_advisory=None,
         )
 
-    def invoke(self, *, now, btc_ok, public_policy_ok=True):
+    def invoke(self, *, now, btc_ok, public_policy_ok=True, light_only=False):
         inspections = []
 
         def admission(*, require_btc_source=True):
@@ -89,7 +89,7 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
                     "execution_allowed": False,
                 })
             )
-            status = cli.main(self.args)
+            status = cli.main(self.args + (["--m03-light-only"] if light_only else []))
             stdout = out.getvalue()
             stderr = err.getvalue()
             light_calls = orchestrator.return_value.run_scan_cycle.call_args_list
@@ -195,6 +195,58 @@ class OriginalM03LightIndependentDispatchTests(unittest.TestCase):
         self.assertIn("INDODAX_TRADING_ENABLED=NO", unit)
         self.assertIn("INDODAX_ALLOW_LIVE_EXECUTION=NO", unit)
         self.assertIn("INDODAX_EXECUTION_MODE=DRY_RUN", unit)
+
+    def test_explicit_canary_bypasses_deep_every_fifth_minute_even_if_btc_healthy(self):
+        code, out, err, checks, lights, deeps, factory = self.invoke(
+            now=1794000010, btc_ok=True, light_only=True,
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")
+        doc = json.loads(out)
+        self.assertTrue(doc["m03_light_only_canary_active"])
+        self.assertEqual(doc["scheduled_m03_lane"], "LIGHT_ALL_IDR_EVERY_MINUTE")
+        self.assertNotIn("m03_deep_deferred_reason", doc)
+        self.assertEqual(checks, [False])
+        self.assertEqual(len(lights), 1)
+        self.assertFalse(deeps)
+        self.assertTrue(factory[0].kwargs["m03_light_only_public_watch"])
+        self.assertFalse(doc["execution_allowed"])
+        self.assertFalse(doc["live_trading_authorized"])
+
+    def test_explicit_canary_without_btc_db_preserves_original_light(self):
+        self.ws.unlink()
+        code, out, err, checks, lights, deeps, _factory = self.invoke(
+            now=1794000010, btc_ok=False, light_only=True,
+        )
+        self.assertEqual(code, 0, err)
+        doc = json.loads(out)
+        self.assertEqual(doc["scheduled_m03_lane"], "LIGHT_ALL_IDR_EVERY_MINUTE")
+        self.assertTrue(doc["m03_light_only_canary_active"])
+        self.assertEqual(checks, [False])
+        self.assertFalse(deeps)
+        self.assertFalse(self.ws.exists())
+
+    def test_canary_cannot_override_public_owner_egress_denial(self):
+        code, out, err, checks, lights, deeps, factory = self.invoke(
+            now=1794000010, btc_ok=True,
+            public_policy_ok=False, light_only=True,
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("M03_EGRESS_POLICY_UNAVAILABLE", err)
+        self.assertEqual(out, "")
+        self.assertEqual(checks, [False])
+        self.assertFalse(lights)
+        self.assertFalse(deeps)
+        self.assertFalse(factory)
+
+    def test_canary_requires_original_scheduled_cli_action(self):
+        with patch.dict(os.environ, self.env), patch(
+            "sys.stdout", new_callable=io.StringIO,
+        ) as out, patch("sys.stderr", new_callable=io.StringIO) as err:
+            rc = cli.main(["--m03-light-only"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("M03_LIGHT_ONLY_REQUIRES_SCHEDULED_ORIGINAL", err.getvalue())
 
     def test_public_owner_policy_failure_is_still_denied_before_scanner(self):
         code, out, err, checks, lights, deeps, factory = self.invoke(
