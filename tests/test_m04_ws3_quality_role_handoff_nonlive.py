@@ -306,6 +306,9 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertEqual(r["three_role_input_slots_prepared"], 3)
         self.assertEqual(r["actual_three_role_ai_calls"], 0)
         self.assertEqual(r["provider_http_calls"], 0)
+        self.assertEqual(r["telegram_messages_sent"], 0)
+        self.assertEqual(r["new_scanner_calls"], 0)
+        self.assertFalse(r["order_sent"])
         self.assertFalse(r["execution_allowed"])
         self.assertFalse(r["source_is_m05_telegram_alert"])
         c = r["candidates"][0]
