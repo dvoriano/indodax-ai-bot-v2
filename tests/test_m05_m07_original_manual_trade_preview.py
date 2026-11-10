@@ -160,10 +160,10 @@ class ManualOwnerTradePreviewOriginalV2Tests(unittest.TestCase):
         self.assertEqual(first["processed"],0)
         self.assertEqual(len(self.sent),1)
         card=self.sent[0]
-        self.assertIn("MANUAL BUY (SIMULASI TOMBOL, NO ORDER)",card["text"])
-        self.assertIn("Harga LIMIT per INJ: Rp25.000",card["text"])
-        self.assertIn("Nominal pembelian (estimasi): Rp100.000",card["text"])
-        self.assertIn("Token diperoleh (estimasi): 4 INJ",card["text"])
+        self.assertIn("MANUAL BUY (BUTTON SIMULATION, NO ORDER)",card["text"])
+        self.assertIn("LIMIT price per INJ: Rp25.000",card["text"])
+        self.assertIn("Estimated BUY amount: Rp100.000",card["text"])
+        self.assertIn("Estimated tokens received: 4 INJ",card["text"])
         self.assertNotIn("fee",card["text"].lower())
         self.assertIn("m07manual001",card["text"])
         self.assertEqual(card["chat_id"],OWNER)
@@ -197,15 +197,15 @@ class ManualOwnerTradePreviewOriginalV2Tests(unittest.TestCase):
         self.assert_never_order(q)
         self.tick()
         self.assertIn(
-            "Total penjualan (estimasi): Rp100.000",
+            "Estimated SELL proceeds: Rp100.000",
             self.sent[0]["text"],
         )
         self.assertIn(
-            "Modal beli: belum ada lot BUY V2 terverifikasi",
+            "BUY cost: no verified V2-owned BUY lot",
             self.sent[0]["text"],
         )
         self.assertIn(
-            "Untung/rugi bersih: belum dapat dihitung",
+            "Net P/L: unavailable without verified BUY cost",
             self.sent[0]["text"],
         )
         self.assertNotIn("fee",self.sent[0]["text"].lower())
@@ -436,7 +436,7 @@ class ManualOwnerTradePreviewOriginalV2Tests(unittest.TestCase):
             )
             self.assertFalse(r["execution_allowed"])
             self.assertFalse(r["accepted"])
-            self.assertIn("Tidak mengirim order",r["text"])
+            self.assertIn("No order sent",r["text"])
 
     def test_original_m07_order_adapter_stays_hardlocked_all_methods(self):
         adapter=OfficialV2OrderAdapter()
