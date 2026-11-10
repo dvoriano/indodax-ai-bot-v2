@@ -37,10 +37,10 @@ class OfflineTelegramOwnerInterface:
                 "text": (
                     "Indodax V2 M05 OFFLINE SHADOW. Mode "
                     + state["owner_mode"]
-                    + ". Tidak ada proposal eksekusi yang disahkan."
+                    + ". No executable proposal has been authorized."
                 ),
             }
-        if command == "/kontrol" and len(parts) == 1:
+        if command in ("/kontrol", "/control") and len(parts) == 1:
             menu = self.ledger.issue_mode_switch_menu(
                 user_id=user_id, chat_id=chat_id,
                 now_epoch=now_epoch, chat_type=chat_type,
@@ -50,16 +50,16 @@ class OfflineTelegramOwnerInterface:
             return {
                 **menu,
                 "text": (
-                    "Pilih mode bot V2. Aktif saat ini: "
+                    "Select the V2 bot mode. Current mode: "
                     + menu["owner_mode"]
-                    + ".\\nMANUAL: BUY/SELL memerlukan tombol order owner."
-                    + "\\nAUTO: keputusan bot otomatis hanya SETELAH"
-                    + " seluruh izin LIVE, AI Risk dan batas modal sah."
-                    + "\\nSaat ini order tetap OFF. Scanner tidak"
-                    + " dimatikan oleh pilihan mode."
+                    + ".\\nMANUAL: BUY/SELL requires the owner order button."
+                    + "\\nAUTO: automated bot execution is permitted only AFTER"
+                    + " LIVE, AI Risk, and capital checks are authorized."
+                    + "\\nOrders remain OFF. Scanner operation is not"
+                    + " disabled by the selected mode."
                 ).replace("\\n", "\n"),
             }
-        if command == "/kontrol" and len(parts) == 2:
+        if command in ("/kontrol", "/control") and len(parts) == 2:
             if parts[1] not in ("manual", "auto"):
                 return _blocked("INVALID_TELEGRAM_MODE")
             updated = self.ledger.switch_mode(
@@ -71,7 +71,7 @@ class OfflineTelegramOwnerInterface:
                 **updated,
                 "text": (
                     "Mode " + updated["owner_mode"]
-                    + " tersimpan. AUTO tidak mengaktifkan order."
+                    + " saved. AUTO does not enable order execution."
                 ),
             }
         if command == "/reviewtest" and len(parts) == 1:
@@ -83,18 +83,18 @@ class OfflineTelegramOwnerInterface:
                 return {
                     **demo,
                     "text": (
-                        "SIMULASI M05: tombol PASS/REJECT review-only "
-                        "diantrekan untuk tick Telegram berikutnya. "
-                        "Berlaku maksimal 90 detik, bukan sinyal pasar, "
-                        "tidak memakai AI/G1/saldo. Trading OFF."
+                        "M05 SIMULATION: review-only PASS/REJECT buttons "
+                        "queued for the next Telegram cycle. "
+                        "Valid for up to 90 seconds; not a market signal. "
+                        "No AI/G1/balance lookup. Trading OFF."
                     ),
                 }
             return {
                 **demo,
                 "text": (
-                    "SIMULASI M05 tidak diantrekan: "
+                    "M05 simulation not queued: "
                     + demo.get("reason", "UNAVAILABLE")
-                    + ". Tidak ada order. Trading OFF."
+                    + ". No order sent. Trading OFF."
                 ),
             }
         # M10-06: ORIGINAL owner-only M05 read-only operations view.
@@ -109,8 +109,8 @@ class OfflineTelegramOwnerInterface:
                 reply = format_v2_ops_owner_message(review)
             except (OSError, TypeError, ValueError):
                 reply = (
-                    "M10-06 V2 operasional READ-ONLY. STATUS_UNVERIFIED. "
-                    "Tidak ada GO. Trading OFF."
+                    "M10-06 V2 READ-ONLY operations. STATUS_UNVERIFIED. "
+                    "No GO authorization. Trading OFF."
                 )
             return {
                 **_blocked("M10_OPS_OWNER_READONLY_NO_EXECUTION"),
@@ -144,29 +144,29 @@ class OfflineTelegramOwnerInterface:
                 # billing data or raw error is ever put on Telegram.
                 models = report["configured_models_by_role"]
                 fields = "; ".join(
-                    role + "=" + (models.get(role) or "BELUM_DIATUR")
+                    role + "=" + (models.get(role) or "NOT_CONFIGURED")
                     for role in ("MARKET", "RISK", "STRATEGY")
                 )
                 key_state = (
-                    "TERKONFIGURASI_LOKAL"
+                    "LOCALLY_CONFIGURED"
                     if report["sumopod_key_present_nonempty"]
-                    else "BELUM_TERDETEKSI"
+                    else "NOT_DETECTED"
                 )
                 status = report["status"]
                 reply = (
-                    "M04 AI readiness (READ-ONLY): MARKET, RISK, STRATEGY\\nSumber: " + origin
+                    "M04 AI readiness (READ-ONLY): MARKET, RISK, STRATEGY\\nSource: " + origin
                     + "\\n" + fields
                     + "\\nAPI key: " + key_state
                     + "\\nStatus: " + status
-                    + "\\nModel/provider online: BELUM_DIVERIFIKASI"
-                    + "\\nG1 independen: BELUM_DIVERIFIKASI"
-                    + "\\n3 respons AI nyata: BELUM_TERVERIFIKASI"
-                    + "\\nPaid AI dipanggil: TIDAK. Order: OFF."
+                    + "\\nModel/provider online: UNVERIFIED"
+                    + "\\nIndependent G1: UNVERIFIED"
+                    + "\\nThree live AI responses: UNVERIFIED"
+                    + "\\nPaid AI invoked: NO. Orders: OFF."
                 ).replace("\\n", "\n")
             except (M04OwnerConfigDenied, ValueError, OSError):
                 reply = (
-                    "M04 AI readiness: KONFIGURASI_TIDAK_BISA_DIVERIFIKASI. "
-                    "Tidak ada akses provider, biaya AI atau order. OFF."
+                    "M04 AI readiness: CONFIGURATION_UNVERIFIED. "
+                    "No provider access, paid AI call, or order. OFF."
                 )
             return {
                 **_blocked("M04_PROVIDER_READINESS_DIAGNOSTIC_ONLY"),
@@ -183,21 +183,21 @@ class OfflineTelegramOwnerInterface:
                 return review
             if command == "/market":
                 details = (
-                    "M05 market advisory lokal: antre " +
+                    "M05 local market advisories: queued " +
                     str(review["fresh_queued_market_advisories"]) +
-                    ", terkirim & belum kedaluwarsa " +
+                    ", sent and unexpired " +
                     str(review["fresh_sent_market_advisories"]) +
-                    ", tercatat total " +
+                    ", total recorded " +
                     str(review["market_advisories_recorded"]) + ". "
-                    "Sumber G1 independen belum terverifikasi; "
-                    "ini BUKAN sinyal BUY. Trading OFF."
+                    "Independent G1 source is unverified; "
+                    "this is NOT a BUY signal. Trading OFF."
                 )
             else:
                 details = (
-                    "M05 riwayat tombol review owner (bukan transaksi): "
+                    "M05 owner review history (not exchange trades): "
                     "PASS " + str(review["owner_review_pass_count"]) +
                     ", REJECT " + str(review["owner_review_reject_count"]) +
-                    ". Riwayat order/fill Indodax belum diverifikasi. "
+                    ". Indodax order/fill history is unverified. "
                     "Trading OFF."
                 )
             return {
@@ -208,15 +208,15 @@ class OfflineTelegramOwnerInterface:
         # Every other original V2 owner command gives a precise, safe
         # unavailable status without pretending to access private APIs.
         unavailable = {
-            "/scanner": "Scanner M03 terjadwal belum berizin aktif; /market hanya menampilkan ledger M05. Trading OFF.",
+            "/scanner": "Scheduled M03 scanner is not confirmed active; /market displays only M05 ledger data. Trading OFF.",
 
-            "/buy": "BUY tidak tersedia: G1, risk, saldo akun, izin LIVE dan executor belum terverifikasi. Tidak mengirim order.",
-            "/positions": "Posisi milik bot belum diverifikasi dari fill Indodax. Tidak mengarang posisi atau saldo.",
-            "/sell": "SELL tidak tersedia: kepemilikan lot/fill dan executor belum terverifikasi. Tidak mengirim order.",
-            "/balance": "Saldo IDR spendable belum terverifikasi dari private Indodax View Only. Tidak menampilkan saldo perkiraan.",
-            "/profit": "Profit bersih realisasi WIB belum terverifikasi dari BUY/SELL fill serta settlement. Tidak menampilkan PnL fiktif.",
-            "/risk": "RISK belum mempunyai sumber G1, respons AI dan preflight saldo terverifikasi. Trading tetap OFF.",
-            "/health": "Layanan perintah M05 tersedia; kesehatan pasar G1 dan account trading belum diverifikasi. Trading OFF.",
+            "/buy": "BUY unavailable: G1, risk, account balance, LIVE permission, and executor are unverified. No order sent.",
+            "/positions": "Bot-owned positions are not verified against Indodax fills. No positions or balances are inferred.",
+            "/sell": "SELL unavailable: owned lots/fills and executor are unverified. No order sent.",
+            "/balance": "Spendable IDR balance is not verified against private Indodax View Only data. No estimated balance shown.",
+            "/profit": "Realized net profit (WIB) is not verified against BUY/SELL fills and settlement. No estimated PnL shown.",
+            "/risk": "RISK lacks verified G1 source, AI responses, and balance preflight. Trading OFF.",
+            "/health": "M05 command receiver available; G1 market health and trading account are unverified. Trading OFF.",
         }
         if command in unavailable and len(parts) == 1:
             return {
@@ -258,7 +258,7 @@ class OfflineTelegramOwnerInterface:
             return _blocked("INVALID_SHADOW_CALLBACKS")
         return {
             "inline_keyboard": [[
-                {"text": "PASS (uji)", "callback_data": callbacks["PASS"]},
+                {"text": "PASS (test)", "callback_data": callbacks["PASS"]},
                 {"text": "REJECT", "callback_data": callbacks["REJECT"]},
             ]],
             "network_sent": False,
