@@ -415,6 +415,114 @@ class M03WSLiveWatchTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row, (1, "99.5025"))
 
+
+    def test_missing_db_pool_bootstraps_from_live_summary_same_socket_and_sqlite(self):
+        """Owner failure regression: no prior archive does NOT suppress micro."""
+        from indodax_ai_bot.m03_ws_summary_live_watch import (
+            run_m03_ws3_summary_watch_once,
+        )
+        from indodax_ai_bot.m03_ws_microstructure import (
+            trade_channel, book_channel,
+        )
+        class SlowClock:
+            def __init__(self):
+                self.n = 0
+            def __call__(self):
+                self.n += 0.05
+                return self.n
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "decisions.sqlite3"
+            # No summary archive exists before the session.
+            source = frames(NOW, 100)
+            source.extend([
+                {"id": 3, "result": {"recoverable": True, "offset": 17}},
+                {"id": 4, "result": {"recoverable": True, "offset": 25}},
+                {"id": 5, "result": {"recoverable": True, "offset": 37}},
+                {"id": 6, "result": {"recoverable": True, "offset": 48}},
+                {"result": {"channel": trade_channel("uai_idr"),
+                    "data": {"offset": 38, "data": [
+                        ["uaiidr", NOW, 20, "buy", 100, "25000", "250"],
+                    ]}}},
+                {"result": {"channel": book_channel("uai_idr"),
+                    "data": {"offset": 49, "data": {
+                        "pair": "uaiidr",
+                        "bid": [{"price": 100, "idr_volume": "7000000"}],
+                        "ask": [{"price": 101, "idr_volume": "5000000"}],
+                    }}}},
+            ])
+            fake = FakeWS(source)
+            report = run_m03_ws3_summary_watch_once(
+                str(path), ws_module=fake, monotonic=SlowClock(),
+                now_fn=lambda: NOW, observe_seconds=3, micro_enabled=True,
+            )
+            self.assertEqual(report["status"], "M03_WS3_SUMMARY_WATCH_ONLY_OK")
+            self.assertEqual(report["microstructure_pairs_selected"], 2)
+            self.assertEqual(report["microstructure_pairs_saved"], 1)
+            self.assertEqual(report["microstructure_channels_requested"], 4)
+            self.assertEqual(report["microstructure_channels_acknowledged"], 4)
+            self.assertEqual(report["microstructure_trade_frames_received"], 1)
+            self.assertEqual(report["microstructure_book_snapshots_received"], 1)
+            self.assertEqual(report["microstructure_discovery_pool_count"], 2)
+            self.assertEqual(report["microstructure_discovery_status"],
+                             "M03_MICRO_DISCOVERY_CURRENT_WS3_SELECTED")
+            self.assertEqual(report["microstructure_selection_source"],
+                             "CURRENT_AUTHENTICATED_WS3_SUMMARY")
+            self.assertFalse(report["microstructure_selection_is_telegram_alert"])
+            self.assertFalse(report["execution_allowed"])
+            channels = [x["params"]["channel"] for x in fake.sock.sent[2:]]
+            self.assertCountEqual(channels, [
+                trade_channel("uai_idr"), book_channel("uai_idr"),
+                trade_channel("btc_idr"), book_channel("btc_idr"),
+            ])
+            with sqlite3.connect(path) as db:
+                saved = db.execute(
+                    "SELECT pair,source_buy_count,spread_bps "
+                    "FROM m03_ws_microstructure_watch_minute"
+                ).fetchall()
+            self.assertEqual(saved, [("uai_idr", 1, "99.5025")])
+
+    def test_live_auto_selection_rejects_manual_only_or_thin_pairs(self):
+        source = frames(NOW, 100, pair="flokiidr")
+        source[2]["result"]["data"]["data"][1][6] = "100000000"
+        fake = FakeWS(source)
+        capture = collect_ws3_market_summary_once(
+            ws_module=fake, monotonic=Clock(), observe_seconds=3,
+            epoch_fn=lambda: NOW, micro_autoselect_from_stream=True,
+        )
+        self.assertEqual(len(fake.sock.sent), 2)
+        self.assertEqual(capture["microstructure_selected_pairs"], [])
+        self.assertEqual(capture["microstructure_current_liquid_pool_count"], 0)
+        self.assertEqual(capture["microstructure_channels_requested"], 0)
+        self.assertFalse(capture["microstructure"])
+
+    def test_auto_micro_denied_channels_remain_unverified_and_summary_alive(self):
+        with self.assertRaisesRegex(
+            M03WSWatchError, "M03_WS_MICRO_AUTO_SCOPE_INVALID",
+        ):
+            collect_ws3_market_summary_once(
+                ws_module=FakeWS(frames(NOW, 100)),
+                micro_pairs=("btc_idr",),
+                micro_autoselect_from_stream=True,
+            )
+        source = frames(NOW, 100)
+        source.extend(
+            {"id": i, "error": {"reason": "denied"}}
+            for i in (3, 4, 5, 6)
+        )
+        snapshot = collect_ws3_market_summary_once(
+            ws_module=FakeWS(source), monotonic=Clock(),
+            observe_seconds=3, epoch_fn=lambda: NOW,
+            micro_autoselect_from_stream=True,
+        )
+        self.assertEqual(snapshot["frames_observed"], 1)
+        self.assertEqual(snapshot["microstructure_channels_requested"], 4)
+        self.assertEqual(snapshot["microstructure_channels_acknowledged"], 0)
+        self.assertEqual(snapshot["microstructure_trade_frames_received"], 0)
+        self.assertEqual(snapshot["microstructure_book_snapshots_received"], 0)
+        self.assertEqual(snapshot["microstructure_malformed_pair_count"], 2)
+        self.assertTrue(all(x["book"] is None for x in snapshot["microstructure"]))
+        self.assertFalse(snapshot["microstructure"][0]["execution_allowed"])
+
     def test_no_micro_optin_preserves_original_single_summary_subscription(self):
         provider = FakeWS(frames(NOW, 100))
         view = collect_ws3_market_summary_once(

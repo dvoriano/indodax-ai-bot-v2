@@ -34,7 +34,8 @@ class M03WSWatchError(ValueError):
 def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     observe_seconds: int = 12,
                                     micro_pairs: tuple[str, ...] = (),
-                                    epoch_fn=None) -> dict:
+                                    epoch_fn=None,
+                                    micro_autoselect_from_stream: bool = False) -> dict:
     """Authenticate to OFFICIAL public WS3 and collect documented summary frames.
 
     Socket lifetime is bounded. Source frames/contents are never logged.
@@ -43,6 +44,9 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
     """
     if type(observe_seconds) is not int or not 3 <= observe_seconds <= 45:
         raise M03WSWatchError("M03_WS_WATCH_WINDOW_INVALID")
+    if (type(micro_autoselect_from_stream) is not bool
+            or (micro_autoselect_from_stream and micro_pairs)):
+        raise M03WSWatchError("M03_WS_MICRO_AUTO_SCOPE_INVALID")
     if (type(micro_pairs) is not tuple or len(micro_pairs) > 2
             or len(set(micro_pairs)) != len(micro_pairs)
             or any(type(p) is not str or p in MAIN_EXCLUDED_PAIRS
@@ -70,6 +74,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         "source_malformed": False,
         "seen_sequence": set(),
     } for pair in micro_pairs}
+    in_session_liquid_pairs = set()
     if ws_module is None:
         try:
             import websocket as ws_module
@@ -94,6 +99,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         micro_active = set()
         micro_offsets = {}
         micro_frame_count = 0
+        next_micro_subscribe_id = 2
         while True:
             now = clock()
             if (phase == "AUTH" and now >= auth_deadline
@@ -136,17 +142,16 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     raise M03WSWatchError("M03_WS_WATCH_SUBSCRIBE_REJECTED")
                 phase = "OBSERVE"
                 deadline = clock() + observe_seconds
-                request_id = 2
                 for pair in micro_pairs:
                     for kind, channel in (
                             ("trade", trade_channel(pair)),
                             ("book", book_channel(pair))):
-                        request_id += 1
-                        micro_ids[request_id] = (pair, kind, channel)
+                        next_micro_subscribe_id += 1
+                        micro_ids[next_micro_subscribe_id] = (pair, kind, channel)
                         micro_channels[channel] = (pair, kind)
                         sock.send(json.dumps({
                             "method": 1, "params": {"channel": channel},
-                            "id": request_id,
+                            "id": next_micro_subscribe_id,
                         }))
             else:
                 request_id = msg.get("id")
@@ -250,6 +255,61 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 received_frames += 1
                 if received_frames > 300:
                     raise M03WSWatchError("M03_WS_WATCH_FRAME_LIMIT")
+                if micro_autoselect_from_stream and len(micro) < 2:
+                    # Bootstrap from the authenticated WS3 summary NOW,
+                    # never from a stale minute DB or a Telegram alert.
+                    valid = []
+                    observed_local_epoch = int(source_epoch())
+                    for sample in parsed["samples"]:
+                        pair = sample["pair"]
+                        epoch = sample["observed_exchange_epoch"]
+                        if (pair in MAIN_EXCLUDED_PAIRS
+                                or not pair.endswith("_idr")
+                                or type(epoch) is not int
+                                or not 0 <= observed_local_epoch - epoch <= 90):
+                            continue
+                        try:
+                            turnover = Decimal(sample["volume_24h_idr"])
+                            price = Decimal(sample["last_idr"])
+                        except (ValueError, TypeError, KeyError, ArithmeticError):
+                            continue
+                        if (not turnover.is_finite() or
+                                turnover < _MIN_TURNOVER_IDR
+                                or not price.is_finite() or price <= 0):
+                            continue
+                        in_session_liquid_pairs.add(pair)
+                        if pair not in micro:
+                            valid.append((-turnover, pair))
+                    if valid:
+                        valid.sort()
+                        # Source-backed baseline rotation, NOT BUY ranking.
+                        pool = [pair for _, pair in valid[:20]]
+                        shift = (observed_local_epoch // 60) % len(pool)
+                        pool = pool[shift:] + pool[:shift]
+                        for pair in pool[:2-len(micro)]:
+                            micro[pair] = {
+                                "pair": pair, "trade_frames": 0,
+                                "buy_count": 0, "sell_count": 0,
+                                "buy_idr": Decimal(0), "sell_idr": Decimal(0),
+                                "last_trade_epoch": None, "trade_offset": None,
+                                "trade_gap_observed": False,
+                                "trade_truncated": False,
+                                "book": None, "book_local_epoch": None,
+                                "book_offset": None, "source_malformed": False,
+                                "seen_sequence": set(),
+                            }
+                            for kind, micro_channel in (
+                                    ("trade", trade_channel(pair)),
+                                    ("book", book_channel(pair))):
+                                next_micro_subscribe_id += 1
+                                micro_ids[next_micro_subscribe_id] = (
+                                    pair, kind, micro_channel)
+                                micro_channels[micro_channel] = (pair, kind)
+                                sock.send(json.dumps({
+                                    "method": 1,
+                                    "params": {"channel": micro_channel},
+                                    "id": next_micro_subscribe_id,
+                                }))
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
                     # Multiple publications can share an exchange second.
@@ -277,7 +337,27 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
             "public_ws_authentication_observed": True,
             "not_full_universe_proof": True,
         }
-        if micro_pairs:
+        if micro_pairs or micro_autoselect_from_stream:
+            report["microstructure_selection_source"] = (
+                "CURRENT_AUTHENTICATED_WS3_SUMMARY"
+                if micro_autoselect_from_stream else
+                "PRIOR_M03_MINUTE_ARCHIVE"
+            )
+            report["microstructure_current_liquid_pool_count"] = (
+                len(in_session_liquid_pairs)
+            )
+            report["microstructure_selected_pairs"] = list(micro)
+            report["microstructure_channels_requested"] = len(micro_ids)
+            report["microstructure_channels_acknowledged"] = len(micro_active)
+            report["microstructure_trade_frames_received"] = sum(
+                state["trade_frames"] for state in micro.values()
+            )
+            report["microstructure_book_snapshots_received"] = sum(
+                state["book"] is not None for state in micro.values()
+            )
+            report["microstructure_malformed_pair_count"] = sum(
+                bool(state["source_malformed"]) for state in micro.values()
+            )
             report["microstructure"] = [{
                 "pair": pair,
                 "trade_frames": state["trade_frames"],
@@ -584,16 +664,40 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
         ws_module=ws_module, monotonic=monotonic,
         observe_seconds=observe_seconds, micro_pairs=watch_pairs,
         epoch_fn=now_fn,
+        micro_autoselect_from_stream=(micro_enabled and not watch_pairs),
     )
     now = int((now_fn or time.time)())
     report = persist_ws3_summary_watch(
         DecisionJournal(db_path), source, now_epoch=now,
     )
     if micro_enabled:
-        report["microstructure_discovery_status"] = selection["status"]
-        report["microstructure_discovery_pool_count"] = (
-            selection["fresh_liquid_pair_count"]
+        current_source = source["microstructure_selection_source"]
+        selected = source["microstructure_selected_pairs"]
+        report["microstructure_discovery_status"] = (
+            "M03_MICRO_DISCOVERY_CURRENT_WS3_SELECTED"
+            if current_source == "CURRENT_AUTHENTICATED_WS3_SUMMARY"
+            and selected else selection["status"]
         )
-        report["microstructure_selected_pairs"] = list(watch_pairs)
+        report["microstructure_discovery_pool_count"] = max(
+            selection["fresh_liquid_pair_count"],
+            source["microstructure_current_liquid_pool_count"],
+        )
+        report["microstructure_selected_pairs"] = selected
+        report["microstructure_selection_source"] = current_source
+        report["microstructure_channels_requested"] = (
+            source["microstructure_channels_requested"]
+        )
+        report["microstructure_channels_acknowledged"] = (
+            source["microstructure_channels_acknowledged"]
+        )
+        report["microstructure_trade_frames_received"] = (
+            source["microstructure_trade_frames_received"]
+        )
+        report["microstructure_book_snapshots_received"] = (
+            source["microstructure_book_snapshots_received"]
+        )
+        report["microstructure_malformed_pair_count"] = (
+            source["microstructure_malformed_pair_count"]
+        )
         report["microstructure_selection_is_telegram_alert"] = False
     return report
