@@ -151,7 +151,7 @@ def send_one_owner_ops_alert_nonlive(*, api, ledger, report=None,
     try:
         api.call("sendMessage", {
             "chat_id": ledger.owner_user_id,
-            "text": "ALERT OTOMATIS M10-06 (READ ONLY)\n" + message,
+            "text": "M10-06 AUTOMATED OPS ALERT (READ ONLY)\n" + message,
         })
     except TelegramTransportError:
         return {"status": "M10_ALERT_DELIVERY_UNCERTAIN_NO_RETRY",
