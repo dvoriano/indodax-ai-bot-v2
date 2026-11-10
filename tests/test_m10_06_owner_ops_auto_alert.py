@@ -69,7 +69,7 @@ class OwnerOpsAutoAlertOffline(unittest.TestCase):
         self.assertEqual(len(api.sent), 1)
         self.assertEqual(api.sent[0]["chat_id"], OWNER)
         self.assertIn("Trading OFF", api.sent[0]["text"])
-        self.assertIn("ALERT OTOMATIS M10-06", api.sent[0]["text"])
+        self.assertIn("M10-06 AUTOMATED OPS ALERT", api.sent[0]["text"])
 
     def test_automatic_alert_is_compact_and_details_remain_on_ops(self):
         api = FakeApi()
