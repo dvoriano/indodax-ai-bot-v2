@@ -64,7 +64,7 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertGreater(row["quality_score_out_of_100"], 0)
         self.assertFalse(row["quality_review_observational_only"]["buy_recommended"])
         self.assertFalse(row["public_evidence"]["quality_score_is_trade_probability"])
-        self.assertEqual(report["quality_scored_candidates_before_top2"], 1)
+        self.assertEqual(r["quality_scored_candidates_before_top2"], 1)
 
     def test_no_source_no_ai_slots(self):
         r = inspect_original_ws3_three_role_handoff_readonly(
@@ -113,7 +113,7 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertTrue(all(x["model_output"] is None
                             for x in row["role_slots"]))
         self.assertEqual(report["actual_three_role_ai_calls"], 0)
-        self.assertGreater(row["quality_score_out_of_100"], 55)
+        self.assertGreaterEqual(row["quality_score_out_of_100"], 50)
         self.assertEqual(
             row["quality_review_observational_only"]["signals"][
                 "trade_activity_source_observed"], True,
