@@ -99,6 +99,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         micro_active = set()
         micro_offsets = {}
         micro_frame_count = 0
+        next_micro_subscribe_id = 2
         while True:
             now = clock()
             if (phase == "AUTH" and now >= auth_deadline
@@ -141,17 +142,16 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     raise M03WSWatchError("M03_WS_WATCH_SUBSCRIBE_REJECTED")
                 phase = "OBSERVE"
                 deadline = clock() + observe_seconds
-                request_id = 2
                 for pair in micro_pairs:
                     for kind, channel in (
                             ("trade", trade_channel(pair)),
                             ("book", book_channel(pair))):
-                        request_id += 1
-                        micro_ids[request_id] = (pair, kind, channel)
+                        next_micro_subscribe_id += 1
+                        micro_ids[next_micro_subscribe_id] = (pair, kind, channel)
                         micro_channels[channel] = (pair, kind)
                         sock.send(json.dumps({
                             "method": 1, "params": {"channel": channel},
-                            "id": request_id,
+                            "id": next_micro_subscribe_id,
                         }))
             else:
                 request_id = msg.get("id")
@@ -301,14 +301,14 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             for kind, micro_channel in (
                                     ("trade", trade_channel(pair)),
                                     ("book", book_channel(pair))):
-                                request_id += 1
-                                micro_ids[request_id] = (
+                                next_micro_subscribe_id += 1
+                                micro_ids[next_micro_subscribe_id] = (
                                     pair, kind, micro_channel)
                                 micro_channels[micro_channel] = (pair, kind)
                                 sock.send(json.dumps({
                                     "method": 1,
                                     "params": {"channel": micro_channel},
-                                    "id": request_id,
+                                    "id": next_micro_subscribe_id,
                                 }))
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
