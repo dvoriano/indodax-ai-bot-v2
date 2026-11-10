@@ -143,7 +143,7 @@ class M03M05RadarOriginalNonlive(unittest.TestCase):
         api = FakeTelegram()
         self.send(api)
         self.assertIn(
-            "Ada menit tanpa sampel", api.calls[0][1]["text"]
+            "Missing intermediate minute samples", api.calls[0][1]["text"]
         )
         self.assertIn("NOT a closed 1m candle return", api.calls[0][1]["text"])
 
