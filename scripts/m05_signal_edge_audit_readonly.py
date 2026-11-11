@@ -20,7 +20,6 @@ from zoneinfo import ZoneInfo
 from indodax_ai_bot.m05_radar_momentum_nonlive import (
     DEFAULT_DB, PAIR_ID, _owned_private_regular,
 )
-from indodax_ai_bot.m03_ws3_evidence_archive_nonlive import DEFAULT_EVIDENCE_DB
 from scripts.m05_radar_owner_quality_replay_readonly import (
     replay_original_ws3_quality_timeline_readonly,
 )
