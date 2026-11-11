@@ -187,6 +187,107 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
             self.assertEqual(digests, {row["evidence_digest_sha256"]})
 
 
+    def test_source_rank_six_reaches_quality_top_two_without_changing_m05_top5(self):
+        # Five genuinely observed three-minute early ramps outrank the
+        # source-sample phase of UAI, but UAI has source-observed book/trades.
+        # Original M03 keeps top5 for Telegram, while original M04 must
+        # review the SAME source's ranked top40 before deciding its top2.
+        for index in range(5):
+            pair = f"early{index}_idr"
+            for minute, price, turnover in (
+                    (-3, "100", "500000000"),
+                    (-2, "100.2", "500050000"),
+                    (-1, "100.6", "500150000")):
+                self.row(pair, minute, price, turnover)
+        self.row("uai_idr", -2, 100, 700000000)
+        self.row("uai_idr", -1, 101, 701000000)
+        with sqlite3.connect(self.path) as db:
+            db.execute("""
+                CREATE TABLE m03_ws_microstructure_watch_minute(
+                  pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                  observed_local_epoch INTEGER NOT NULL,
+                  trade_frames INTEGER NOT NULL,
+                  source_buy_count INTEGER,source_sell_count INTEGER,
+                  source_buy_idr TEXT,source_sell_idr TEXT,
+                  last_trade_epoch INTEGER,trade_offset INTEGER,
+                  trade_gap_observed INTEGER NOT NULL,
+                  trade_truncated INTEGER NOT NULL,
+                  book_offset INTEGER,book_local_epoch INTEGER,
+                  best_bid_idr TEXT,best_ask_idr TEXT,spread_bps TEXT,
+                  bid_depth_top5_idr TEXT,ask_depth_top5_idr TEXT,
+                  book_imbalance_top5_ratio TEXT,
+                  source_malformed INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch))
+            """)
+            db.execute(
+                "INSERT INTO m03_ws_microstructure_watch_minute VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("uai_idr", NOW-60, NOW-5, 2, 3, 1,
+                 "500000", "100000", NOW-8, 40,
+                 0, 0, 51, NOW-5, "100", "100.2", "19.9800",
+                 "9000000", "7000000", "1.2857", 0)
+            )
+        m03 = inspect_original_m03_ws3_watch_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(len(m03["candidates"]), 5)
+        self.assertNotIn("uai_idr",
+                         [x["pair"] for x in m03["candidates"]])
+        self.assertEqual(len(m03["ranked_review_shortlist_top40"]), 6)
+        self.assertEqual(m03["ranked_review_shortlist_top40"][5]["pair"],
+                         "uai_idr")
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        self.assertEqual(report["candidate_count"], 2)
+        self.assertEqual(report["quality_scored_candidates_before_top2"], 6)
+        self.assertEqual(report["source_pool_size_from_original_m03"], 6)
+        self.assertTrue(report["m05_original_telegram_top5_unchanged"])
+        self.assertEqual(report["candidates"][0]["pair"], "uai_idr")
+        self.assertFalse(report["candidates"][0][
+            "source_ranked_m03_telegram_top5"])
+        self.assertTrue(report["candidates"][1][
+            "source_ranked_m03_telegram_top5"])
+        self.assertGreater(
+            report["candidates"][0]["quality_score_out_of_100"],
+            report["candidates"][1]["quality_score_out_of_100"],
+        )
+        for candidate in report["candidates"]:
+            self.assertEqual([x["role"] for x in candidate["role_slots"]],
+                             ["MARKET", "RISK", "STRATEGY"])
+            self.assertTrue(all(
+                x["model_output"] is None
+                and x["evidence_digest_sha256"] ==
+                candidate["evidence_digest_sha256"]
+                for x in candidate["role_slots"]
+            ))
+        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        self.assertEqual(report["provider_http_calls"], 0)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_handoff_rejects_shortlist_mutated_after_original_m03_top5(self):
+        self.seed()
+        source = inspect_original_m03_ws3_watch_readonly(
+            db_path=self.path, now_epoch=NOW,
+        )
+        source["ranked_review_shortlist_top40"][0] = dict(
+            source["ranked_review_shortlist_top40"][0],
+            latest_price_idr="999999",
+        )
+        with patch(
+            "indodax_ai_bot.m05_radar_momentum_nonlive."
+            "inspect_original_m03_ws3_watch_readonly",
+            return_value=source,
+        ):
+            report = inspect_original_ws3_three_role_handoff_readonly(
+                db_path=self.path, now_epoch=NOW,
+            )
+        self.assertEqual(report["reason"],
+                         "M04_WS3_RANKED_SHORTLIST_INCONSISTENT")
+        self.assertEqual(report["candidate_count"], 0)
+        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        self.assertFalse(report["execution_allowed"])
+
     def test_owner_relative_db_path_handoff_is_not_misclassified_untrusted(self):
         """Real owner command passes Path('runtime/decisions.sqlite3')."""
         import os
