@@ -19,6 +19,10 @@ class FakeTimeout(Exception):
     pass
 
 
+class RawWSFrame(str):
+    """Synthetic non-JSON text returned directly by ws.recv()."""
+
+
 class Clock:
     def __init__(self):
         self.tick = 0
@@ -41,7 +45,8 @@ class Socket:
     def recv(self):
         if self.frames:
             import json
-            return json.dumps(self.frames.pop(0))
+            value = self.frames.pop(0)
+            return str(value) if isinstance(value, RawWSFrame) else json.dumps(value)
         raise FakeTimeout
     def close(self):
         self.closed = True
@@ -224,6 +229,67 @@ class M03WSLiveWatchTests(unittest.TestCase):
                     "WHERE pair='uai_idr' ORDER BY minute_epoch DESC LIMIT 1"
                 ).fetchone()
             self.assertEqual(saved[0], "110")
+
+    def test_nonjson_auth_phase_is_redacted_and_fail_closed(self):
+        provider = FakeWS([RawWSFrame("INTERNAL_SECRET NOT_JSON")])
+        with self.assertRaisesRegex(
+            M03WSWatchError,
+            r"^M03_WS_WATCH_JSON_INVALID:AUTH:NONJSON_TEXT$",
+        ) as raised:
+            collect_ws3_market_summary_once(
+                ws_module=provider, monotonic=Clock(), observe_seconds=3,
+            )
+        self.assertNotIn("INTERNAL_SECRET", str(raised.exception))
+        self.assertTrue(provider.sock.closed)
+
+    def test_nonjson_subscribe_phase_is_redacted(self):
+        provider = FakeWS([
+            {"id": 1, "result": {"client": "offline-client"}},
+            RawWSFrame("NOTJSON BEARER_SECRET"),
+        ])
+        with self.assertRaisesRegex(
+            M03WSWatchError,
+            r"^M03_WS_WATCH_JSON_INVALID:SUBSCRIBE:NONJSON_TEXT$",
+        ) as raised:
+            collect_ws3_market_summary_once(
+                ws_module=provider, monotonic=Clock(), observe_seconds=3,
+            )
+        self.assertNotIn("BEARER_SECRET", str(raised.exception))
+
+    def test_nonjson_observe_markup_and_incomplete_structured_fail_closed(self):
+        for corrupted, expected in (
+            (RawWSFrame("<html>PRIVATE_GATEWAY</html>"), "NONJSON_MARKUP"),
+            (RawWSFrame('{"result": "PRIVATE_VALUE"'), "STRUCTURED_INCOMPLETE"),
+            (RawWSFrame("   "), "EMPTY_TEXT"),
+        ):
+            with self.subTest(expected=expected):
+                parts = frames(NOW, 110)
+                provider = FakeWS(parts[:2] + [corrupted] + parts[2:])
+                with self.assertRaisesRegex(
+                    M03WSWatchError,
+                    r"^M03_WS_WATCH_JSON_INVALID:OBSERVE:" + expected + "$",
+                ) as raised:
+                    collect_ws3_market_summary_once(
+                        ws_module=provider,
+                        monotonic=Clock(), observe_seconds=3,
+                    )
+                self.assertNotIn("PRIVATE_", str(raised.exception))
+                self.assertTrue(provider.sock.closed)
+
+    def test_nonjson_after_market_frame_does_not_accept_partial_watch(self):
+        parts = frames(NOW, 100)
+        parts.append(RawWSFrame("NOTJSON SECRET_AFTER_VALID_SUMMARY"))
+        provider = FakeWS(parts)
+        with self.assertRaisesRegex(
+            M03WSWatchError, r"M03_WS_WATCH_JSON_INVALID:OBSERVE:NONJSON_TEXT",
+        ):
+            collect_ws3_market_summary_once(
+                ws_module=provider, monotonic=Clock(), observe_seconds=3,
+            )
+        self.assertTrue(provider.sock.closed)
+        self.assertFalse(
+            hasattr(provider, "success_report")
+        )
 
     def test_malformed_idr_row_is_not_silently_discarded(self):
         incoming = frames(NOW, 100)
