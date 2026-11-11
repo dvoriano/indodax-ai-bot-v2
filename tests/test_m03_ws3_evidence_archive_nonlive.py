@@ -149,6 +149,19 @@ class EvidenceArchiveTests(unittest.TestCase):
         self.assertEqual(result["dropped_by_cap"], 10)
         self.assertFalse(result["source_coverage_complete"])
 
+    def test_total_row_cap_limits_storage_without_pretending_full_coverage(self):
+        with patch(
+            "indodax_ai_bot.m03_ws3_evidence_archive_nonlive."
+            "MAX_TOTAL_SOURCE_ROWS", 2
+        ):
+            report = self.run_archive()
+        self.assertEqual(report["max_stored_source_rows"], 2)
+        self.assertFalse(report["source_coverage_complete"])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM ws3_source_evidence"
+            ).fetchone()[0], 2)
+
     def test_off_by_default_no_shadow_write_in_original_runner(self):
         fake = source()
         with patch(
