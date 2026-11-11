@@ -19,8 +19,8 @@ from .scanner import MAIN_EXCLUDED_PAIRS
 PAIR = re.compile(r"^[a-z0-9]+_idr$")
 MIN_VOLUME_IDR = Decimal("150000000")
 MAX_SOURCE_PAIRS_PER_CYCLE = 250
-RETENTION_SECONDS = 72 * 3600  # 3 days, not the 2h original WATCH retention
-MAX_RUNS_PER_DAY = 1440  # informational only, no additional scheduled runs
+MAX_TOTAL_SOURCE_ROWS = 250000  # Fixed storage high-water bound
+RETENTION_SECONDS = 72 * 3600  # 3 days maximum, not guaranteed minimum
 
 DEFAULT_EVIDENCE_DIR = (
     Path.home() / ".local" / "state" / "m03-ws3-evidence"
@@ -172,6 +172,16 @@ def archive_ws3_evidence_nonlive(
              rolling_24h_idr,public_offset,source_status)
             VALUES (?,?,?,?,?,?,?)
         """, accepted)
+        # Hard cap in addition to 72h, to avoid unlimited research disk use
+        # on a busy market. This can shorten effective retention.
+        db.execute("""
+            DELETE FROM ws3_source_evidence WHERE rowid IN (
+                SELECT rowid FROM ws3_source_evidence
+                ORDER BY minute_epoch, pair LIMIT (
+                    SELECT MAX(COUNT(*) - ?, 0) FROM ws3_source_evidence
+                )
+            )
+        """, (MAX_TOTAL_SOURCE_ROWS,))
         db.execute("""
             INSERT OR IGNORE INTO ws3_source_cycles
             (minute_epoch,recorded_local_epoch,frames_observed,
@@ -194,6 +204,7 @@ def archive_ws3_evidence_nonlive(
         "source_eligible_count": counts["ELIGIBLE_SOURCE_OBSERVATION"],
         "dropped_by_cap": dropped,
         "source_coverage_complete": False,
+        "max_stored_source_rows": MAX_TOTAL_SOURCE_ROWS,
         "not_continuous_trade_tape": True,
         "trading_enabled": False,
         "orders_sent": 0,
