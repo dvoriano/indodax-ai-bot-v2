@@ -626,7 +626,27 @@ def inspect_original_m03_ws3_micro_discovery_readonly(
             fallback.append((-latest[3], pair))
     rising.sort()
     fallback.sort()
-    chosen = [x[3] for x in rising[:max_pairs]]
+    # Preserve the top source-backed rising pair, but let the SECOND capture
+    # slot sample an actual below-Telegram-threshold early mover. Otherwise
+    # two already-visible +1–3% pairs can starve a +0.1–0.4% liquid pair
+    # of real trade/book observations until its move becomes obvious.
+    # This is source COVERAGE rotation, never a BUY ranking or alert.
+    ranked_risers = [item[3] for item in rising]
+    chosen = ranked_risers[:1] if ranked_risers else []
+    early_scout_pool = [
+        item[3] for item in rising
+        if item[0] == 0
+        and -item[1] < WS3_MIN_PRICE_RISE_PCT
+        and item[3] not in chosen
+    ][:20]
+    if max_pairs > 1 and early_scout_pool:
+        scout = early_scout_pool[(now // 60) % len(early_scout_pool)]
+        chosen.append(scout)
+    for pair in ranked_risers:
+        if len(chosen) >= max_pairs:
+            break
+        if pair not in chosen:
+            chosen.append(pair)
     if len(chosen) < max_pairs and fallback:
         # Rotation is for sampling diversity ONLY, never an entry ranking.
         rotation_pool = [pair for _, pair in fallback[:20]]
@@ -639,7 +659,7 @@ def inspect_original_m03_ws3_micro_discovery_readonly(
         pairs=chosen, fresh_liquid_pair_count=len(rising)+len(fallback),
         weak_price_rise_pair_count=len(rising),
         selection_policy=(
-            "SOURCE_FRESH_POSITIVE_PRICE_STEP_FIRST_"
+            "SOURCE_FRESH_RISING_LEADER_PLUS_EARLY_BELOW_ALERT_SCOUT_"
             "THEN_ROTATING_LIQUID_BASELINE_NO_M05_ALERT_DEPENDENCY"
         ),
     )
