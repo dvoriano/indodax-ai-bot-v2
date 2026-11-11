@@ -148,6 +148,75 @@ class M04EPublicStreamTests(unittest.TestCase):
             with self.assertRaisesRegex(StreamEvidenceError,"INVALID_PUBLIC_STREAM_PAIR"):
                 j.subscription("../btc")
 
+    def test_server_recovered_false_persists_gap_even_at_same_offset(self):
+        # Server says a requested recovery failed. recoverable=True only
+        # identifies stream capability, not successful historical replay.
+        with TemporaryDirectory() as td:
+            j = PublicTradeStreamJournal(Path(td) / "ws.sqlite3")
+            j.acknowledge("btc_idr", ack())
+            j.ingest("btc_idr", pub(101))
+            j.mark_disconnected("btc_idr")
+            reply = ack(101)
+            reply["result"]["recovered"] = False
+            state = j.acknowledge("btc_idr", reply)
+            self.assertEqual(state["stream_status"], "GAP")
+            self.assertEqual(state["last_publication_offset"], 101)
+            self.assertEqual(j.read_count("btc_idr"), 1)
+            self.assertNotIn("recover", j.subscription("btc_idr")["params"])
+            self.assertFalse(state["indodax_trade_tape_completeness_proven"])
+            # The existing bounded rebaseline keeps a durable discontinuity
+            # without deleting earlier observations or claiming G1.
+            fresh = j.acknowledge("btc_idr", ack(103), fresh_segment=True)
+            self.assertEqual(fresh["stream_status"], "BASELINE_ONLY")
+            self.assertEqual(fresh["unrecoverable_gap_rebaseline_count"], 1)
+            self.assertEqual(j.read_count("btc_idr"), 1)
+            self.assertFalse(fresh["source_authenticated_for_g1"])
+
+    def test_server_recovered_false_rejects_even_complete_looking_replay(self):
+        with TemporaryDirectory() as td:
+            j = PublicTradeStreamJournal(Path(td) / "ws.sqlite3")
+            j.acknowledge("btc_idr", ack())
+            j.ingest("btc_idr", pub(101))
+            j.mark_disconnected("btc_idr")
+            reply = ack(102, publications=[replay_pub(102)])
+            reply["result"]["recovered"] = False
+            state = j.acknowledge("btc_idr", reply)
+            self.assertEqual(state["stream_status"], "GAP")
+            self.assertEqual(state["last_publication_offset"], 101)
+            self.assertEqual(j.read_count("btc_idr"), 1)
+            self.assertFalse(state["g2_provider_call_allowed"])
+
+    def test_explicit_recovered_true_preserves_verified_cursor_only(self):
+        with TemporaryDirectory() as td:
+            j = PublicTradeStreamJournal(Path(td) / "ws.sqlite3")
+            j.acknowledge("btc_idr", ack())
+            j.ingest("btc_idr", pub(101))
+            j.mark_disconnected("btc_idr")
+            reply = ack(102, publications=[replay_pub(102)])
+            reply["result"]["recovered"] = True
+            state = j.acknowledge("btc_idr", reply)
+            self.assertEqual(state["stream_status"], "CONTIGUOUS_OBSERVED")
+            self.assertEqual(state["last_publication_offset"], 102)
+            self.assertEqual(j.read_count("btc_idr"), 2)
+            self.assertFalse(state["indodax_trade_tape_completeness_proven"])
+            self.assertFalse(state["g1_receipt_issuance_allowed"])
+
+    def test_malformed_recovered_flag_fails_before_state_change(self):
+        with TemporaryDirectory() as td:
+            j = PublicTradeStreamJournal(Path(td) / "ws.sqlite3")
+            j.acknowledge("btc_idr", ack())
+            j.ingest("btc_idr", pub(101))
+            j.mark_disconnected("btc_idr")
+            reply = ack(102, publications=[replay_pub(102)])
+            reply["result"]["recovered"] = "false"
+            with self.assertRaisesRegex(StreamEvidenceError,
+                                        "INVALID_WS_RECOVERED_FLAG"):
+                j.acknowledge("btc_idr", reply)
+            state = j.status("btc_idr")
+            self.assertEqual(state["stream_status"], "DISCONNECTED")
+            self.assertEqual(state["last_publication_offset"], 101)
+            self.assertEqual(j.read_count("btc_idr"), 1)
+
     def test_public_ws_mainpath_always_final_reject_with_no_ai_or_order(self):
         with TemporaryDirectory() as td:
             buf=StringIO()
