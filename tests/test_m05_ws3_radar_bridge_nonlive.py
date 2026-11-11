@@ -245,6 +245,59 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertFalse(report["selection_is_m05_alert"])
         self.assertFalse(report["execution_allowed"])
 
+    def test_micro_capture_second_slot_scans_real_weak_uai_before_alert(self):
+        # Simulated three real minute-bucket observations: no future candles
+        # or execution. Previously both stronger risers filled two slots.
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_micro_discovery_readonly,
+        )
+        for pair, price in (("fast_idr", "102"),
+                            ("later_idr", "101.6"),
+                            ("uai_idr", "100.2")):
+            self.add(pair, -2, "100", 500000000, 10)
+            self.add(pair, -1, price, 500050000, 11)
+        self.assertNotIn("uai_idr", [
+            row["pair"] for row in self.inspect()["candidates"]
+        ])
+        report = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW,
+        )
+        self.assertEqual(report["pairs"], ["fast_idr", "uai_idr"])
+        self.assertEqual(report["weak_price_rise_pair_count"], 3)
+        self.assertFalse(report["selection_is_m05_alert"])
+        self.assertFalse(report["execution_allowed"])
+        self.assertIn("EARLY_BELOW_ALERT_SCOUT", report["selection_policy"])
+        one = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW, max_pairs=1,
+        )
+        self.assertEqual(one["pairs"], ["fast_idr"])
+
+    def test_micro_early_scout_rotates_without_promoting_negative_delta(self):
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_micro_discovery_readonly,
+        )
+        for pair, pct, delta in (
+            ("fast_idr", "102", 500050000),
+            ("uai_idr", "100.2", 500050000),
+            ("earlyb_idr", "100.3", 500050000),
+            ("deceive_idr", "100.1", 499950000),
+        ):
+            self.add(pair, -2, "100", 500000000, 10)
+            self.add(pair, -1, pct, delta, 11)
+        first = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW,
+        )
+        second = inspect_original_m03_ws3_micro_discovery_readonly(
+            db_path=self.db_path, now_epoch=NOW+60,
+        )
+        self.assertEqual(first["pairs"][0], "fast_idr")
+        self.assertEqual(second["pairs"][0], "fast_idr")
+        self.assertEqual({first["pairs"][1], second["pairs"][1]},
+                         {"uai_idr", "earlyb_idr"})
+        self.assertNotIn("deceive_idr", first["pairs"] + second["pairs"])
+        self.assertFalse(first["trade_activity_observed"])
+        self.assertFalse(second["execution_allowed"])
+
     def test_micro_discovery_rotates_recent_liquid_baseline_without_rise(self):
         from indodax_ai_bot.m05_radar_momentum_nonlive import (
             inspect_original_m03_ws3_micro_discovery_readonly,
