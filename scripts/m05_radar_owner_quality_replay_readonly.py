@@ -232,7 +232,9 @@ def replay_original_ws3_quality_timeline_readonly(
                     }
 
     claim_status = "NOT_REQUESTED"
+    event_status = "NOT_REQUESTED"
     claims = {}
+    events = {pair: [] for pair in pairs}
     if radar_claims_db is not None:
         owner_path = Path(radar_claims_db).expanduser()
         if not _owned_private_regular(owner_path):
@@ -254,6 +256,33 @@ def replay_original_ws3_quality_timeline_readonly(
                     (*pairs, start_epoch, end_epoch + 59),
                 ):
                     claims[pair] = (claimed, observed)
+            event_table = owner.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='m05_radar_delivery_events'"
+            ).fetchone()
+            event_status = ("PER_PAIR_DELIVERY_EVENTS_AVAILABLE"
+                            if event_table else
+                            "PER_PAIR_DELIVERY_EVENTS_NOT_YET_IN_SOURCE")
+            if event_table:
+                for row in owner.execute(
+                    "SELECT pair,claimed_epoch,source_observed_epoch,"
+                    "source_kind,delivery_state,ack_received_epoch,"
+                    "telegram_message_id "
+                    "FROM m05_radar_delivery_events "
+                    f"WHERE pair IN ({placeholders}) "
+                    "AND claimed_epoch BETWEEN ? AND ? "
+                    "ORDER BY claimed_epoch, pair",
+                    (*pairs, start_epoch, end_epoch + 59),
+                ):
+                    (pair, claimed, observed, kind, state, acked,
+                     message_id) = row
+                    if (kind not in ("WS3", "REST")
+                            or state not in ("CLAIMED", "ACKED", "UNCERTAIN")
+                            or (state == "ACKED" and
+                                (type(acked) is not int or
+                                 type(message_id) is not int or message_id <= 0))):
+                        raise ValueError("M03_WS3_TIMELINE_DELIVERY_EVENT_INVALID")
+                    events[pair].append((claimed, observed, kind, state, acked))
 
     first = {pair: {
         "m03_watch_any_rank": None,
@@ -343,6 +372,14 @@ def replay_original_ws3_quality_timeline_readonly(
         initial = src["first_quote"]
         captured = src["first_micro"]
         claim = claims.get(pair)
+        per_pair_events = events[pair]
+        ack_events = [item for item in per_pair_events if item[3] == "ACKED"]
+        first_ack = ack_events[0] if ack_events else None
+        ack_source_matched_ws3 = (
+            first_ack[2] == "WS3" and
+            first_ack[1] in src["quote_exchange_epochs"]
+            if first_ack else None
+        )
         result_pairs.append({
             "pair": pair,
             "source_quote_rows_in_window": src["quote_rows"],
@@ -383,8 +420,26 @@ def replay_original_ws3_quality_timeline_readonly(
             "last_claim_source_epoch_matches_ws3_quote": (
                 claim[1] in src["quote_exchange_epochs"]
                 if claim else None),
-            "telegram_actual_send_ack_wib": None,
+            "telegram_actual_send_ack_wib": wib_time(
+                first_ack[4] if first_ack else None),
             "telegram_delivery_delay_seconds": None,
+            # This is actual source-epoch -> Bot API receipt only when
+            # the source was WS3 and the exact quote remains in this DB.
+            # NOT the delay from first potential WATCH eligibility.
+            "first_durable_ack_source_kind": first_ack[2] if first_ack else None,
+            "first_durable_ack_source_observed_wib": wib_time(
+                first_ack[1] if first_ack else None),
+            "first_durable_ack_matches_retained_ws3_quote":
+                ack_source_matched_ws3,
+            "first_durable_ws3_source_to_ack_seconds": (
+                first_ack[4] - first_ack[1]
+                if ack_source_matched_ws3 and first_ack[4] >= first_ack[1]
+                else None),
+            "per_pair_durable_ack_count_in_window": len(ack_events),
+            "per_pair_uncertain_count_in_window": sum(
+                item[3] == "UNCERTAIN" for item in per_pair_events),
+            "per_pair_claimed_without_outcome_count_in_window": sum(
+                item[3] == "CLAIMED" for item in per_pair_events),
             "minute_end_replay_counts": dict(sorted(stats[pair].items())),
         })
 
@@ -397,8 +452,11 @@ def replay_original_ws3_quality_timeline_readonly(
         "replay_minute_end_is_not_real_process_trigger_epoch": True,
         "micro_capture_does_not_prove_complete_trade_tape": True,
         "owner_radar_claim_source_status": claim_status,
+        "owner_radar_delivery_event_source_status": event_status,
         "owner_radar_claim_last_row_only_and_not_send_ack": True,
-        "telegram_real_delivery_lag_not_measurable_without_M05_ACK_logs": True,
+        "telegram_real_delivery_lag_not_measurable_without_M05_ACK_logs":
+            event_status != "PER_PAIR_DELIVERY_EVENTS_AVAILABLE",
+        "telegram_m03_first_detection_to_ack_latency_is_not_proven": True,
         "m05_original_telegram_top5_threshold_and_cooldowns_unchanged": True,
         "source_retention_can_hide_earlier_pairs_and_events": True,
         "rolling_24h_delta_not_actual_1m_trade_flow": True,
