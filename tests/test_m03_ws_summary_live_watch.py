@@ -276,6 +276,54 @@ class M03WSLiveWatchTests(unittest.TestCase):
                 self.assertNotIn("PRIVATE_", str(raised.exception))
                 self.assertTrue(provider.sock.closed)
 
+    def test_malformed_structured_ws3_subcategories_no_content_leak(self):
+        # No real market traffic, offline WS frame fakes only.
+        # These are syntax classes, NOT a claim about actual Indodax frames.
+        cases = (
+            ('{"a":1}{"b":"SENSITIVE"}', "STRUCTURED_EXTRA_DATA"),
+            ('{"a" 1}', "STRUCTURED_COLON"),
+            ('{"a":1 "b":2}', "STRUCTURED_SEPARATOR"),
+            ('{SECRET_KEY:1}', "STRUCTURED_PROPERTY"),
+            ('{"a": SECRET_VALUE}', "STRUCTURED_VALUE"),
+            ('{"a":"se\ncret"}', "STRUCTURED_CONTROL"),
+            (r'{"a":"se\qcret"}', "STRUCTURED_ESCAPE"),
+            (r'{"a":"se\uZZZZ"}', "STRUCTURED_UNICODE"),
+        )
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                base = frames(NOW, 110)
+                provider = FakeWS(base[:2] + [RawWSFrame(payload)] + base[2:])
+                with self.assertRaises(M03WSWatchError) as raised:
+                    collect_ws3_market_summary_once(
+                        ws_module=provider,
+                        monotonic=Clock(), observe_seconds=3,
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    "M03_WS_WATCH_JSON_INVALID:OBSERVE:" + expected,
+                )
+                self.assertNotIn("SENSITIVE", str(raised.exception))
+                self.assertNotIn("SECRET", str(raised.exception))
+                self.assertTrue(provider.sock.closed)
+
+    def test_unknown_json_decoder_reason_is_always_redacted(self):
+        import json
+        from indodax_ai_bot.m03_ws_summary_live_watch import (
+            _redacted_json_failure_code,
+        )
+        raw = '{"a": MALFORMED_PRIVATE}'
+        synthetic = json.JSONDecodeError(
+            "SOURCE_PRIVATE_EXC_DETAIL", raw, 6
+        )
+        result = _redacted_json_failure_code(
+            raw, phase="OBSERVE", error=synthetic,
+        )
+        self.assertEqual(
+            result, "M03_WS_WATCH_JSON_INVALID:OBSERVE:STRUCTURED_INVALID"
+        )
+        self.assertNotIn("PRIVATE", result)
+        self.assertNotIn("MALFORMED", result)
+
     def test_nonjson_after_market_frame_does_not_accept_partial_watch(self):
         parts = frames(NOW, 100)
         parts.append(RawWSFrame("NOTJSON SECRET_AFTER_VALID_SUMMARY"))
