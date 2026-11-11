@@ -841,26 +841,49 @@ def inspect_original_m03_ws3_watch_readonly(
     }
 
 
+def _idr_compact_id(value: str) -> str:
+    """Short Indonesian Rupiah rendering for narrow Telegram screens."""
+    number = Decimal(value)
+    amount = abs(number)
+    for divisor, suffix in (
+        (Decimal("1000000000"), "miliar"),
+        (Decimal("1000000"), "jt"),
+        (Decimal("1000"), "rb"),
+    ):
+        if amount >= divisor:
+            short = (number / divisor).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            return "Rp" + _idr_number(short) + " " + suffix
+    return _idr_price(value)
+
+
+_WS3_PHASE_ID = {
+    "EARLY_ACCELERATION_WATCH": "Percepatan awal, perlu konfirmasi",
+    "EXTENDED_MOVE_REVIEW": "Lonjakan besar, waspadai harga terlambat",
+    "PRICE_RISE_ROLLING_DELTA_POSITIVE": "Harga naik, nilai 24j bertambah",
+    "PRICE_RISE_ACTIVITY_UNCONFIRMED": "Harga naik, aktivitas belum pasti",
+}
+
+
 def _ws3_micro_notice(candidate: dict) -> str:
     micro = candidate.get("microstructure_observation")
     if not isinstance(micro, dict) or micro.get("status") == "NOT_OBSERVED":
-        return "🧪 Trades/book: NOT OBSERVED (no micro source receipt)"
-    trades = (
-        "Trades captured " + str(micro["captured_trade_count"])
-        + " (source BUY " + str(micro["source_reported_buy_count"])
-        + "/SELL " + str(micro["source_reported_sell_count"]) + ")"
-        if micro.get("trade_activity_observed") else "Trades: NOT OBSERVED"
-    )
-    book = (
-        "Book spread " + micro["spread_bps"] + " bps"
-        if micro.get("orderbook_snapshot_observed") else
-        "Book: NOT OBSERVED"
-    )
-    return "🧪 " + trades + " | " + book + " (PARTIAL WS3 CAPTURE)"
+        return "🔬 Trade/order book: belum teramati"
+    if micro.get("status") != "PARTIAL_SOURCE_OBSERVATION":
+        return "🔬 Trade/order book: belum terverifikasi"
+    parts = []
+    if micro.get("trade_activity_observed"):
+        parts.append("trade " + str(micro.get("captured_trade_count", "?")))
+    if micro.get("orderbook_snapshot_observed"):
+        parts.append("book parsial")
+    if not parts:
+        return "🔬 Trade/order book: belum teramati"
+    return "🔬 " + " · ".join(parts) + " (cakupan tidak lengkap)"
 
 
 def format_owner_ws3_radar_compact(candidate: dict) -> str:
-    """English-only owner notice, explicitly different from REST ticker radar."""
+    """Ringkas untuk ponsel; hanya WATCH WS3, bukan keputusan BUY/AI/G1."""
     wib = ZoneInfo("Asia/Jakarta")
     first = datetime.fromtimestamp(
         candidate["reference_epoch"], wib
@@ -869,22 +892,26 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
         candidate["observed_epoch"], wib
     ).strftime("%H:%M:%S")
     pair = candidate["pair"].upper().replace("_IDR", "/IDR")
+    change = Decimal(candidate["observed_rise_pct"])
+    direction = "🔺" if change > 0 else "🔻" if change < 0 else "➖"
     turnover_delta = Decimal(candidate["volume_24h_net_change_idr"])
+    delta_sign = "+" if turnover_delta > 0 else ""
+    phase = _WS3_PHASE_ID.get(
+        candidate["momentum_phase"], "Aktivitas perlu ditinjau"
+    )
+    samples = candidate["compared_source_minute_samples"]
     return "\n".join((
-        f"📡 WS3 WATCH | {pair} · PRICE RISING",
-        f"🔺 Price samples {first} → {last}: {_pct(candidate['observed_rise_pct'])}",
+        f"📡 WS3 WATCH | {pair}",
+        f"{direction} {_pct(candidate['observed_rise_pct'])} · {first} → {last} WIB",
         f"💰 {_idr_price(candidate['reference_price_idr'])}"
         f" → {_idr_price(candidate['latest_price_idr'])}",
-        "📊 Rolling 24h turnover: " + _idr_compact(candidate["volume_24h_idr"]),
-        "Δ rolling 24h turnover: "
-        + ("+" if turnover_delta > 0 else "")
-        + _idr_compact(candidate["volume_24h_net_change_idr"]),
-        "🔎 Momentum: " + candidate["momentum_phase"]
-        + " (" + str(candidate["compared_source_minute_samples"]) + " snapshots)",
+        "📊 Nilai 24j " + _idr_compact_id(candidate["volume_24h_idr"])
+        + " · Δ " + delta_sign
+        + _idr_compact_id(candidate["volume_24h_net_change_idr"]),
+        "⚡ " + phase + " (" + str(samples) + " sampel)",
         _ws3_micro_notice(candidate),
-        "⚠️ Sample comparison only. NOT a closed 1m candle or 1m traded volume.",
-        "⚠️ Side labels are NOT verified aggressor flow; full trade tape, market depth continuity, G1 and AI UNVERIFIED.",
-        "🔎 PUBLIC WATCH ONLY. NOT A BUY RECOMMENDATION. NO ORDER BUTTONS.",
+        "⚠️ Bukan candle 1 menit. Δ nilai 24j bukan volume transaksi 1 menit atau tekanan beli.",
+        "🔎 Pantauan publik saja. AI/G1, arus trade & kedalaman pasar belum diverifikasi. Bukan rekomendasi beli.",
     ))
 
 
