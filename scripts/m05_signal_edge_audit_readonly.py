@@ -11,6 +11,8 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
+import os
+import stat
 import sqlite3
 import time
 from zoneinfo import ZoneInfo
@@ -98,6 +100,7 @@ def post_ack_price_proxy(quotes: list[tuple[int, Decimal]], *,
 def inspect_postack_quality_readonly(
     *, start_epoch: int, end_epoch: int, pairs: tuple[str, ...],
     radar_claims_db: Path, db_path: Path = DEFAULT_DB,
+    research_evidence_db: Path | None = None,
     fee_bps: str | None = None, slippage_bps: str | None = None,
     now_epoch: int | None = None,
 ) -> dict:
@@ -174,6 +177,80 @@ def inspect_postack_quality_readonly(
             quote_map[pair].append((observed, p))
             source_epochs[pair].add(observed)
 
+    # Explicit opt-in research fallback ONLY for historical quote matching.
+    # The separate 72h M03 research DB is not the original 2h scanner ledger
+    # and NEVER substitutes for M04/M05 chronological role/eligibility replay.
+    # A source match requires the exact pair + exchange epoch + eligible
+    # source quote recorded by the original M03 collector BEFORE M05 claim.
+    research_rows = defaultdict(list)
+    research_status = "NOT_REQUESTED"
+    if research_evidence_db is not None:
+        evidence = Path(research_evidence_db).expanduser()
+        if (not evidence.is_absolute() or not _owned_private_regular(evidence)):
+            raise ValueError("RESEARCH_EVIDENCE_DB_UNTRUSTED")
+        try:
+            parent = evidence.parent.lstat()
+        except OSError:
+            raise ValueError("RESEARCH_EVIDENCE_PARENT_UNTRUSTED") from None
+        if (not stat.S_ISDIR(parent.st_mode)
+                or parent.st_uid != os.geteuid()
+                or stat.S_IMODE(parent.st_mode) != 0o700):
+            raise ValueError("RESEARCH_EVIDENCE_PARENT_UNTRUSTED")
+        with sqlite3.connect(evidence.as_uri() + "?mode=ro",
+                             uri=True, timeout=3) as archive:
+            archive.execute("PRAGMA query_only=ON")
+            tables = {row[0] for row in archive.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if not {"ws3_source_evidence", "ws3_source_cycles"} <= tables:
+                raise ValueError("RESEARCH_EVIDENCE_SCHEMA_UNAVAILABLE")
+            rows = archive.execute(
+                "SELECT e.pair,e.minute_epoch,e.source_exchange_epoch,"
+                "e.last_idr,e.source_status,c.recorded_local_epoch "
+                "FROM ws3_source_evidence AS e "
+                "JOIN ws3_source_cycles AS c USING(minute_epoch) "
+                f"WHERE e.pair IN ({placeholders}) "
+                "AND e.minute_epoch BETWEEN ? AND ? "
+                "ORDER BY e.minute_epoch,e.pair LIMIT 20001",
+                (*pairs, start_epoch - 300,
+                 min(now, end_epoch + max(HORIZONS) + 180)),
+            ).fetchall()
+        if len(rows) > 20000:
+            raise ValueError("RESEARCH_EVIDENCE_RESULT_TOO_LARGE")
+        for pair, minute, observed, price, status, recorded in rows:
+            if status not in (
+                "ELIGIBLE_SOURCE_OBSERVATION",
+                "BELOW_150M_VOLUME_FLOOR",
+            ):
+                continue
+            if (pair not in pairs or type(minute) is not int
+                    or type(observed) is not int or type(recorded) is not int
+                    or observed <= 0 or recorded < minute
+                    or not minute - 90 <= observed <= minute + 59
+                    or recorded > now or recorded < observed):
+                raise ValueError("RESEARCH_EVIDENCE_SOURCE_INVALID")
+            research_price = _positive_price(price)
+            research_rows[pair].append(
+                (observed, research_price, minute, recorded, status)
+            )
+            # These are public snapshot prices, not executed trades.
+            quote_map[pair].append((observed, research_price))
+        research_status = "EXPLICIT_READONLY_RESEARCH_SOURCE"
+    # No lookahead in quote selection. Discard any epoch where two retained
+    # records disagree on price, rather than choosing the favorable quote.
+    conflicting_quote_epochs = defaultdict(set)
+    for pair in pairs:
+        values = defaultdict(set)
+        for observed, price in quote_map[pair]:
+            values[observed].add(price)
+        conflicting_quote_epochs[pair] = {
+            epoch for epoch, prices in values.items() if len(prices) != 1
+        }
+        quote_map[pair] = sorted(
+            {(epoch, next(iter(prices))) for epoch, prices in values.items()
+             if len(prices) == 1}
+        )
+
     stages = {p["pair"]: p for p in timeline["pairs"]}
     report = []
     statuses = Counter()
@@ -186,10 +263,36 @@ def inspect_postack_quality_readonly(
                      not observed <= claimed <= ack <= now))
                 or (state != "ACKED" and ack is not None)):
             raise ValueError("INVALID_ORIGINAL_DELIVERY_EVENT")
-        matched = (kind == "WS3" and observed in source_epochs[pair])
-        status = ("MATCHED_WS3_ACK" if state == "ACKED" and matched
-                  else "ACK_NOT_MATCHED_WS3_SOURCE" if state == "ACKED"
-                  else "NO_CONFIRMED_ACK")
+        original_matched = (
+            kind == "WS3" and observed in source_epochs[pair]
+            and observed not in conflicting_quote_epochs[pair]
+        )
+        # The archived snapshot must have been stored before the claim.
+        # A later snapshot repeating the same exchange epoch is insufficient
+        # to independently establish the quote was available at alert time.
+        archived_prices = {
+            price for epoch, price, minute, recorded, source_status
+            in research_rows[pair]
+            if epoch == observed and source_status == "ELIGIBLE_SOURCE_OBSERVATION"
+            and recorded <= claimed and minute <= claimed // 60 * 60
+        }
+        research_matched = (
+            kind == "WS3" and len(archived_prices) == 1
+            and observed not in conflicting_quote_epochs[pair]
+        )
+        provenance = (
+            "ORIGINAL_M03_WS3_MINUTE_DB" if original_matched
+            else "M03_WS3_PRIVATE_RESEARCH_ARCHIVE" if research_matched
+            else "NONE"
+        )
+        matched = original_matched or research_matched
+        status = (
+            "MATCHED_WS3_ACK" if state == "ACKED" and original_matched
+            else "MATCHED_WS3_ACK_RESEARCH_ARCHIVE"
+            if state == "ACKED" and research_matched
+            else "ACK_NOT_MATCHED_WS3_SOURCE" if state == "ACKED"
+            else "NO_CONFIRMED_ACK"
+        )
         statuses[status] += 1
         stage = stages[pair]
         pre = stage["first_m04_micro_prealert_top2_replay_minute_end_wib"]
@@ -205,9 +308,13 @@ def inspect_postack_quality_readonly(
         item = {
             "pair": pair, "source_kind": kind, "delivery_state": state,
             "status": status, "source_quote_matched": matched,
+            "source_match_provenance": provenance if state == "ACKED" else "NONE",
+            "source_replay_retained_original_quotes":
+                stage.get("source_quote_rows_in_window", 0) > 0,
             "source_observed_wib": _wib(observed),
             "claim_wib": _wib(claimed), "ack_wib": _wib(ack),
-            "source_to_ack_seconds": ack - observed if status == "MATCHED_WS3_ACK" else None,
+            "source_to_ack_seconds": ack - observed
+            if state == "ACKED" and matched else None,
             "claim_to_ack_seconds": ack - claimed if state == "ACKED" else None,
             "first_micro_prealert_replay_wib": pre,
             "first_m03_watch_replay_wib":
@@ -218,7 +325,7 @@ def inspect_postack_quality_readonly(
             "prealert_before_first_watch_replay_seconds": lead,
             "price_proxies": {},
         }
-        if status == "MATCHED_WS3_ACK":
+        if state == "ACKED" and matched:
             for horizon in HORIZONS:
                 item["price_proxies"][str(horizon // 60) + "m"] = (
                     post_ack_price_proxy(
@@ -242,6 +349,9 @@ def inspect_postack_quality_readonly(
         "source_quote_not_full_trade_tape_or_verified_spread": True,
         "replay_stage_milestones_not_production_trigger_latency": True,
         "historical_source_retention_may_hide_observations": True,
+        "research_evidence_source_status": research_status,
+        "research_archive_cannot_reconstruct_original_m04_micro_replay": True,
+        "research_archive_partial_source_coverage": True,
         "market_opportunity_first_appearance_unknown": True,
         "execution_allowed": False,
         "exchange_requests": 0,
@@ -260,6 +370,8 @@ def main() -> int:
     parser.add_argument("--pairs", required=True, help="Comma-separated IDR pairs")
     parser.add_argument("--radar-claims-db", type=Path, required=True)
     parser.add_argument("--source-db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--research-evidence-db", type=Path, default=None,
+                        help="Explicit existing private M03 WS3 research DB; read only")
     parser.add_argument("--fee-bps", default=None,
                         help="Hypothetical total round-trip fees; no default")
     parser.add_argument("--slippage-bps", default=None,
@@ -275,6 +387,7 @@ def main() -> int:
             start_epoch=int(start.timestamp()), end_epoch=int(end.timestamp()),
             pairs=tuple(x.strip().lower() for x in args.pairs.split(",")),
             radar_claims_db=args.radar_claims_db, db_path=args.source_db,
+            research_evidence_db=args.research_evidence_db,
             fee_bps=args.fee_bps, slippage_bps=args.slippage_bps,
         )
     except (ValueError, OSError, sqlite3.Error, OverflowError) as exc:
