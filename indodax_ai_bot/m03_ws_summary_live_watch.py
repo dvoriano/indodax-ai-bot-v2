@@ -46,14 +46,33 @@ def _redacted_json_failure_code(raw: str, *, phase: str,
     elif stripped[0] == "<":
         kind = "NONJSON_MARKUP"
     elif stripped[0] in "{[":
-        # JSON decoder offsets are structural hints, not proof of an
-        # upstream transport failure. Never print the decoder message.
-        kind = (
-            "STRUCTURED_INCOMPLETE"
-            if error.pos >= len(raw) - 1 or
-            error.msg.startswith("Unterminated ")
-            else "STRUCTURED_INVALID"
-        )
+        # Parse ONLY a small whitelist of Python's fixed JSONDecodeError
+        # categories. Never print error.msg or raw; neither is a verified
+        # upstream error type, and one corrupt frame still aborts the scan.
+        # Extra data must be checked BEFORE end-position classification:
+        # two adjacent JSON values are not a valid single WS3 envelope.
+        message = error.msg
+        if message == "Extra data":
+            kind = "STRUCTURED_EXTRA_DATA"
+        elif (error.pos >= len(raw) - 1
+              or message.startswith("Unterminated ")):
+            kind = "STRUCTURED_INCOMPLETE"
+        elif message == "Expecting property name enclosed in double quotes":
+            kind = "STRUCTURED_PROPERTY"
+        elif message == "Expecting ':' delimiter":
+            kind = "STRUCTURED_COLON"
+        elif message == "Expecting ',' delimiter":
+            kind = "STRUCTURED_SEPARATOR"
+        elif message == "Expecting value":
+            kind = "STRUCTURED_VALUE"
+        elif message.startswith("Invalid control character"):
+            kind = "STRUCTURED_CONTROL"
+        elif message.startswith("Invalid \\uXXXX escape"):
+            kind = "STRUCTURED_UNICODE"
+        elif message.startswith("Invalid \\escape"):
+            kind = "STRUCTURED_ESCAPE"
+        else:
+            kind = "STRUCTURED_INVALID"
     elif stripped[0] in '"-0123456789tfn':
         kind = "PRIMITIVE_INVALID"
     else:
