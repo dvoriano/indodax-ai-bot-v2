@@ -281,6 +281,14 @@ class PublicTradeStreamJournal:
         offset = _nonneg_int(ack.get("offset"), "INVALID_WS_START_OFFSET")
         if ack.get("recoverable") is not True:
             raise StreamEvidenceError("WS_RECOVERY_NOT_SUPPORTED")
+        # recoverable=TRUE reports CHANNEL CAPABILITY, not proof that a
+        # requested replay succeeded. Centrifugo may report recovered=FALSE
+        # for an unrecoverable cursor/epoch or history-retention gap. The
+        # Indodax WS3 examples omit this optional protocol field, so absence
+        # is UNKNOWN, never proof of full market trade-tape completeness.
+        # A present, malformed flag is not silently coerced to truthy.
+        if "recovered" in ack and type(ack["recovered"]) is not bool:
+            raise StreamEvidenceError("INVALID_WS_RECOVERED_FLAG")
         publications = ack.get("publications", [])
         if not isinstance(publications, list):
             raise StreamEvidenceError("INVALID_WS_RECOVERED_PUBLICATIONS")
@@ -324,6 +332,15 @@ class PublicTradeStreamJournal:
                         "UPDATE ws_stream_state SET epoch=?,last_offset=?,"
                         "status='BASELINE_ONLY' WHERE pair=?",
                         (epoch,offset,pair),
+                    )
+                elif ack.get("recovered") is False:
+                    # Persistent fail-closed state even if offset/epoch are
+                    # unchanged and the reply omits replay publications.
+                    # Never claim that 'recoverable' authenticated recovery.
+                    # The original collector will stop and rebaseline only
+                    # through its existing bounded GAP+discontinuity workflow.
+                    con.execute(
+                        "UPDATE ws_stream_state SET status='GAP' WHERE pair=?", (pair,),
                     )
                 elif old_epoch != epoch:
                     con.execute(
