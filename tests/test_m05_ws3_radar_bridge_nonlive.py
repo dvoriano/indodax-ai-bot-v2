@@ -338,12 +338,63 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertEqual(len(api.calls), 1)
         payload = api.calls[0][1]
         self.assertIn("WS3 WATCH", payload["text"])
-        self.assertIn("NOT a closed 1m candle", payload["text"])
-        self.assertIn("NOT A BUY RECOMMENDATION", payload["text"])
-        self.assertIn("UNVERIFIED", payload["text"])
+        self.assertIn("Bukan candle 1 menit", payload["text"])
+        self.assertIn("Bukan rekomendasi beli", payload["text"])
+        self.assertIn("AI/G1", payload["text"])
+        self.assertLessEqual(len(payload["text"].splitlines()), 8)
         self.assertNotIn("reply_markup", payload)
         self.assertEqual(self.send(api)["messages_sent"], 0)
         self.assertEqual(len(api.calls), 1)
+
+    def test_phone_size_indonesian_ws3_notice_from_ucl_screenshot_values(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            format_owner_ws3_radar_compact,
+        )
+        tz = ZoneInfo("Asia/Jakarta")
+        base = {
+            "pair": "ucl_idr",
+            "reference_epoch": int(datetime(2026, 11, 11, 14, 45, 28, tzinfo=tz).timestamp()),
+            "observed_epoch": int(datetime(2026, 11, 11, 14, 48, 40, tzinfo=tz).timestamp()),
+            "observed_rise_pct": "11.78",
+            "reference_price_idr": "4543",
+            "latest_price_idr": "5078",
+            "volume_24h_idr": "174370000",
+            "volume_24h_net_change_idr": "7050000",
+            "momentum_phase": "EXTENDED_MOVE_REVIEW",
+            "compared_source_minute_samples": 2,
+            "microstructure_observation": {"status": "NOT_OBSERVED"},
+        }
+        message = format_owner_ws3_radar_compact(base)
+        self.assertIn("WS3 WATCH | UCL/IDR", message)
+        self.assertIn("+11,78%", message)
+        self.assertIn("14:45:28 → 14:48:40 WIB", message)
+        self.assertIn("Rp4.543 → Rp5.078", message)
+        self.assertIn("Rp174,37 jt", message)
+        self.assertIn("+Rp7,05 jt", message)
+        self.assertIn("Lonjakan besar", message)
+        self.assertIn("belum teramati", message)
+        self.assertIn("Bukan rekomendasi beli", message)
+        self.assertNotIn("EXTENDED_MOVE_REVIEW", message)
+        self.assertEqual(len(message.splitlines()), 8)
+
+    def test_ws3_notice_partial_micro_no_aggressor_claim(self):
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            format_owner_ws3_radar_compact,
+        )
+        self.seed()
+        candidate = dict(self.inspect()["candidates"][0])
+        candidate["microstructure_observation"] = {
+            "status": "PARTIAL_SOURCE_OBSERVATION",
+            "trade_activity_observed": True,
+            "captured_trade_count": 4,
+            "orderbook_snapshot_observed": True,
+        }
+        message = format_owner_ws3_radar_compact(candidate)
+        self.assertIn("trade 4 · book parsial", message)
+        self.assertIn("arus trade & kedalaman pasar belum diverifikasi", message)
+        self.assertNotIn("rekomendasi BUY", message)
 
     def test_per_pair_ack_is_durable_with_exact_ws3_source_and_message_id(self):
         self.seed()
