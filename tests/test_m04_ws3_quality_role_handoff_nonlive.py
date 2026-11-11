@@ -285,7 +285,8 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.assertEqual(report["status"],
                          "M04_WS3_RANKED_SHORTLIST_INCONSISTENT")
         self.assertEqual(report["candidate_count"], 0)
-        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        self.assertEqual(report["provider_http_calls"], 0)
+        self.assertFalse(report["three_real_role_responses_observed"])
         self.assertFalse(report["execution_allowed"])
 
     def test_owner_relative_db_path_handoff_is_not_misclassified_untrusted(self):
