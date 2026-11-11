@@ -282,7 +282,7 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
             report = inspect_original_ws3_three_role_handoff_readonly(
                 db_path=self.path, now_epoch=NOW,
             )
-        self.assertEqual(report["reason"],
+        self.assertEqual(report["status"],
                          "M04_WS3_RANKED_SHORTLIST_INCONSISTENT")
         self.assertEqual(report["candidate_count"], 0)
         self.assertEqual(report["actual_three_role_ai_calls"], 0)
