@@ -16,6 +16,7 @@ from indodax_ai_bot.m05_radar_momentum_nonlive import (
 )
 from scripts.m05_radar_owner_quality_replay_readonly import (
     replay_original_public_watch_readonly,
+    replay_original_ws3_quality_timeline_readonly,
 )
 
 WIB = ZoneInfo("Asia/Jakarta")
@@ -266,6 +267,176 @@ class OriginalPublicRadarReviewReplayTests(unittest.TestCase):
                 replay_original_public_watch_readonly(
                     db_path=self.path, **kwargs
                 )
+
+
+
+class OriginalWS3QualityTimelineReplayTests(unittest.TestCase):
+    """Original SQLite WS3+M04 source-only; no false Telegram ACK."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        base = Path(temp.name)
+        self.db = base / "decisions.sqlite3"
+        self.owner = base / "owner.sqlite3"
+        with sqlite3.connect(self.db) as db:
+            db.executescript("""
+                CREATE TABLE m03_ws_summary_watch_minute(
+                  pair TEXT NOT NULL,minute_epoch INTEGER NOT NULL,
+                  exchange_epoch INTEGER NOT NULL,last_idr TEXT NOT NULL,
+                  rolling_24h_idr TEXT NOT NULL,public_offset INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch));
+                CREATE TABLE m03_ws_microstructure_watch_minute(
+                  pair TEXT NOT NULL,minute_epoch INTEGER NOT NULL,
+                  observed_local_epoch INTEGER NOT NULL,
+                  trade_frames INTEGER NOT NULL,
+                  source_buy_count INTEGER,source_sell_count INTEGER,
+                  source_buy_idr TEXT,source_sell_idr TEXT,
+                  last_trade_epoch INTEGER,trade_offset INTEGER,
+                  trade_gap_observed INTEGER NOT NULL,
+                  trade_truncated INTEGER NOT NULL,
+                  book_offset INTEGER,book_local_epoch INTEGER,
+                  best_bid_idr TEXT,best_ask_idr TEXT,spread_bps TEXT,
+                  bid_depth_top5_idr TEXT,ask_depth_top5_idr TEXT,
+                  book_imbalance_top5_ratio TEXT,
+                  source_malformed INTEGER NOT NULL,
+                  PRIMARY KEY(pair,minute_epoch));
+            """)
+        self.db.chmod(0o600)
+        self.zero = BASE
+
+    def quote(self, pair, minute, price, volume="500000000"):
+        with sqlite3.connect(self.db) as db:
+            db.execute("INSERT INTO m03_ws_summary_watch_minute VALUES "
+                       "(?,?,?,?,?,?)", (
+                pair, BASE + minute * 60, BASE + minute * 60 + 20,
+                str(price), str(volume), 100 + minute,
+            ))
+
+    def micro(self, pair, minute):
+        stamp = BASE + minute * 60 + 30
+        with sqlite3.connect(self.db) as db:
+            db.execute(
+                "INSERT INTO m03_ws_microstructure_watch_minute VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (pair, BASE + minute * 60, stamp, 1, 2, 1,
+                 "100000", "50000", stamp-2, 45,
+                 0, 0, 51, stamp, "100", "100.2", "19.9800",
+                 "9000000", "7000000", "1.2857", 0),
+            )
+
+    def replay(self, end=4, pairs=("uai_idr", "thin_idr"), owner=False):
+        return replay_original_ws3_quality_timeline_readonly(
+            start_epoch=BASE,
+            end_epoch=BASE + 60 * end, pairs=pairs, db_path=self.db,
+            radar_claims_db=self.owner if owner else None,
+        )
+
+    def test_uai_like_first_quote_micro_watch_m04_times_and_negative_control(self):
+        self.quote("uai_idr", 1, 100)
+        self.quote("uai_idr", 2, 101, "500050000")
+        self.micro("uai_idr", 2)
+        self.quote("thin_idr", 1, 100, "100000000")
+        self.quote("thin_idr", 2, 105, "100050000")
+        r = self.replay()
+        self.assertEqual(r["status"],
+            "M03_WS3_ORIGINAL_SOURCE_CHRONOLOGICAL_QUALITY_TIMELINE")
+        good, thin = r["pairs"]
+        self.assertEqual(good["pair"], "uai_idr")
+        self.assertEqual(good["first_persisted_quote_minute_wib"],
+                         "2026-11-06 20:01:00 WIB")
+        self.assertEqual(good["first_raw_micro_capture_wib"],
+                         "2026-11-06 20:02:30 WIB")
+        self.assertEqual(good["first_m03_watch_top40_replay_minute_end_wib"],
+                         "2026-11-06 20:02:59 WIB")
+        self.assertEqual(good["first_m05_top5_eligible_replay_minute_end_wib"],
+                         "2026-11-06 20:02:59 WIB")
+        self.assertEqual(good["first_fresh_micro_joined_replay_minute_end_wib"],
+                         "2026-11-06 20:02:59 WIB")
+        self.assertEqual(good["first_m04_quality_top2_replay_minute_end_wib"],
+                         "2026-11-06 20:02:59 WIB")
+        self.assertEqual(good["first_m04_micro_prealert_top2_replay_minute_end_wib"],
+                         "2026-11-06 20:02:59 WIB")
+        self.assertGreater(
+            good["first_m04_quality_top2_score_observational"], 0)
+        self.assertIsNone(thin["first_m05_top5_eligible_replay_minute_end_wib"])
+        self.assertIsNone(thin["first_m04_quality_top2_replay_minute_end_wib"])
+        self.assertEqual(thin["source_quote_rows_in_window"], 2)
+        self.assertIsNone(good["telegram_actual_send_ack_wib"])
+        self.assertIsNone(good["telegram_delivery_delay_seconds"])
+        self.assertEqual(r["telegram_messages_sent"], 0)
+        self.assertEqual(r["paid_provider_calls"], 0)
+        self.assertFalse(r["execution_allowed"])
+
+    def test_later_micro_must_not_be_used_in_earlier_replayed_minute(self):
+        self.quote("uai_idr", 1, 100)
+        self.quote("uai_idr", 2, 101, "500050000")
+        self.quote("uai_idr", 3, "101.2", "500060000")
+        self.micro("uai_idr", 3)
+        before = self.replay(end=2, pairs=("uai_idr",))["pairs"][0]
+        after = self.replay(end=3, pairs=("uai_idr",))["pairs"][0]
+        self.assertIsNone(before["first_raw_micro_capture_wib"])
+        self.assertIsNone(before["first_fresh_micro_joined_replay_minute_end_wib"])
+        self.assertEqual(before["source_micro_rows_in_window"], 0)
+        self.assertEqual(after["first_raw_micro_capture_wib"],
+                         "2026-11-06 20:03:30 WIB")
+        self.assertEqual(after["first_fresh_micro_joined_replay_minute_end_wib"],
+                         "2026-11-06 20:03:59 WIB")
+        self.assertEqual(before["first_m03_watch_top40_replay_minute_end_wib"],
+                         "2026-11-06 20:02:59 WIB")
+
+    def test_last_owner_radar_claim_is_not_telegram_send_ack(self):
+        self.quote("uai_idr", 1, 100)
+        self.quote("uai_idr", 2, 101, "500050000")
+        with sqlite3.connect(self.owner) as db:
+            db.execute(
+                "CREATE TABLE m05_radar_momentum_attempts("
+                "pair TEXT PRIMARY KEY,claimed_epoch INTEGER,"
+                "source_observed_epoch INTEGER)"
+            )
+            db.execute(
+                "INSERT INTO m05_radar_momentum_attempts VALUES(?,?,?)",
+                ("uai_idr", BASE + 2*60 + 45, BASE + 2*60 + 20),
+            )
+        self.owner.chmod(0o600)
+        r = self.replay(pairs=("uai_idr",), owner=True)
+        p = r["pairs"][0]
+        self.assertEqual(r["owner_radar_claim_source_status"],
+                         "LAST_CLAIM_ROWS_ONLY_NOT_TELEGRAM_ACK")
+        self.assertEqual(p["last_retained_m05_radar_claim_wib"],
+                         "2026-11-06 20:02:45 WIB")
+        self.assertTrue(p["last_claim_source_epoch_matches_ws3_quote"])
+        self.assertIsNone(p["telegram_actual_send_ack_wib"])
+        self.assertIsNone(p["telegram_delivery_delay_seconds"])
+        self.assertEqual(r["telegram_messages_sent"], 0)
+
+    def test_rejects_bad_scope_untrusted_db_and_absent_archive(self):
+        self.quote("uai_idr", 1, 100)
+        for kwargs in (
+            {"start_epoch": BASE, "end_epoch": BASE + 121 * 60},
+            {"start_epoch": BASE + 60, "end_epoch": BASE},
+            {"start_epoch": BASE, "end_epoch": BASE,
+             "pairs": ("../bad",)},
+            {"start_epoch": BASE, "end_epoch": BASE, "pairs": ()},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                    ValueError, "M03_WS3_TIMELINE_INVALID_SCOPE"):
+                replay_original_ws3_quality_timeline_readonly(
+                    db_path=self.db, **kwargs)
+        no_db = self.db.with_name("not_present.db")
+        with self.assertRaisesRegex(
+                ValueError, "M03_WS3_TIMELINE_SOURCE_UNTRUSTED"):
+            replay_original_ws3_quality_timeline_readonly(
+                db_path=no_db, start_epoch=BASE, end_epoch=BASE)
+        empty = self.db.with_name("no_summary.db")
+        with sqlite3.connect(empty) as db:
+            db.execute("CREATE TABLE unrelated(x INTEGER)")
+            db.execute("INSERT INTO unrelated VALUES(1)")
+        empty.chmod(0o600)
+        with self.assertRaisesRegex(
+                ValueError, "M03_WS3_TIMELINE_SOURCE_ABSENT"):
+            replay_original_ws3_quality_timeline_readonly(
+                db_path=empty, start_epoch=BASE, end_epoch=BASE)
 
 
 if __name__ == "__main__":
