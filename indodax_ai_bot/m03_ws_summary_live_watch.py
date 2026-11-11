@@ -31,6 +31,36 @@ class M03WSWatchError(ValueError):
     """A fixed diagnostic code without socket tokens or server payloads."""
 
 
+def _redacted_json_failure_code(raw: str, *, phase: str,
+                                error: json.JSONDecodeError) -> str:
+    """Expose only parser phase and broad frame shape; never raw text.
+
+    This is a diagnostic, NOT permission to skip or reinterpret an
+    unauthenticated/malformed frame. On failure the whole WS3 sample is
+    still rejected by the original caller, preserving source integrity.
+    """
+    stage = phase if phase in ("AUTH", "SUBSCRIBE", "OBSERVE") else "UNKNOWN"
+    stripped = raw.lstrip()
+    if not stripped:
+        kind = "EMPTY_TEXT"
+    elif stripped[0] == "<":
+        kind = "NONJSON_MARKUP"
+    elif stripped[0] in "{[":
+        # JSON decoder offsets are structural hints, not proof of an
+        # upstream transport failure. Never print the decoder message.
+        kind = (
+            "STRUCTURED_INCOMPLETE"
+            if error.pos >= len(raw) - 1 or
+            error.msg.startswith("Unterminated ")
+            else "STRUCTURED_INVALID"
+        )
+    elif stripped[0] in '"-0123456789tfn':
+        kind = "PRIMITIVE_INVALID"
+    else:
+        kind = "NONJSON_TEXT"
+    return "M03_WS_WATCH_JSON_INVALID:" + stage + ":" + kind
+
+
 def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     observe_seconds: int = 12,
                                     micro_pairs: tuple[str, ...] = (),
@@ -114,8 +144,12 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 raise M03WSWatchError("M03_WS_WATCH_FRAME_SIZE_INVALID")
             try:
                 msg = json.loads(raw)
-            except (ValueError, TypeError):
-                raise M03WSWatchError("M03_WS_WATCH_JSON_INVALID") from None
+            except json.JSONDecodeError as exc:
+                # Preserve fail-closed semantics; this error cannot be
+                # converted into a WATCH observation or positive ACK.
+                raise M03WSWatchError(
+                    _redacted_json_failure_code(raw, phase=phase, error=exc)
+                ) from None
             if not isinstance(msg, dict):
                 raise M03WSWatchError("M03_WS_WATCH_ENVELOPE_INVALID")
             if phase == "AUTH":
