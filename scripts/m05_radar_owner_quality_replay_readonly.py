@@ -275,6 +275,10 @@ def replay_original_ws3_quality_timeline_readonly(
             raise ValueError("M03_WS3_TIMELINE_SOURCE_INSPECT_FAILED")
         top40 = {x["pair"]: x
                  for x in snap["ranked_review_shortlist_top40"]}
+        # Micro PREALERT can have truthful fresh trade/book data before the
+        # 0.5% M05 Telegram WATCH gate. Count that stage independently.
+        prealert_source = {x["pair"]: x
+                           for x in snap["micro_prealert_candidates_top40"]}
         top5 = {x["pair"] for x in snap["candidates"]}
         m04 = inspect_original_ws3_three_role_handoff_readonly(
             db_path=path, now_epoch=asof,
@@ -300,13 +304,17 @@ def replay_original_ws3_quality_timeline_readonly(
                 stats[pair]["m03_watch_top40_minute_ends"] += 1
                 if item["m03_watch_any_rank"] is None:
                     item["m03_watch_any_rank"] = asof
-                micro = top40[pair].get("microstructure_observation", {})
+            joined = top40.get(pair) or prealert_source.get(pair)
+            if joined is not None:
+                micro = joined.get("microstructure_observation", {})
                 if (micro.get("status") == "PARTIAL_SOURCE_OBSERVATION"
                         and not micro.get("source_malformed")
                         and not micro.get("trade_source_gap_or_truncation")
                         and (micro.get("trade_activity_observed") or
                              micro.get("orderbook_snapshot_observed"))):
                     stats[pair]["fresh_micro_joined_minute_ends"] += 1
+                    if pair in prealert_source and pair not in top40:
+                        stats[pair]["micro_prealert_before_telegram_minute_ends"] += 1
                     if item["micro_joined_fresh"] is None:
                         item["micro_joined_fresh"] = asof
             if pair in top5:
