@@ -330,7 +330,7 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             or snapshot.get("three_ai_role_responses_observed") is not False
             or snapshot.get("execution_allowed") is not False
             or not isinstance(snapshot.get("candidates"), list)
-            or len(snapshot["candidates"]) > (40 if prealert_mode else 5)):
+            or len(snapshot["candidates"]) > 40):
         return _blocked("M04_WS3_UNTRUSTED_SOURCE")
     validated = []
     seen = set()
@@ -542,9 +542,33 @@ def inspect_original_ws3_three_role_handoff_readonly(
         result = _blocked(upstream_statuses[source_status])
         result["upstream_source_status"] = source_status
         return result
-    return prepare_ws3_three_role_watch_handoff_readonly(
-        snapshot=snap, now_epoch=now,
+    # Original M05 keeps its source-priority TOP5 for actual Telegram WATCH.
+    # M03 also returns an already-ranked SAME SNAPSHOT top40. The old M04
+    # caller passed only TOP5, so a source-clean/high-quality candidate at
+    # source rank 6–40 was NEVER reconsidered by M04 quality scoring.
+    # Reuse the existing source packet, no scanner, network or DB mutation.
+    pool = snap.get("ranked_review_shortlist_top40")
+    telegram_top5 = snap.get("candidates")
+    count = snap.get("quality_reviewed_candidate_count")
+    if (type(pool) is not list or len(pool) > 40
+            or type(telegram_top5) is not list
+            or len(telegram_top5) > 5
+            or type(count) is not int or count < 0
+            or len(pool) != min(40, count)
+            or telegram_top5 != pool[:5]):
+        return _blocked("M04_WS3_RANKED_SHORTLIST_INCONSISTENT")
+    report = prepare_ws3_three_role_watch_handoff_readonly(
+        snapshot=dict(snap, candidates=pool), now_epoch=now,
     )
+    if report.get("status") == "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED":
+        top5_pairs = {row["pair"] for row in telegram_top5}
+        for row in report["candidates"]:
+            row["source_ranked_m03_telegram_top5"] = (
+                row["pair"] in top5_pairs
+            )
+        report["source_pool_size_from_original_m03"] = len(pool)
+        report["m05_original_telegram_top5_unchanged"] = True
+    return report
 
 
 
