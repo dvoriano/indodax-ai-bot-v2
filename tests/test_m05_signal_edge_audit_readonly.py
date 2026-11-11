@@ -125,6 +125,120 @@ class OriginalOwnerJoinTests(unittest.TestCase):
                 radar_claims_db=self.owner,
                 now_epoch=NOW + 2000, **kwargs)
 
+    def make_research_archive(self, *, first_recorded_epoch=NOW + 28,
+                              first_status="ELIGIBLE_SOURCE_OBSERVATION"):
+        folder = self.market.parent / "m03-ws3-evidence"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        archive = folder / "observations.sqlite3"
+        with sqlite3.connect(archive) as db:
+            db.execute("""
+                CREATE TABLE ws3_source_cycles(
+                    minute_epoch INTEGER PRIMARY KEY,
+                    recorded_local_epoch INTEGER NOT NULL
+                )
+            """)
+            db.execute("""
+                CREATE TABLE ws3_source_evidence(
+                    pair TEXT NOT NULL, minute_epoch INTEGER NOT NULL,
+                    source_exchange_epoch INTEGER, last_idr TEXT,
+                    source_status TEXT NOT NULL,
+                    PRIMARY KEY(pair,minute_epoch)
+                )
+            """)
+            for minute, epoch, price, status, recorded in (
+                (NOW, NOW + 20, "100", first_status,
+                 first_recorded_epoch),
+                (NOW + 60, NOW + 70, "101",
+                 "ELIGIBLE_SOURCE_OBSERVATION", NOW + 80),
+                (NOW + 360, NOW + 370, "102",
+                 "BELOW_150M_VOLUME_FLOOR", NOW + 380),
+                (NOW + 960, NOW + 970, "99",
+                 "ELIGIBLE_SOURCE_OBSERVATION", NOW + 980),
+            ):
+                db.execute(
+                    "INSERT INTO ws3_source_cycles VALUES(?,?)",
+                    (minute, recorded),
+                )
+                db.execute(
+                    "INSERT INTO ws3_source_evidence VALUES(?,?,?,?,?)",
+                    ("uai_idr", minute, epoch, price, status),
+                )
+        archive.chmod(0o600)
+        return archive
+
+    def test_research_archive_recovers_exact_ack_after_original_retention(self):
+        archive = self.make_research_archive()
+        with sqlite3.connect(self.market) as db:
+            db.execute("DELETE FROM m03_ws_summary_watch_minute")
+        baseline = self.audit()
+        self.assertEqual(baseline["status_counts"]["ACK_NOT_MATCHED_WS3_SOURCE"], 1)
+        recovered = self.audit(research_evidence_db=archive)
+        self.assertEqual(
+            recovered["status_counts"]["MATCHED_WS3_ACK_RESEARCH_ARCHIVE"], 1
+        )
+        event = recovered["events"][0]
+        self.assertTrue(event["source_quote_matched"])
+        self.assertEqual(
+            event["source_match_provenance"],
+            "M03_WS3_PRIVATE_RESEARCH_ARCHIVE",
+        )
+        self.assertEqual(event["source_to_ack_seconds"], 11)
+        self.assertFalse(event["source_replay_retained_original_quotes"])
+        self.assertIsNone(event["first_micro_prealert_replay_wib"])
+        self.assertEqual(event["price_proxies"]["5m"]["gross_move_bps"],
+                         "99.01")
+        self.assertEqual(event["price_proxies"]["15m"]["status"],
+                         "OBSERVED_PRICE_ONLY_NOT_EXECUTABLE")
+        self.assertTrue(recovered[
+            "research_archive_cannot_reconstruct_original_m04_micro_replay"])
+        self.assertEqual(recovered["exchange_requests"], 0)
+        self.assertEqual(recovered["telegram_messages_sent"], 0)
+        self.assertEqual(recovered["orders_sent"], 0)
+
+    def test_research_record_after_claim_does_not_backfill_source_match(self):
+        archive = self.make_research_archive(
+            first_recorded_epoch=NOW + 40
+        )
+        with sqlite3.connect(self.market) as db:
+            db.execute("DELETE FROM m03_ws_summary_watch_minute")
+        r = self.audit(research_evidence_db=archive)
+        self.assertEqual(r["status_counts"]["ACK_NOT_MATCHED_WS3_SOURCE"], 1)
+        self.assertEqual(r["events"][0]["price_proxies"], {})
+        self.assertIsNone(r["events"][0]["source_to_ack_seconds"])
+
+    def test_below_floor_research_quote_cannot_prove_watch_source(self):
+        archive = self.make_research_archive(
+            first_status="BELOW_150M_VOLUME_FLOOR"
+        )
+        with sqlite3.connect(self.market) as db:
+            db.execute("DELETE FROM m03_ws_summary_watch_minute")
+        r = self.audit(research_evidence_db=archive)
+        self.assertEqual(r["status_counts"]["ACK_NOT_MATCHED_WS3_SOURCE"], 1)
+
+    def test_research_archive_insecure_mode_or_symlink_rejected(self):
+        archive = self.make_research_archive()
+        archive.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "RESEARCH_EVIDENCE_DB_UNTRUSTED"):
+            self.audit(research_evidence_db=archive)
+        archive.chmod(0o600)
+        link = archive.parent / "aliased.sqlite3"
+        link.symlink_to(archive)
+        with self.assertRaisesRegex(ValueError, "RESEARCH_EVIDENCE_DB_UNTRUSTED"):
+            self.audit(research_evidence_db=link)
+
+    def test_research_exact_pair_epoch_required_not_just_timestamp(self):
+        archive = self.make_research_archive()
+        with sqlite3.connect(self.market) as db:
+            db.execute("DELETE FROM m03_ws_summary_watch_minute")
+        with sqlite3.connect(archive) as db:
+            db.execute(
+                "UPDATE ws3_source_evidence SET source_exchange_epoch=? "
+                "WHERE minute_epoch=?",
+                (NOW + 19, NOW),
+            )
+        r = self.audit(research_evidence_db=archive)
+        self.assertEqual(r["status_counts"]["ACK_NOT_MATCHED_WS3_SOURCE"], 1)
+
     def test_owner_ack_matches_exact_real_schema_quote(self):
         r = self.audit()
         self.assertEqual(r["events_inspected"], 1)
