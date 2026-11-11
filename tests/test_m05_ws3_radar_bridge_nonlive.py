@@ -11,6 +11,9 @@ from indodax_ai_bot.m05_radar_momentum_nonlive import (
     send_one_owner_radar_momentum_nonlive,
 )
 from indodax_ai_bot import telegram_service_tick
+from scripts.m05_radar_owner_quality_replay_readonly import (
+    replay_original_ws3_quality_timeline_readonly,
+)
 
 NOW = 1794330000
 
@@ -339,6 +342,89 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertIn("NOT A BUY RECOMMENDATION", payload["text"])
         self.assertIn("UNVERIFIED", payload["text"])
         self.assertNotIn("reply_markup", payload)
+        self.assertEqual(self.send(api)["messages_sent"], 0)
+        self.assertEqual(len(api.calls), 1)
+
+    def test_per_pair_ack_is_durable_with_exact_ws3_source_and_message_id(self):
+        self.seed()
+        outcome = self.send(FakeTelegram())
+        self.assertEqual(outcome["status"], "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT")
+        self.assertTrue(outcome["pair_delivery_audit_persisted"])
+        with sqlite3.connect(self.owner_path) as db:
+            rows = db.execute(
+                "SELECT pair,claimed_epoch,source_observed_epoch,source_kind,"
+                "delivery_state,ack_received_epoch,telegram_message_id "
+                "FROM m05_radar_delivery_events"
+            ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][:5], (
+            "uai_idr", NOW, NOW-60+42, "WS3", "ACKED",
+        ))
+        self.assertIsInstance(rows[0][5], int)
+        self.assertGreater(rows[0][5], 0)
+        self.assertEqual(rows[0][6], 9)
+        r = replay_original_ws3_quality_timeline_readonly(
+            start_epoch=NOW-180, end_epoch=NOW,
+            pairs=("uai_idr",), db_path=self.db_path,
+            radar_claims_db=self.owner_path,
+        )
+        pair = r["pairs"][0]
+        self.assertEqual(r["owner_radar_delivery_event_source_status"],
+                         "PER_PAIR_DELIVERY_EVENTS_AVAILABLE")
+        self.assertEqual(pair["per_pair_durable_ack_count_in_window"], 1)
+        self.assertEqual(pair["first_durable_ack_source_kind"], "WS3")
+        self.assertTrue(pair["first_durable_ack_matches_retained_ws3_quote"])
+        self.assertIsNotNone(pair["telegram_actual_send_ack_wib"])
+        self.assertIsNone(pair["telegram_delivery_delay_seconds"])
+        self.assertGreaterEqual(
+            pair["first_durable_ws3_source_to_ack_seconds"], 0)
+        self.assertEqual(r["telegram_messages_sent"], 0)
+        self.assertFalse(r["execution_allowed"])
+
+    def test_uncertain_send_keeps_single_claim_and_no_false_ack(self):
+        self.seed()
+        failed = self.send(FakeTelegram(fail=True))
+        self.assertEqual(failed["status"],
+                         "M05_RADAR_DELIVERY_UNCERTAIN_NO_RETRY")
+        self.assertTrue(failed["pair_delivery_audit_persisted"])
+        with sqlite3.connect(self.owner_path) as db:
+            row = db.execute(
+                "SELECT delivery_state,ack_received_epoch,telegram_message_id "
+                "FROM m05_radar_delivery_events"
+            ).fetchone()
+        self.assertEqual(row, ("UNCERTAIN", None, None))
+        self.assertEqual(self.send(FakeTelegram())["messages_sent"], 0)
+
+    def test_additive_ack_events_survive_later_pair_cooldown_overwrite(self):
+        self.seed()
+        self.assertEqual(self.send(FakeTelegram())["messages_sent"], 1)
+        self.add("uai_idr", 14, 107, 501000000, 71)
+        self.add("uai_idr", 15, 109, 502000000, 72)
+        now = NOW + 16*60
+        self.assertEqual(self.send(FakeTelegram(), now=now)["messages_sent"], 1)
+        with sqlite3.connect(self.owner_path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM m05_radar_delivery_events "
+                "WHERE pair='uai_idr' AND delivery_state='ACKED'"
+            ).fetchone()[0]
+            latest = db.execute(
+                "SELECT claimed_epoch FROM m05_radar_momentum_attempts "
+                "WHERE pair='uai_idr'"
+            ).fetchone()[0]
+        self.assertEqual(count, 2)
+        self.assertEqual(latest, now)
+
+    def test_failed_ack_journal_write_does_not_retry_or_relabel_actual_send(self):
+        self.seed()
+        api = FakeTelegram()
+        with patch(
+            "indodax_ai_bot.m05_radar_momentum_nonlive."
+            "_finalize_radar_delivery_event", return_value=False
+        ):
+            result = self.send(api)
+        self.assertEqual(result["status"], "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT")
+        self.assertEqual(result["messages_sent"], 1)
+        self.assertFalse(result["pair_delivery_audit_persisted"])
         self.assertEqual(self.send(api)["messages_sent"], 0)
         self.assertEqual(len(api.calls), 1)
 

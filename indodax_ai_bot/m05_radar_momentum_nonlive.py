@@ -889,8 +889,15 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
 
 
 def _claim_once(ledger, pair: str, observed_epoch: int,
-                now_epoch: int) -> bool:
-    """At-most-once owner notice attempt; no replay on Telegram uncertainty."""
+                now_epoch: int, *, source_kind: str) -> bool:
+    """Durable at-most-once claim, plus bounded per-pair delivery audit.
+
+    The ORIGINAL one-row-per-pair cooldown table is untouched. An additive
+    private append-only event row is committed in the SAME transaction, before
+    a Bot API send. An ACK is never inferred just from this claim.
+    """
+    if source_kind not in ("WS3", "REST"):
+        return False
     dbpath = Path(ledger.db_path)
     if not _owned_private_regular(dbpath):
         return False
@@ -904,6 +911,34 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
                     source_observed_epoch INTEGER NOT NULL
                 )
             """)
+            # Same existing owner SQLite; not a second sender or new ledger.
+            # Never persist owner IDs, Telegram tokens or message text.
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS m05_radar_delivery_events (
+                    pair TEXT NOT NULL,
+                    claimed_epoch INTEGER NOT NULL,
+                    source_observed_epoch INTEGER NOT NULL,
+                    source_kind TEXT NOT NULL
+                        CHECK(source_kind IN ('WS3','REST')),
+                    delivery_state TEXT NOT NULL
+                        CHECK(delivery_state IN ('CLAIMED','ACKED','UNCERTAIN')),
+                    ack_received_epoch INTEGER,
+                    telegram_message_id INTEGER,
+                    PRIMARY KEY(pair, claimed_epoch, source_observed_epoch),
+                    CHECK(
+                        (delivery_state='ACKED'
+                         AND ack_received_epoch IS NOT NULL
+                         AND telegram_message_id > 0)
+                        OR
+                        (delivery_state!='ACKED'
+                         AND ack_received_epoch IS NULL
+                         AND telegram_message_id IS NULL)
+                    )
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS "
+                       "m05_radar_delivery_events_claimed_idx ON "
+                       "m05_radar_delivery_events(claimed_epoch)")
             if db.execute(
                 "SELECT 1 FROM m05_radar_momentum_attempts "
                 "WHERE claimed_epoch > ? LIMIT 1",
@@ -928,7 +963,59 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
                     claimed_epoch=excluded.claimed_epoch,
                     source_observed_epoch=excluded.source_observed_epoch
             """, (pair, now_epoch, observed_epoch))
+            db.execute("""
+                INSERT INTO m05_radar_delivery_events(
+                    pair,claimed_epoch,source_observed_epoch,source_kind,
+                    delivery_state,ack_received_epoch,telegram_message_id
+                ) VALUES(?,?,?,?, 'CLAIMED',NULL,NULL)
+            """, (pair, now_epoch, observed_epoch, source_kind))
+            # Max 30 days per-pair outcome evidence, preserving bounded disk.
+            db.execute(
+                "DELETE FROM m05_radar_delivery_events WHERE claimed_epoch < ?",
+                (now_epoch - 30 * 86400,),
+            )
         return True
+    except (sqlite3.Error, OSError):
+        return False
+
+
+def _finalize_radar_delivery_event(
+    ledger, *, pair: str, claim_epoch: int, source_observed_epoch: int,
+    state: str, message_id: int | None = None,
+) -> bool:
+    """Set exact original claim ACK/UNCERTAIN without changing sender result.
+
+    A failed local audit write must NOT erase a successful Bot API ACK or
+    provoke a second potentially duplicate Telegram send.
+    """
+    if state not in ("ACKED", "UNCERTAIN"):
+        return False
+    if state == "ACKED" and (type(message_id) is not int or message_id <= 0):
+        return False
+    if state == "UNCERTAIN" and message_id is not None:
+        return False
+    path = Path(ledger.db_path)
+    if not _owned_private_regular(path):
+        return False
+    try:
+        with sqlite3.connect(path, timeout=2) as db:
+            if state == "ACKED":
+                cursor = db.execute("""
+                    UPDATE m05_radar_delivery_events
+                    SET delivery_state='ACKED',
+                        ack_received_epoch=?, telegram_message_id=?
+                    WHERE pair=? AND claimed_epoch=? AND
+                          source_observed_epoch=? AND delivery_state='CLAIMED'
+                """, (int(time.time()), message_id, pair, claim_epoch,
+                      source_observed_epoch))
+            else:
+                cursor = db.execute("""
+                    UPDATE m05_radar_delivery_events
+                    SET delivery_state='UNCERTAIN'
+                    WHERE pair=? AND claimed_epoch=? AND
+                          source_observed_epoch=? AND delivery_state='CLAIMED'
+                """, (pair, claim_epoch, source_observed_epoch))
+            return cursor.rowcount == 1
     except (sqlite3.Error, OSError):
         return False
 
@@ -1062,7 +1149,9 @@ def send_one_owner_radar_momentum_nonlive(
                 "messages_sent": 0}
     for candidate in snap["candidates"]:
         if not _claim_once(
-            ledger, candidate["pair"], candidate["observed_epoch"], now
+            ledger, candidate["pair"], candidate["observed_epoch"], now,
+            source_kind=("WS3" if snap["status"] ==
+                         "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST"),
         ):
             continue
         message = (
@@ -1071,6 +1160,7 @@ def send_one_owner_radar_momentum_nonlive(
             else format_owner_radar_compact(candidate)
         )
         # Claim is durable BEFORE send; uncertainty must never replay it.
+        # The added audit row is informational, never an order authorization.
         try:
             msg = api.call("sendMessage", {
                 "chat_id": ledger.owner_user_id,
@@ -1082,20 +1172,38 @@ def send_one_owner_radar_momentum_nonlive(
                     or not isinstance(msg.get("chat"), dict)
                     or msg["chat"].get("id") != ledger.owner_user_id
                     or msg["chat"].get("type") != "private"):
+                recorded = _finalize_radar_delivery_event(
+                    ledger, pair=candidate["pair"], claim_epoch=now,
+                    source_observed_epoch=candidate["observed_epoch"],
+                    state="UNCERTAIN",
+                )
                 return {
                     "status": "M05_RADAR_DELIVERY_UNCERTAIN_NO_RETRY",
                     "messages_sent": 0,
+                    "pair_delivery_audit_persisted": recorded,
                 }
         except Exception:
             # Optional radar must not stop the original owner receiver.
+            recorded = _finalize_radar_delivery_event(
+                ledger, pair=candidate["pair"], claim_epoch=now,
+                source_observed_epoch=candidate["observed_epoch"],
+                state="UNCERTAIN",
+            )
             return {
                 "status": "M05_RADAR_DELIVERY_UNCERTAIN_NO_RETRY",
                 "messages_sent": 0,
+                "pair_delivery_audit_persisted": recorded,
             }
+        recorded = _finalize_radar_delivery_event(
+            ledger, pair=candidate["pair"], claim_epoch=now,
+            source_observed_epoch=candidate["observed_epoch"],
+            state="ACKED", message_id=msg["message_id"],
+        )
         return {
             "status": "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT",
             "messages_sent": 1, "execution_allowed": False,
             "owner_final_decision": None,
+            "pair_delivery_audit_persisted": recorded,
         }
     return {"status": "M05_RADAR_THROTTLED",
             "messages_sent": 0}
