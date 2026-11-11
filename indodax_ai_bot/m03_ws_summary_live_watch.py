@@ -670,6 +670,25 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
     report = persist_ws3_summary_watch(
         DecisionJournal(db_path), source, now_epoch=now,
     )
+    # Optional separate research DB, using the SAME already-received WS3
+    # snapshot. Never change original WATCH candidates, trading, or the
+    # original M03 DB's 2h retention. Best-effort evidence must not turn a
+    # successful scanner tick into a failure.
+    import os
+    if os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES":
+        try:
+            from .m03_ws3_evidence_archive_nonlive import (
+                archive_ws3_evidence_nonlive,
+            )
+            report["research_archive"] = archive_ws3_evidence_nonlive(
+                source, now_epoch=now,
+            )
+        except Exception:
+            report["research_archive"] = {
+                "status": "M03_WS3_RESEARCH_ARCHIVE_UNAVAILABLE",
+                "exchange_requests_added": 0,
+                "orders_sent": 0,
+            }
     if micro_enabled:
         current_source = source["microstructure_selection_source"]
         selected = source["microstructure_selected_pairs"]
