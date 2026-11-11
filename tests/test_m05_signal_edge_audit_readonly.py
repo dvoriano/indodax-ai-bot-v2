@@ -184,7 +184,12 @@ class OriginalOwnerJoinTests(unittest.TestCase):
         )
         self.assertEqual(event["source_to_ack_seconds"], 11)
         self.assertFalse(event["source_replay_retained_original_quotes"])
-        self.assertIsNone(event["first_micro_prealert_replay_wib"])
+        # Existing synthetic replay() supplies a PREALERT timestamp. The
+        # research archive must neither invent it nor delete it.
+        self.assertEqual(
+            event["first_micro_prealert_replay_wib"],
+            timeline()["pairs"][0]["first_m04_micro_prealert_top2_replay_minute_end_wib"],
+        )
         self.assertEqual(event["price_proxies"]["5m"]["gross_move_bps"],
                          "99.01")
         self.assertEqual(event["price_proxies"]["15m"]["status"],
