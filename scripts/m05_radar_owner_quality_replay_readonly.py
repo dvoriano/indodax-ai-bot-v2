@@ -184,7 +184,8 @@ def replay_original_ws3_quality_timeline_readonly(
         raise ValueError("M03_WS3_TIMELINE_SOURCE_UNTRUSTED")
     path = path.absolute()
     raw = {pair: {"first_quote": None, "first_micro": None,
-                  "quote_rows": 0, "micro_rows": 0} for pair in pairs}
+                  "quote_rows": 0, "micro_rows": 0,
+                  "quote_exchange_epochs": set()} for pair in pairs}
     placeholders = ",".join("?" for _ in pairs)
     with sqlite3.connect(path.as_uri() + "?mode=ro",
                          uri=True, timeout=3) as db:
@@ -202,6 +203,7 @@ def replay_original_ws3_quality_timeline_readonly(
         ):
             item = raw[pair]
             item["quote_rows"] += 1
+            item["quote_exchange_epochs"].add(exchange)
             if item["first_quote"] is None:
                 item["first_quote"] = {
                     "minute_epoch": minute, "exchange_epoch": exchange,
@@ -371,10 +373,8 @@ def replay_original_ws3_quality_timeline_readonly(
             "last_retained_claim_source_quote_exchange_wib": wib_time(
                 claim[1] if claim else None),
             "last_claim_source_epoch_matches_ws3_quote": (
-                bool(claim) and any(
-                    row["exchange_epoch"] == claim[1]
-                    for row in [initial] if row is not None
-                ) if claim else None),
+                claim[1] in src["quote_exchange_epochs"]
+                if claim else None),
             "telegram_actual_send_ack_wib": None,
             "telegram_delivery_delay_seconds": None,
             "minute_end_replay_counts": dict(sorted(stats[pair].items())),
