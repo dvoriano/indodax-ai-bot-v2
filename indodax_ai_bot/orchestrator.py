@@ -153,6 +153,34 @@ class CycleResult:
 
 class DailyScalpingOrchestrator:
     @staticmethod
+    def review_strategy_a_nonlive_once(*, review_type: str, **inputs) -> dict:
+        """Original V2 orchestrator OFFLINE entrypoint, never an order action.
+
+        The four bounded reference reviews use no network, model, Telegram,
+        balance, journal mutation or any trade execution. The official M07
+        adapter remains hardlocked even if review status appears favorable.
+        """
+        from .m08_strategy_a_nonlive import (
+            assess_ws3_priority_alert_offline,
+            assess_maker_entry_offline,
+            assess_exit_strategy_a_offline,
+            assess_rebound_watch_offline,
+        )
+        inspectors = {
+            "PRIORITY_ALERT": assess_ws3_priority_alert_offline,
+            "BUY_MAKER": assess_maker_entry_offline,
+            "POSITION_EXIT": assess_exit_strategy_a_offline,
+            "REBOUND_WATCH": assess_rebound_watch_offline,
+        }
+        if type(review_type) is not str or review_type not in inspectors:
+            raise ValueError("STRATEGY_A_REVIEW_TYPE_INVALID")
+        result = inspectors[review_type](**inputs)
+        if (result.get("execution_allowed") is not False
+                or result.get("order_sent") is not False):
+            raise RuntimeError("STRATEGY_A_NONLIVE_HARDLOCK_VIOLATED")
+        return result
+
+    @staticmethod
     def review_m03_ws_summary_fixture_watch_offline(
         frames: object, *, now_epoch: int,
     ) -> dict:
