@@ -77,14 +77,21 @@ out-of-sample, not proven alpha. 24h rolling turnover is not actual executed
   rebound as-of candidate, explicit UNKNOWN/reconcile and no execution.
 - \`DailyScalpingOrchestrator.review_strategy_a_nonlive_once\` exposes the
   four pure checks through original V2 without writing orders or accounts.
-- \`tests/test_m08_strategy_a_nonlive.py\` covers thresholds, MOC, -4.99/-5
+- `indodax_ai_bot/m05_radar_momentum_nonlive.py` and
+  `telegram_service_tick.py` now accept the **explicit** opt-in
+  `M05_RADAR_PRIORITY_V2_GO=YES` to filter owner notices by both
+  thresholds, leaving existing inspector/early scouting intact. Missing flag
+  means **old owner alerts continue**; code is NOT enabled on original VPS.
+- `tests/test_m05_ws3_radar_bridge_nonlive.py` covers the opt-in flow.
+- `tests/test_m08_strategy_a_nonlive.py` covers thresholds, MOC, -4.99/-5
   /-7, stop latch, fee/slippage, open/UNKNOWN and stale book, full depth,
   per-tier Rp10k, T2/T3 priority and rebound missing-data protection.
 
 ## Explicitly NOT implemented or accepted
 
-Production owner Telegram filter **not activated**: existing M05 runtime
-continues its older WS3 threshold until a separately verified safe cutover.
+Production owner Telegram filter **not activated on original VPS**: existing M05 runtime
+continues its older WS3 threshold. New opt-in requires a pinned safe source
+cutover and process environment update with separate owner rollout verification.
 No producer of independently proven 1m market tape/closed candles or
 confirmed three real AI responses; no live trigger arbitration, durable
 stop latch, real risk EXIT API, bot-owned fill settlement, order allocation,
