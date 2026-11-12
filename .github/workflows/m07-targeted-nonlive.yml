@@ -15,6 +15,8 @@ on:
       - "tests/test_m05_strategy_a_priority_preflight_readonly.py"
       - "tests/test_m05_strategy_a_priority_activate_nonlive.py"
       - "tests/test_m05_strategy_a_priority_receipts_readonly.py"
+      - "tests/test_m05_strategy_a_four_ack_followup_readonly.py"
+      - "scripts/m05_strategy_a_four_ack_followup_readonly.py"
       - "scripts/m05_strategy_a_priority_receipts_readonly.py"
       - "scripts/m05_strategy_a_priority_activate_once.sh"
       - "scripts/m05_strategy_a_priority_heartbeat_readonly.py"
@@ -44,6 +46,8 @@ on:
       - "tests/test_m05_strategy_a_priority_preflight_readonly.py"
       - "tests/test_m05_strategy_a_priority_activate_nonlive.py"
       - "tests/test_m05_strategy_a_priority_receipts_readonly.py"
+      - "tests/test_m05_strategy_a_four_ack_followup_readonly.py"
+      - "scripts/m05_strategy_a_four_ack_followup_readonly.py"
       - "scripts/m05_strategy_a_priority_receipts_readonly.py"
       - "scripts/m05_strategy_a_priority_activate_once.sh"
       - "scripts/m05_strategy_a_priority_heartbeat_readonly.py"
@@ -98,6 +102,7 @@ jobs:
             tests.test_m05_strategy_a_priority_preflight_readonly \
             tests.test_m05_strategy_a_priority_activate_nonlive \
             tests.test_m05_strategy_a_priority_receipts_readonly \
+            tests.test_m05_strategy_a_four_ack_followup_readonly \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
