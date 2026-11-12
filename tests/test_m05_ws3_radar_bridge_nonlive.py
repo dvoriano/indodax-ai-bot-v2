@@ -120,6 +120,27 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertNotIn("UAI/IDR", telegram.calls[0][1]["text"])
         self.assertFalse(sent["execution_allowed"])
 
+    def test_priority_must_search_top40_not_only_five_early_scouts(self):
+        for i in range(6):
+            pair = f"early{i}_idr"
+            self.add(pair, -3, "100", "500000000", i * 10 + 1)
+            self.add(pair, -2, "100.1", "500010000", i * 10 + 2)
+            self.add(pair, -1, "100.5", "500040000", i * 10 + 3)
+        self.add("qualified_idr", -2, "100", "500000000", 90)
+        self.add("qualified_idr", -1, "102", "500020000", 91)
+        snap = self.inspect()
+        self.assertNotIn(
+            "qualified_idr", [r["pair"] for r in snap["candidates"]])
+        self.assertIn(
+            "qualified_idr",
+            [r["pair"] for r in snap["ranked_review_shortlist_top40"]])
+        tel = FakeTelegram()
+        result = send_one_owner_radar_momentum_nonlive(
+            api=tel, ledger=self.ledger, db_path=self.db_path,
+            now_epoch=NOW, ws3_enabled=True, priority_alert_enabled=True)
+        self.assertEqual(result["messages_sent"], 1)
+        self.assertIn("QUALIFIED/IDR", tel.calls[0][1]["text"])
+
     def test_live_exchange_timestamp_inside_minute_is_accepted(self):
         # A real WS3 20:52:42 event is later than the bucket start 20:52:00.
         self.seed()
