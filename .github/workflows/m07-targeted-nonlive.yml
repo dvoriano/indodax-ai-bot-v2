@@ -22,7 +22,9 @@ on:
       - "tests/test_m05_strategy_a_priority_receipts_readonly.py"
       - "tests/test_m05_strategy_a_four_ack_followup_readonly.py"
       - "tests/test_m05_strategy_a_asof_micro_risk_readonly.py"
+      - "tests/test_m05_ws3_asof_quality_readonly.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
+      - "scripts/m05_ws3_asof_quality_readonly.py"
       - "scripts/m05_strategy_a_four_ack_followup_readonly.py"
       - "scripts/m05_strategy_a_priority_receipts_readonly.py"
       - "scripts/m05_strategy_a_priority_activate_once.sh"
@@ -60,7 +62,9 @@ on:
       - "tests/test_m05_strategy_a_priority_receipts_readonly.py"
       - "tests/test_m05_strategy_a_four_ack_followup_readonly.py"
       - "tests/test_m05_strategy_a_asof_micro_risk_readonly.py"
+      - "tests/test_m05_ws3_asof_quality_readonly.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
+      - "scripts/m05_ws3_asof_quality_readonly.py"
       - "scripts/m05_strategy_a_four_ack_followup_readonly.py"
       - "scripts/m05_strategy_a_priority_receipts_readonly.py"
       - "scripts/m05_strategy_a_priority_activate_once.sh"
@@ -121,6 +125,7 @@ jobs:
             tests.test_m05_strategy_a_priority_receipts_readonly \
             tests.test_m05_strategy_a_four_ack_followup_readonly \
             tests.test_m05_strategy_a_asof_micro_risk_readonly \
+            tests.test_m05_ws3_asof_quality_readonly \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
