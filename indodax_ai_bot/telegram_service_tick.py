@@ -263,10 +263,19 @@ def service_fast_loop_nonlive(
     # the in-progress M10-06 24h audit; never restart here.
     if cfg.get("M05_RADAR_MOMENTUM_ALERT_GO") == "YES":
         from .m05_radar_momentum_nonlive import send_one_owner_radar_momentum_nonlive
+        # Owner opt-in for STRICT priority publication only. Default OFF:
+        # historical radar + early M03 scouting remain unchanged.
+        priority_kwargs = (
+            {"priority_alert_enabled": True}
+            if cfg.get("M05_RADAR_PRIORITY_V2_GO") == "YES" else {}
+        )
         auto_radar_alert = (
-            partial(send_one_owner_radar_momentum_nonlive, ws3_enabled=True)
+            partial(send_one_owner_radar_momentum_nonlive,
+                    ws3_enabled=True, **priority_kwargs)
             if cfg.get("M05_WS3_RADAR_WATCH_GO") == "YES"
-            else send_one_owner_radar_momentum_nonlive
+            else (partial(send_one_owner_radar_momentum_nonlive,
+                          **priority_kwargs) if priority_kwargs
+                  else send_one_owner_radar_momentum_nonlive)
         )
     return dedicated_owner_fast_loop_nonlive(
         api=client, ledger=ledger, expected_bot_id=bot_id,

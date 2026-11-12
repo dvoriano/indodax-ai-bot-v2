@@ -1144,6 +1144,7 @@ def format_owner_radar_compact(candidate: dict) -> str:
 def send_one_owner_radar_momentum_nonlive(
     *, api, ledger, now_epoch: int | None = None,
     db_path: Path = DEFAULT_DB, ws3_enabled: bool = False,
+    priority_alert_enabled: bool = False,
 ) -> dict:
     """Existing M05 private Bot API sender, no callback buttons, no order."""
     now = int(time.time()) if now_epoch is None else now_epoch
@@ -1155,17 +1156,47 @@ def send_one_owner_radar_momentum_nonlive(
                 "messages_sent": 0}
     if type(ws3_enabled) is not bool:
         raise ValueError("M05_WS3_RADAR_MODE_INVALID")
+    if type(priority_alert_enabled) is not bool:
+        raise ValueError("M05_RADAR_PRIORITY_MODE_INVALID")
     snap = inspect_original_m03_radar_readonly(
         db_path=db_path, now_epoch=now,
     )
-    # Explicit opt-in ONLY: use WS3 when the original REST radar has no
-    # eligible current WATCH, never claim REST/G1 recovery or merge schemas.
+
+    def priority_only(snapshot: dict) -> dict:
+        # Optional opt-in. Keep original 0.35% early scout / 150m discovery
+        # intact in M03 and M04; filter ONLY the M05 owner alert publication.
+        if not priority_alert_enabled or not snapshot.get("candidates"):
+            return snapshot
+        from .m08_strategy_a_nonlive import assess_ws3_priority_alert_offline
+        eligible = []
+        # Use the original WS3 top40 BEFORE top5 publication truncation.
+        # Otherwise five early scouts can mask a valid 1.5%/400m alert.
+        ranked = snapshot.get("ranked_review_shortlist_top40")
+        pool = ranked if isinstance(ranked, list) else snapshot["candidates"]
+        for row in pool:
+            try:
+                verdict = assess_ws3_priority_alert_offline(
+                    rise_pct=Decimal(row["observed_rise_pct"]),
+                    rolling_24h_idr=Decimal(row["volume_24h_idr"]),
+                    early_acceleration=(
+                        row.get("momentum_phase") == "EARLY_ACCELERATION_WATCH"),
+                )
+                if verdict["priority_alert_eligible"]:
+                    eligible.append(row)
+            except (KeyError, InvalidOperation, TypeError, ValueError):
+                # No fabricated positive eligibility for malformed sources.
+                continue
+        return dict(snapshot, candidates=eligible[:5])
+
+    snap = priority_only(snap)
+    # Explicit opt-in ONLY: use WS3 when original REST has no CURRENT
+    # priority-qualified WATCH, never claim REST/G1 recovery or merge schemas.
     if ws3_enabled and not snap.get("candidates"):
         ws3 = inspect_original_m03_ws3_watch_readonly(
             db_path=db_path, now_epoch=now,
         )
         if ws3["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED":
-            snap = ws3
+            snap = priority_only(ws3)
     if snap["status"] not in (
             "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
             "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"):
