@@ -7,7 +7,7 @@ import unittest
 
 from scripts import m05_strategy_a_asof_micro_risk_readonly as m
 
-T = 1794471720  # fixed sample claim, not real dynamic market input
+T = 1794471762  # 42 seconds into source minute; bounded as-of claim
 
 
 def data(**change):
