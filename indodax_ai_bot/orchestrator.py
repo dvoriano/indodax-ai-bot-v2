@@ -180,6 +180,49 @@ class DailyScalpingOrchestrator:
             raise RuntimeError("STRATEGY_A_NONLIVE_HARDLOCK_VIOLATED")
         return result
 
+    def review_m08_strategy_a_persisted_stop_shadow_offline_once(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str, observed_epoch: int,
+            exit_inputs: dict) -> dict:
+        """Original V2 offline journal + Strategy A review, never an order.
+
+        Scope is a caller-supplied SYNTHETIC position identity, not exchange
+        bot-owned provenance. A latched review survives restarts but neither
+        this code nor an M05 Telegram approval may dispatch a SELL.
+        """
+        if (type(exit_inputs) is not dict
+                or "stop_latched" in exit_inputs):
+            raise ValueError("M08_STRATEGY_A_STOP_LATCH_INPUT_INVALID")
+        scope = dict(
+            account_fingerprint=account_fingerprint, symbol=symbol,
+            source_buy_client_order_id=source_buy_client_order_id,
+        )
+        existing = self.journal.read_m08_strategy_a_stop_shadow_nonlive(
+            **scope)
+        assessed = self.review_strategy_a_nonlive_once(
+            review_type="POSITION_EXIT", stop_latched=existing["latched"],
+            **exit_inputs)
+        if (not existing["latched"]
+                and assessed.get("status") in (
+                    "STOP_TAKER_PREVIEW_ONLY",
+                    "STOP_CANCEL_RECONCILE_FIRST",
+                )
+                and assessed.get("stop_latched") is True):
+            state = self.journal.latch_m08_strategy_a_stop_shadow_nonlive_once(
+                **scope, observed_epoch=observed_epoch,
+                assessed_exit=assessed)
+        else:
+            state = existing
+        return {
+            **assessed,
+            "offline_stop_journal_latched": state["latched"],
+            "offline_stop_journal_first_observed_epoch":
+                state["first_observed_epoch"],
+            "offline_stop_journal_execution_allowed": False,
+            "stop_source_bot_owned_verified": False,
+            "no_live_sell_or_cancel": True,
+        }
+
     @staticmethod
     def review_m03_ws_summary_fixture_watch_offline(
         frames: object, *, now_epoch: int,
