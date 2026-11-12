@@ -57,7 +57,6 @@ class OriginalAsOfControlsTests(unittest.TestCase):
                 ("uai_idr", T, 20, 100, 500000000, 35),
                 ("xrp_idr", T, 25, 200, 450000000, 35),
                 ("ada_idr", T, 22, 300, 1200000000, 35),
-                ("hype_idr", T, 27, 100, 470000000, 55),
                 ("uai_idr", T + 60, 66, 100, 500000000, 88),
                 ("xrp_idr", T + 60, 70, 200, 450000000, 88),
                 ("uai_idr", T + 360, 365, 110, 500000000, 390),
