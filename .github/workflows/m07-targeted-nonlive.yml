@@ -13,6 +13,10 @@ on:
       - "tests/test_m08_original_protective_exit.py"
       - "tests/test_m08_strategy_a_nonlive.py"
       - "tests/test_m05_strategy_a_priority_preflight_readonly.py"
+      - "tests/test_m05_strategy_a_priority_activate_nonlive.py"
+      - "scripts/m05_strategy_a_priority_activate_once.sh"
+      - "scripts/m05_strategy_a_priority_heartbeat_readonly.py"
+      - "systemd/user/indodax-v2-m05-telegram.service.d/strategy-a-priority.conf"
       - "tests/test_m08_strategy_a_durable_stop_nonlive.py"
       - "tests/test_m08_original_net_tier_exit.py"
       - "tests/test_m08_original_trade_time.py"
@@ -36,6 +40,10 @@ on:
       - "tests/test_m08_original_protective_exit.py"
       - "tests/test_m08_strategy_a_nonlive.py"
       - "tests/test_m05_strategy_a_priority_preflight_readonly.py"
+      - "tests/test_m05_strategy_a_priority_activate_nonlive.py"
+      - "scripts/m05_strategy_a_priority_activate_once.sh"
+      - "scripts/m05_strategy_a_priority_heartbeat_readonly.py"
+      - "systemd/user/indodax-v2-m05-telegram.service.d/strategy-a-priority.conf"
       - "tests/test_m08_strategy_a_durable_stop_nonlive.py"
       - "tests/test_m08_original_net_tier_exit.py"
       - "tests/test_m08_original_trade_time.py"
@@ -69,6 +77,7 @@ jobs:
           bash -n scripts/m07_readonly_once.sh
           bash -n scripts/m05_radar_owner_activate_once.sh
           bash -n scripts/m05_radar_postrollback_readonly.sh
+          bash -n scripts/m05_strategy_a_priority_activate_once.sh
           grep -Fq 'export INDODAX_TRADING_ENABLED=NO' scripts/m05_radar_owner_activate_once.sh
           grep -Fq 'export INDODAX_ALLOW_LIVE_EXECUTION=NO' scripts/m05_radar_owner_activate_once.sh
           grep -Fq 'export INDODAX_EXECUTION_MODE=DRY_RUN' scripts/m05_radar_owner_activate_once.sh
@@ -83,6 +92,7 @@ jobs:
             tests.test_m08_strategy_a_nonlive \
             tests.test_m08_strategy_a_durable_stop_nonlive \
             tests.test_m05_strategy_a_priority_preflight_readonly \
+            tests.test_m05_strategy_a_priority_activate_nonlive \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
