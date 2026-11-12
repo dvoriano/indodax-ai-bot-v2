@@ -87,7 +87,9 @@ out-of-sample, not proven alpha. 24h rolling turnover is not actual executed
   /-7, stop latch, fee/slippage, open/UNKNOWN and stale book, full depth,
   per-tier Rp10k, T2/T3 priority and rebound missing-data protection.
 
-## Durable STOP shadow, restart-safe offline review (PR pending)
+## Durable STOP shadow, restart-safe offline review (PR #284 merged)
+
+Merged on original V2 GitHub `main` at `e30c6d961cfa02d1c408e5a88d944af22cb94006` via [PR #284](https://github.com/dvoriano/indodax-ai-bot-v2/pull/284). GitHub M01 **2079/2079 PASS**, M07 targeted **214+38+56+5 PASS**. **Original VPS PR #284 checkout/tests are not yet verified.**
 
 The **original** `DecisionJournal` now owns
 `m08_strategy_a_stop_shadow` keyed by account fingerprint, pair and BUY
