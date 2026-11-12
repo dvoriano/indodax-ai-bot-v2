@@ -5,6 +5,7 @@ from decimal import Decimal as D
 import unittest
 
 from indodax_ai_bot.m07_order_adapter import M07OrderDraft, OfficialV2OrderAdapter
+from indodax_ai_bot.orchestrator import DailyScalpingOrchestrator
 from indodax_ai_bot.m08_strategy_a_nonlive import (
     assess_ws3_priority_alert_offline,
     assess_maker_entry_offline,
@@ -52,6 +53,21 @@ def rebound(*, settled=True, elapsed=1000, prices=("87", "88", "89"),
 
 
 class StrategyAOfflineTests(unittest.TestCase):
+    def test_original_v2_orchestrator_offline_routing_no_order(self):
+        out = DailyScalpingOrchestrator.review_strategy_a_nonlive_once(
+            review_type="POSITION_EXIT",
+            remaining_bot_qty_reference=D("100"),
+            remaining_cost_including_buy_fee_idr=D("100000"),
+            tier_sell_qty_reference=D("100"),
+            bid_levels=((D("950"), D("100")),), best_ask=D("960"),
+            taker_sell_fee_pct=D("0"), maker_sell_fee_pct=D("0"),
+            taker_slippage_pct=D("0"), book_age_seconds=0)
+        self.assertEqual(out["status"], "STOP_TAKER_PREVIEW_ONLY")
+        self.assertFalse(out["order_sent"])
+        with self.assertRaises(ValueError):
+            DailyScalpingOrchestrator.review_strategy_a_nonlive_once(
+                review_type="LIVE_ORDER")
+
     def test_priority_alert_requires_both_thresholds(self):
         cases = (
             ("0.35", "600000000", True, False),
