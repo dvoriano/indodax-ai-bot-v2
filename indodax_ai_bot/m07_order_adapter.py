@@ -56,6 +56,7 @@ class M07OrderDraft:
     price: Decimal | None = None
     quantity: Decimal | None = None
     quote_order_qty: int | None = None
+    time_in_force: str = "GTC"
 
     def parameters(self) -> tuple[tuple[str, str], ...]:
         sym = _symbol(self.symbol)
@@ -67,23 +68,27 @@ class M07OrderDraft:
             ("type", self.order_type),
         ]
         if self.order_type == "LIMIT":
+            if self.time_in_force not in ("GTC", "MOC"):
+                raise ValueError("M07_LIMIT_TIME_IN_FORCE_INVALID")
             if (self.price is None or self.quantity is None
                     or self.quote_order_qty is not None):
                 raise ValueError("M07_LIMIT_FIELDS_INVALID")
             params.extend((
                 ("price", _decimal(self.price, "PRICE")),
                 ("quantity", _decimal(self.quantity, "QTY")),
-                ("timeInForce", "GTC"),
+                ("timeInForce", self.time_in_force),
             ))
         elif self.side == "BUY":
-            if (self.price is not None or self.quantity is not None
+            if (self.time_in_force != "GTC"
+                    or self.price is not None or self.quantity is not None
                     or type(self.quote_order_qty) is not int
                     or self.quote_order_qty <= 0
                     or self.quote_order_qty > 10**12):
                 raise ValueError("M07_MARKET_BUY_IDR_FIELDS_INVALID")
             params.append(("quoteOrderQty", str(self.quote_order_qty)))
         else:
-            if (self.price is not None or self.quote_order_qty is not None
+            if (self.time_in_force != "GTC"
+                    or self.price is not None or self.quote_order_qty is not None
                     or self.quantity is None):
                 raise ValueError("M07_MARKET_SELL_FIELDS_INVALID")
             params.append(("quantity", _decimal(self.quantity, "QTY")))
