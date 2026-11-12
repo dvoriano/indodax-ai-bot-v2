@@ -87,6 +87,31 @@ out-of-sample, not proven alpha. 24h rolling turnover is not actual executed
   /-7, stop latch, fee/slippage, open/UNKNOWN and stale book, full depth,
   per-tier Rp10k, T2/T3 priority and rebound missing-data protection.
 
+## Durable STOP shadow, restart-safe offline review (PR pending)
+
+The **original** `DecisionJournal` now owns
+`m08_strategy_a_stop_shadow` keyed by account fingerprint, pair and BUY
+client ID. It records only a **SYNTHETIC_STOP_REVIEW_ONLY** latch. The original
+`DailyScalpingOrchestrator.review_m08_strategy_a_persisted_stop_shadow_offline_once`
+reads a previous latch before calling the already accepted Strategy A
+stop assessment; the first valid complete bid-depth estimate of
+**net ROI ≤-5%** atomically records a sticky latch, and a later rebound,
+concurrent replay or process restart cannot clear it. UNKNOWN/CANCEL_PENDING
+still requires reconciliation. Stale/incomplete book cannot create a first
+price-trigger latch, and after latching must retain a risk-alert state until
+fresh evidence. A corrupt recorded latch fails closed.
+
+This **DOES NOT** submit, cancel, reconcile or authorize real orders, issue
+settlement, authenticate bot ownership, act as a trading stop or change any
+running original M08/M05 service. The shadow is NOT an independently verified
+live stop. No runtime caller invokes this method automatically; test uses
+synthetic positions and the existing SQLite journal in a temporary directory.
+
+`tests/test_m08_strategy_a_durable_stop_nonlive.py` tests exact boundary,
+restart, rebound, multiple accounts/order IDs, parallel claim, order UNKNOWN,
+corrupt evidence, and unchanged M07/M11/settlement tables. Do not treat test
+success as actual protective exit proof.
+
 ## Explicitly NOT implemented or accepted
 
 Production owner Telegram filter **not activated on original VPS**: existing M05 runtime

@@ -353,6 +353,30 @@ class DecisionJournal:
                     )
                 )"""
             )
+            # Owner Strategy A shadow only: source is caller-entered OFFLINE
+            # scenario. Latching survives restart and parallel review, but
+            # cannot mint a bot-owned lot, SELL authorization or settlement.
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS m08_strategy_a_stop_shadow (
+                    account_fingerprint TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    source_buy_client_order_id TEXT NOT NULL,
+                    first_observed_epoch INTEGER NOT NULL
+                        CHECK(first_observed_epoch > 0),
+                    trigger_net_roi_pct TEXT NOT NULL,
+                    trigger_source_digest TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(
+                        state='OFFLINE_STOP_LATCHED'
+                    ),
+                    source_kind TEXT NOT NULL CHECK(
+                        source_kind='SYNTHETIC_STOP_REVIEW_ONLY'
+                    ),
+                    execution_allowed INTEGER NOT NULL
+                        CHECK(execution_allowed=0),
+                    PRIMARY KEY(account_fingerprint,symbol,
+                                source_buy_client_order_id)
+                )"""
+            )
             # M08-07: an event is NOT issued here. Only a future M08-06
             # verified bot-owned SELL/fill/fee/wallet reconciler may record
             # POSITION_SETTLED_IDR in this same journal. M08-07 consumes it
@@ -577,6 +601,146 @@ class DecisionJournal:
                 yield con
         finally:
             con.close()
+
+    @staticmethod
+    def _m08_strategy_a_scope(
+            account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str) -> tuple[str, str, str]:
+        """Strict offline namespace, NOT proof of account/order ownership."""
+        if (type(account_fingerprint) is not str or
+                re.fullmatch(r"[0-9a-f]{64}", account_fingerprint) is None
+                or type(symbol) is not str
+                or re.fullmatch(r"[A-Z0-9]{2,20}IDR", symbol) is None
+                or type(source_buy_client_order_id) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,36}",
+                                source_buy_client_order_id) is None):
+            raise DecisionConflictError("M08_STRATEGY_A_SHADOW_SCOPE_INVALID")
+        return (account_fingerprint, symbol, source_buy_client_order_id)
+
+    @staticmethod
+    def _m08_strategy_a_stop_row(row: tuple | None) -> dict:
+        if row is None:
+            return {
+                "latched": False, "first_observed_epoch": None,
+                "trigger_net_roi_pct": None, "trigger_source_digest": None,
+                "state": "NO_OFFLINE_STOP_LATCH",
+                "source_authenticated": False,
+                "bot_owned_position_verified": False,
+                "execution_allowed": False,
+            }
+        epoch, roi_raw, digest, state, source_kind, allowed = row
+        try:
+            roi = Decimal(roi_raw)
+        except (ArithmeticError, ValueError, TypeError):
+            raise DecisionConflictError(
+                "M08_STRATEGY_A_SHADOW_CORRUPT_ROI") from None
+        if (type(epoch) is not int or not 1 <= epoch <= 9999999999
+                or not roi.is_finite() or roi > Decimal("-5")
+                or type(digest) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                or state != "OFFLINE_STOP_LATCHED"
+                or source_kind != "SYNTHETIC_STOP_REVIEW_ONLY"
+                or allowed != 0):
+            raise DecisionConflictError("M08_STRATEGY_A_SHADOW_CORRUPT_LATCH")
+        return {
+            "latched": True, "first_observed_epoch": epoch,
+            "trigger_net_roi_pct": str(roi),
+            "trigger_source_digest": digest,
+            "state": state, "source_authenticated": False,
+            "bot_owned_position_verified": False,
+            "execution_allowed": False,
+        }
+
+    def read_m08_strategy_a_stop_shadow_nonlive(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str) -> dict:
+        scope = self._m08_strategy_a_scope(
+            account_fingerprint, symbol, source_buy_client_order_id)
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT first_observed_epoch,trigger_net_roi_pct,"
+                "trigger_source_digest,state,source_kind,execution_allowed "
+                "FROM m08_strategy_a_stop_shadow "
+                "WHERE account_fingerprint=? AND symbol=? AND "
+                "source_buy_client_order_id=?", scope).fetchone()
+        return self._m08_strategy_a_stop_row(row)
+
+    def latch_m08_strategy_a_stop_shadow_nonlive_once(
+            self, *, account_fingerprint: str, symbol: str,
+            source_buy_client_order_id: str, observed_epoch: int,
+            assessed_exit: dict) -> dict:
+        """Atomic sticky STOP shadow. Never creates real order/fill rights.
+
+        First trigger must have a *complete offline* executable bid-depth
+        estimate at <=-5% net. Future market recovery cannot clear latch.
+        Same-position subsequent trigger remains inert, not a new claim.
+        """
+        scope = self._m08_strategy_a_scope(
+            account_fingerprint, symbol, source_buy_client_order_id)
+        if (type(observed_epoch) is not int
+                or not 1 <= observed_epoch <= 9999999999
+                or type(assessed_exit) is not dict
+                or assessed_exit.get("status") not in (
+                    "STOP_TAKER_PREVIEW_ONLY",
+                    "STOP_CANCEL_RECONCILE_FIRST",
+                )
+                or assessed_exit.get("stop_latched") is not True
+                or assessed_exit.get("execution_allowed") is not False
+                or assessed_exit.get("order_sent") is not False
+                or assessed_exit.get("source_verified_for_execution") is not False
+                or assessed_exit.get("bot_owned_inventory_attested") is not False
+                or assessed_exit.get("assumed_bid_depth_covers_full_qty") is not True):
+            raise DecisionConflictError("M08_STRATEGY_A_TRIGGER_UNVERIFIED")
+        raw_roi = assessed_exit.get("projected_full_exit_net_roi_pct")
+        if type(raw_roi) is not str:
+            raise DecisionConflictError("M08_STRATEGY_A_TRIGGER_ROI_INVALID")
+        try:
+            roi = Decimal(raw_roi)
+        except (ArithmeticError, ValueError):
+            raise DecisionConflictError(
+                "M08_STRATEGY_A_TRIGGER_ROI_INVALID") from None
+        if not roi.is_finite() or roi > Decimal("-5"):
+            # Do not create the initial latch from a rebound or a caller's
+            # stop_latched=True alone. Existing latch is read separately.
+            raise DecisionConflictError(
+                "M08_STRATEGY_A_FIRST_TRIGGER_MUST_BE_NET_MINUS_FIVE")
+        trigger = (
+            *scope, observed_epoch, str(roi),
+            assessed_exit["status"],
+        )
+        digest = hashlib.sha256(
+            json.dumps(trigger, separators=(",", ":"), ensure_ascii=True
+                       ).encode("ascii")
+        ).hexdigest()
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            prior = con.execute(
+                "SELECT first_observed_epoch,trigger_net_roi_pct,"
+                "trigger_source_digest,state,source_kind,execution_allowed "
+                "FROM m08_strategy_a_stop_shadow "
+                "WHERE account_fingerprint=? AND symbol=? AND "
+                "source_buy_client_order_id=?", scope).fetchone()
+            if prior is not None:
+                state = self._m08_strategy_a_stop_row(prior)
+                return {**state, "replayed": True, "new_latch": False}
+            con.execute(
+                "INSERT INTO m08_strategy_a_stop_shadow ("
+                "account_fingerprint,symbol,source_buy_client_order_id,"
+                "first_observed_epoch,trigger_net_roi_pct,"
+                "trigger_source_digest,state,source_kind,execution_allowed"
+                ") VALUES(?,?,?,?,?,?,'OFFLINE_STOP_LATCHED',"
+                "'SYNTHETIC_STOP_REVIEW_ONLY',0)",
+                (*scope, observed_epoch, str(roi), digest),
+            )
+        return {
+            "latched": True, "first_observed_epoch": observed_epoch,
+            "trigger_net_roi_pct": str(roi),
+            "trigger_source_digest": digest, "state": "OFFLINE_STOP_LATCHED",
+            "source_authenticated": False,
+            "bot_owned_position_verified": False,
+            "execution_allowed": False,
+            "replayed": False, "new_latch": True,
+        }
 
     @staticmethod
     def _m07_origin_local_params(
