@@ -12,6 +12,7 @@ on:
       - "tests/test_m08_original_exchange_buy_admission.py"
       - "tests/test_m08_original_protective_exit.py"
       - "tests/test_m08_strategy_a_nonlive.py"
+      - "tests/test_m08_strategy_a_durable_stop_nonlive.py"
       - "tests/test_m08_original_net_tier_exit.py"
       - "tests/test_m08_original_trade_time.py"
       - "tests/test_m08_original_sell_preflight.py"
@@ -33,6 +34,7 @@ on:
       - "tests/test_m08_original_exchange_buy_admission.py"
       - "tests/test_m08_original_protective_exit.py"
       - "tests/test_m08_strategy_a_nonlive.py"
+      - "tests/test_m08_strategy_a_durable_stop_nonlive.py"
       - "tests/test_m08_original_net_tier_exit.py"
       - "tests/test_m08_original_trade_time.py"
       - "tests/test_m08_original_sell_preflight.py"
@@ -77,6 +79,7 @@ jobs:
             tests.test_m08_original_exchange_buy_admission \
             tests.test_m08_original_protective_exit \
             tests.test_m08_strategy_a_nonlive \
+            tests.test_m08_strategy_a_durable_stop_nonlive \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
