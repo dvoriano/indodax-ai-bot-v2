@@ -55,7 +55,9 @@ def assess_ws3_priority_alert_offline(*, rise_pct: Decimal,
                                       rolling_24h_idr: Decimal,
                                       early_acceleration: bool) -> dict:
     """A 0.35% acceleration remains a scout, NEVER bypasses Telegram 1.5%."""
-    _d(rise_pct if rise_pct >= ZERO else -rise_pct, "PRICE_MOVE")
+    if type(rise_pct) is not Decimal or not rise_pct.is_finite():
+        raise ValueError("STRATEGY_A_INVALID_PRICE_MOVE")
+    _d(abs(rise_pct), "PRICE_MOVE")
     _d(rolling_24h_idr, "TURNOVER")
     if type(early_acceleration) is not bool:
         raise ValueError("STRATEGY_A_INVALID_ACCELERATION_FLAG")
@@ -202,7 +204,7 @@ def assess_exit_strategy_a_offline(
         best_ask * tier_qty, tier_cost, maker_sell_fee_pct, ZERO)
     stop = stop_latched or full_roi <= STOP_NET_PCT
     details = dict(
-        **base, stop_latched=stop,
+        base, stop_latched=stop,
         projected_full_exit_net_roi_pct=str(full_roi),
         projected_full_exit_net_profit_idr=str(full_profit),
         projected_tier_taker_net_roi_pct=str(tier_roi),
@@ -231,8 +233,8 @@ def assess_exit_strategy_a_offline(
     if maker_roi >= T1_NET_PCT and maker_profit >= MIN_PROFIT_IDR:
         return _readonly(
             "T1_MAKER_MOC_PREVIEW_ONLY" if open_sell_state == "NONE"
-            else "T1_MAKER_ALREADY_RESTING_REVIEW", **details,
-            t1_price_is_resting_ask_not_executable_bid=True)
+            else "T1_MAKER_ALREADY_RESTING_REVIEW",
+            **dict(details, t1_price_is_resting_ask_not_executable_bid=True))
     return _readonly(
         "LOSS_WARNING_HOLD" if full_roi <= STOP_WARN_NET_PCT
         else "HOLD_NO_PROFIT_TIER", **details)
