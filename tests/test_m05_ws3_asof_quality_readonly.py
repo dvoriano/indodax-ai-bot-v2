@@ -286,6 +286,16 @@ class M05WS3AsOfSQLiteTests(unittest.TestCase):
         self.assertEqual(res["status"], "M05_WS3_ASOF_QUALITY_REVIEW_READONLY")
         self.assertEqual(res["ws3_acked_reviewed"], 1)
         self.assertEqual(res["evidence_tier_counts"]["TRADE_BOOK_OBSERVED"], 1)
+        self.assertEqual(res["m04_uncalled_role_input_slots_prepared"], 3)
+        handoff = res["events"][0]["m04_research_handoff"]
+        self.assertEqual(handoff["role_names"],
+                         ["MARKET", "RISK", "STRATEGY"])
+        self.assertEqual(handoff["role_input_slots_prepared"], 3)
+        self.assertTrue(handoff["deterministic_risk_veto"])
+        self.assertEqual(handoff["deterministic_strategy"], "WATCH_NO_TRADE")
+        self.assertFalse(handoff["actual_model_responses_observed"])
+        self.assertEqual(handoff["provider_http_attempts"], 0)
+        self.assertFalse(handoff["execution_allowed"])
         self.assertTrue(res["events"][0]["risk_veto"])
         self.assertEqual(res["events"][0]["bot_api_ack_delay_sec"], 1)
         self.assertFalse(res["m04_actual_role_responses_verified"])
