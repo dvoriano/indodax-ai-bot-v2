@@ -160,7 +160,7 @@ class OriginalFourAckPriceFollowupTests(unittest.TestCase):
         self.assertFalse(out["execution_allowed"])
 
     def test_pid_change_or_untrusted_process_fails_closed(self):
-        for starts in ([588864, 588865], [588865, 588865]):
+        for starts in ([588864, 588865], [588865, 588864]):
             with self.subTest(starts=starts):
                 with (
                     patch.object(app, "_unit_pid", side_effect=starts),
