@@ -14,6 +14,9 @@ import re
 import sqlite3
 from zoneinfo import ZoneInfo
 
+from indodax_ai_bot.m04_m05_ack_risk_handoff_nonlive import (
+    prepare_m04_m05_ack_research_role_inputs_nonlive,
+)
 from indodax_ai_bot.m05_radar_momentum_nonlive import WS3_MAX_AGE_SECONDS
 
 WIB = ZoneInfo("Asia/Jakarta")
@@ -300,6 +303,30 @@ def audit_ws3_ack_cohort_nonlive(
             price_row=price, micro_row=micro,
         )
         quality["bot_api_ack_delay_sec"] = ack - claim
+        # Existing M05 source-quality result -> original M04 three INPUT
+        # slots (uncalled) with immutable same-source digest. No provider
+        # dispatch, no new watch, no G1 receipt, no order.
+        handoff = prepare_m04_m05_ack_research_role_inputs_nonlive(
+            quality=quality,
+        )
+        quality["m04_research_handoff"] = {
+            "status": handoff["status"],
+            "role_names": [slot["role"] for slot in handoff["role_slots"]],
+            "source_digest_sha256": handoff["evidence_digest_sha256"],
+            "role_input_slots_prepared": handoff["role_slots_prepared"],
+            "deterministic_risk_veto": handoff[
+                "deterministic_risk_veto"
+            ]["veto"],
+            "risk_reasons": handoff["deterministic_risk_veto"]["reasons"],
+            "deterministic_strategy": handoff[
+                "deterministic_strategy"
+            ]["stance"],
+            "actual_model_responses_observed": False,
+            "provider_http_attempts": 0,
+            "final_decision": "REJECT",
+            "execution_allowed": False,
+        }
+        counts["M04_ROLE_SLOTS"] += handoff["role_slots_prepared"]
         entries.append(quality)
         counts[quality["evidence_tier"]] += 1
         counts[quality["micro_status"]] += 1
@@ -309,6 +336,8 @@ def audit_ws3_ack_cohort_nonlive(
         "window_start_wib": datetime.fromtimestamp(start_epoch, WIB).isoformat(),
         "window_end_wib": datetime.fromtimestamp(end_epoch, WIB).isoformat(),
         "ws3_acked_reviewed": len(entries),
+        "m04_uncalled_role_input_slots_prepared": counts["M04_ROLE_SLOTS"],
+        "m04_research_risk_veto_for_all_acks": True,
         "evidence_tier_counts": {
             tier: counts[tier] for tier in (
                 "SOURCE_UNVERIFIED", "PRICE_ONLY", "BOOK_ONLY",
