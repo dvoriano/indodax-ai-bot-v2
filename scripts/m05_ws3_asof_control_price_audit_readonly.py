@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
@@ -75,9 +75,13 @@ def _source_for_alert(rows: list[tuple], *, pair: str,
         and row[5] == "ELIGIBLE_SOURCE_OBSERVATION"
         and row[6] <= claim and row[1] <= claim // 60 * 60
     ]
-    # Detect conflicting source prices rather than selecting a favorable row.
+    # Conflicting epoch prices are always untrusted, regardless of
+    # whether the competing row was independently above turnover floor.
+    original_prices = {
+        row[3] for row in rows if row[0] == pair and row[2] == observed
+    }
     return max(matches, key=lambda x: x[6]) if matches and len(
-        {row[3] for row in matches}) == 1 else None
+        original_prices) == 1 else None
 
 
 def select_asof_controls(rows: list[tuple], *,
@@ -196,7 +200,13 @@ def compare_asof_ws3_controls_readonly(*, start_epoch: int, end_epoch: int,
                 or not observed <= recorded <= now or recorded < minute):
             raise ValueError("CONTROL_INVALID_RESEARCH_SOURCE")
         price = _positive_price(p)
-        volume = _positive_price(v)
+        try:
+            volume = Decimal(v)
+        except (ValueError, TypeError, InvalidOperation):
+            raise ValueError("CONTROL_INVALID_TURNOVER_VALUE") from None
+        if (not volume.is_finite() or volume < 0
+                or volume.adjusted() > 20):
+            raise ValueError("CONTROL_INVALID_TURNOVER_VALUE")
         if (status == "ELIGIBLE_SOURCE_OBSERVATION"
                 and volume < Decimal("150000000")):
             raise ValueError("CONTROL_INVALID_ELIGIBLE_VOLUME")
