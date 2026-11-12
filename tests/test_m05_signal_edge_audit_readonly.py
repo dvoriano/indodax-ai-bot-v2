@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from scripts.m05_signal_edge_audit_readonly import (
     inspect_postack_quality_readonly, post_ack_price_proxy,
+    pre_claim_research_price_context,
 )
 
 NOW = 1794330000
@@ -146,6 +147,10 @@ class OriginalOwnerJoinTests(unittest.TestCase):
                 )
             """)
             for minute, epoch, price, status, recorded in (
+                (NOW - 900, NOW - 880, "90",
+                 "ELIGIBLE_SOURCE_OBSERVATION", NOW - 875),
+                (NOW - 300, NOW - 280, "95",
+                 "ELIGIBLE_SOURCE_OBSERVATION", NOW - 275),
                 (NOW, NOW + 20, "100", first_status,
                  first_recorded_epoch),
                 (NOW + 60, NOW + 70, "101",
@@ -199,6 +204,80 @@ class OriginalOwnerJoinTests(unittest.TestCase):
         self.assertEqual(recovered["exchange_requests"], 0)
         self.assertEqual(recovered["telegram_messages_sent"], 0)
         self.assertEqual(recovered["orders_sent"], 0)
+
+    def test_pre_source_context_5m_15m_uses_asof_research(self):
+        archive = self.make_research_archive()
+        with sqlite3.connect(self.market) as db:
+            db.execute("DELETE FROM m03_ws_summary_watch_minute")
+        result = self.audit(research_evidence_db=archive)
+        pre = result["events"][0]["pre_source_price_context"]
+        self.assertEqual(
+            pre["5m"]["status"], "OBSERVED_PRE_CLAIM_LAST_PRICE_ONLY"
+        )
+        self.assertEqual(pre["5m"]["pre_source_change_pct"], "5.26")
+        self.assertEqual(pre["15m"]["pre_source_change_pct"], "11.11")
+        self.assertTrue(pre["5m"]["not_original_m04_prealert"])
+        self.assertTrue(result[
+            "pre_source_context_uses_only_quotes_recorded_by_m05_claim"])
+        self.assertFalse(result["execution_allowed"])
+        self.assertEqual(result["exchange_requests"], 0)
+        self.assertEqual(result["telegram_messages_sent"], 0)
+        self.assertEqual(result["orders_sent"], 0)
+
+    def test_pre_source_ignores_baseline_recorded_after_claim(self):
+        archive = self.make_research_archive()
+        with sqlite3.connect(archive) as db:
+            db.execute(
+                "UPDATE ws3_source_cycles SET recorded_local_epoch=? "
+                "WHERE minute_epoch=?",
+                (NOW + 45, NOW - 300),
+            )
+        result = self.audit(research_evidence_db=archive)
+        pre = result["events"][0]["pre_source_price_context"]
+        self.assertEqual(
+            pre["5m"]["status"], "NO_FRESH_PRE_SOURCE_QUOTE"
+        )
+        self.assertEqual(
+            pre["15m"]["status"], "OBSERVED_PRE_CLAIM_LAST_PRICE_ONLY"
+        )
+
+    def test_pre_source_missing_history_is_unknown_not_zero_move(self):
+        archive = self.make_research_archive()
+        with sqlite3.connect(archive) as db:
+            db.execute(
+                "DELETE FROM ws3_source_evidence WHERE minute_epoch < ?",
+                (NOW,),
+            )
+        result = self.audit(research_evidence_db=archive)
+        for horizon in ("5m", "15m"):
+            proxy = result["events"][0]["pre_source_price_context"][horizon]
+            self.assertEqual(proxy["status"], "NO_FRESH_PRE_SOURCE_QUOTE")
+            self.assertIsNone(proxy["pre_source_change_pct"])
+
+    def test_pre_source_conflicting_baseline_does_not_cherry_pick(self):
+        archive = self.make_research_archive()
+        with sqlite3.connect(archive) as db:
+            db.execute(
+                "INSERT INTO ws3_source_cycles VALUES(?,?)",
+                (NOW - 240, NOW - 220),
+            )
+            db.execute(
+                "INSERT INTO ws3_source_evidence VALUES(?,?,?,?,?)",
+                ("uai_idr", NOW - 240, NOW - 280, "96",
+                 "ELIGIBLE_SOURCE_OBSERVATION"),
+            )
+        result = self.audit(research_evidence_db=archive)
+        self.assertEqual(
+            result["events"][0]["pre_source_price_context"]["5m"]["status"],
+            "CONFLICTING_PRE_SOURCE_PRICE",
+        )
+
+    def test_pre_source_helper_rejects_bad_scope(self):
+        with self.assertRaisesRegex(ValueError, "INVALID_PRE_CLAIM_PRICE_SCOPE"):
+            pre_claim_research_price_context(
+                [], source_epoch=NOW, claim_epoch=NOW - 1,
+                horizon_seconds=300,
+            )
 
     def test_research_record_after_claim_does_not_backfill_source_match(self):
         archive = self.make_research_archive(

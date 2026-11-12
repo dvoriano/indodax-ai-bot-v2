@@ -94,3 +94,24 @@ The offline analysis tool now accepts **optional** `research_evidence_db=Path(".
 For a historical investigation, use the running original M05 owner environment's private ledger path and call the already-installed audit function with the extra argument `research_evidence_db=Path.home() / ".local/state/m03-ws3-evidence/observations.sqlite3"`. The original source DB argument remains the same. The latest quote-only 5m/15m proxies now may use the explicit archive's retained **observational last-price** rows, including below-floor later prices, when fresh at each horizon. They are **never** trades, executable prices, Risk ALLOW, or net PnL. Requiring two known fees/slippage inputs for hypothetical cost scenarios is unchanged. Do **not** substitute these last-price snapshots for M04 role PREALERT evidence. Because the archive itself is bounded, all missing coverage remains UNKNOWN rather than interpreted as a negative outcome.
 
 No market request, owner Telegram send, AI/provider call, extra scanner/socket, database mutation, change to the original 2h M03 archive, scheduler, M05 cooldown, or BUY/SELL/CANCEL is added. The optional evidence path must be explicitly provided. The new function must be CI and owner-VPS verified before treating any recovered pair results as factual.
+
+## Paired pre-source context: first UAI follow-through vs later re-alert (12 Nov 2026)
+
+Owner read-only original M05 ACK ledger and original M03 private 72h public-source snapshots for 11 Nov 2026 **23:10–23:37 WIB** showed 13 WS3 ACK events in an ad-hoc, unfiltered query, of which **10** were the intended six-pair `UAI,CST,NBTNEW,ERN,TMG,ONDO` cohort and **3 additional** `NEON,ONL,UCJL` were outside that intended scope. These three ad-hoc `SOURCE_PRICE=UNVERIFIED` outputs came from a Python pair-filter mismatch and must **not** count against the earlier 10/10 exact source matched cohort.
+
+Public last-price changes **BEFORE** the matching source quote, using an as-of owner claim snapshot and an observed baseline within the preceding 90 seconds of each 5m/15m target, were:
+
+- UAI 23:22:10 ACK, **Rp655 source**, pre5 **−0.91%**, pre15 **−0.91%**; independent ex-post last-price +2.82% over 5m and +2.37% over 15m.
+- UAI 23:37:18 ACK, **Rp696 source**, pre5 **+0.43%**, pre15 **+6.91%**; ex-post +1.01% over 5m and +0.58% over 15m.
+- ERN 23:12 ACK, pre5 −2.83%, pre15 unavailable; ex-post 5m −0.73%. ERN 23:34 ACK pre5 +0.98%, pre15 −0.36%, ex-post 5m −1.47%.
+- TMG 23:17 ACK pre5 +3.12%, pre15 0.00%, ex-post 5m −2.94%; TMG 23:33 ACK pre5 +3.03%, pre15 +3.03%, ex-post 5m +2.86%.
+- NBTNEW 23:18 ACK pre5 −8.77%, pre15 0.00%, ex-post 5m unavailable; NBTNEW 23:36 ACK pre5 −1.62%, pre15 −3.75%, ex-post 5m unavailable.
+- CST 23:19 ACK pre5 unavailable, pre15 +0.24%, ex-post 5m −0.70%. ONDO 23:28 ACK pre5 +0.74%, pre15 +0.75%, ex-post 5m unavailable.
+
+These are sparse public **last-price** quote proxies, not candles or actual fills, and no claims about trade-side pressure/order-book activity can be inferred. The first UAI ACK has favorable observed follow-through without a preceding 5m rise; the second has already experienced a substantial **15m** preceding rise and smaller follow-through, making it useful to study for delayed alerts. This is a two-event **hypothesis**, not proof of first market entry timing, profitable net scalping or validated M04 MICRO PREALERT/three AI role outputs. UAI first source/ACK time and later source/ACK time are real, but the earliest market opportunity remains unknown. The source-to-ACK gap is not the Telegram API call duration.
+
+### Canonical bounded implementation
+
+Rather than repeatedly using a freehand script, the existing audit function now provides `pre_source_price_context["5m"|"15m"]` for explicitly requested research archive evidence only. It uses the exact already matched `source_observed_epoch`, finds a baseline public quote at most 90 seconds before the *pre-source* horizon, only uses original private research rows actually recorded no later than original M05 claim, and refuses ambiguous prices. Each status distinguishes `OBSERVED_PRE_CLAIM_LAST_PRICE_ONLY`, `NO_FRESH_PRE_SOURCE_QUOTE`, `SOURCE_PRICE_NOT_VERIFIED_IN_RESEARCH`, or `CONFLICTING_PRE_SOURCE_PRICE`. It labels the result **not original M04 PREALERT** and **not executable PnL**. It reads the required additional pre15 window from the same private archive, capped at existing 20k rows; output is scoped to supplied pair list, avoiding the ad-hoc 13-vs-10 mistake.
+
+No M03/M04/M05 production code, policy, thresholds, retention, message sender, service, private ledger or exchange endpoint is changed. Negative controls, first actual real M04 micro signal and full 24h prospective validation remain outstanding.
