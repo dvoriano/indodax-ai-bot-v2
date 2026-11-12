@@ -118,8 +118,8 @@ def _gross_if_taker(bids: tuple[tuple[Decimal, Decimal], ...],
         take = min(size, remaining)
         gross += price * take
         remaining -= take
-        if remaining == ZERO:
-            break
+        # Validate the entire visible ladder, not only levels needed to fill.
+        # Hidden unsorted tail must never be silently accepted as a valid book.
     return gross if remaining == ZERO else None
 
 
