@@ -93,6 +93,33 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertFalse(snap["source_authenticated_for_g1"])
         self.assertFalse(snap["execution_allowed"])
 
+    def test_opt_in_priority_publication_preserves_early_source(self):
+        # Existing source inspector remains broad while owner notice requires
+        # 1.5% rise AND >=400m rolling turnover only with explicit opt-in.
+        self.seed()  # UAI +1% on 500m, still a discovery candidate.
+        broad = self.inspect()
+        self.assertEqual(broad["candidates"][0]["pair"], "uai_idr")
+        no_alert = send_one_owner_radar_momentum_nonlive(
+            api=FakeTelegram(), ledger=self.ledger,
+            db_path=self.db_path, now_epoch=NOW,
+            ws3_enabled=True, priority_alert_enabled=True)
+        self.assertEqual(no_alert["status"],
+                         "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH")
+        self.assertEqual(no_alert["messages_sent"], 0)
+
+        self.add("bigmove_idr", -2, 100, 500000000, 10)
+        self.add("bigmove_idr", -1, 102, 500010000, 11)
+        telegram = FakeTelegram()
+        sent = send_one_owner_radar_momentum_nonlive(
+            api=telegram, ledger=self.ledger,
+            db_path=self.db_path, now_epoch=NOW,
+            ws3_enabled=True, priority_alert_enabled=True)
+        self.assertEqual(sent["status"], "M05_RADAR_OWNER_PRIVATE_NOTICE_SENT")
+        self.assertEqual(len(telegram.calls), 1)
+        self.assertIn("BIGMOVE/IDR", telegram.calls[0][1]["text"])
+        self.assertNotIn("UAI/IDR", telegram.calls[0][1]["text"])
+        self.assertFalse(sent["execution_allowed"])
+
     def test_live_exchange_timestamp_inside_minute_is_accepted(self):
         # A real WS3 20:52:42 event is later than the bucket start 20:52:00.
         self.seed()
