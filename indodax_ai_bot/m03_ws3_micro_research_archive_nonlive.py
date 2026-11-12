@@ -90,7 +90,11 @@ def _checked_micro(row: dict, now: int, minute: int) -> tuple | None:
         spread = _number(book.get("spread_bps"))
         bid_depth = _number(book.get("bid_depth_top5_idr"))
         ask_depth = _number(book.get("ask_depth_top5_idr"))
-        imbalance = _number(book.get("book_imbalance_top5_ratio"))
+        imbalance_raw = book.get("book_imbalance_top5_ratio")
+        # The official book parser returns None when ask depth is zero.
+        # Preserve UNKNOWN instead of fabricating an imbalance ratio.
+        imbalance = (_number(imbalance_raw)
+                     if imbalance_raw is not None else None)
         b, a = Decimal(bid), Decimal(ask)
         expected = (a-b) * Decimal("10000") / ((a+b)/2)
         if b >= a or abs(expected - Decimal(spread)) >= Decimal("0.05"):
