@@ -100,7 +100,7 @@ class OriginalM04M05ACKHandoffTests(unittest.TestCase):
     def test_spread_and_reported_sells_cautions_are_only_review(self):
         q = quality(micro_changes={
             "source_buy_idr": "10000", "source_sell_idr": "40000",
-            "spread_bps": "140", "best_ask_idr": "101.410",
+            "spread_bps": "999", "best_ask_idr": "101.410",
         })
         # Inconsistent book spread must not pass the original M05 source
         # validator just because its printed spread is large.
@@ -111,6 +111,12 @@ class OriginalM04M05ACKHandoffTests(unittest.TestCase):
         report = self.prepare(q)
         self.assertIn("SOURCE_REPORTED_SELL_SIDE_HIGH_NOT_AGGRESSOR_PROOF",
                       report["deterministic_risk_veto"]["reasons"])
+        wide = quality(micro_changes={
+            "best_ask_idr": "101.20", "spread_bps": "119.2843",
+        })
+        self.assertEqual(wide["evidence_tier"], "TRADE_BOOK_OBSERVED")
+        self.assertIn("OBSERVED_SPREAD_OVER_50BPS_RESEARCH",
+                      self.prepare(wide)["deterministic_risk_veto"]["reasons"])
         self.assertFalse(report["market_public_observations"][
             "source_side_is_verified_taker_aggressor"])
 
