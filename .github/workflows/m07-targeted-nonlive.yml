@@ -14,6 +14,8 @@ on:
       - "tests/test_m08_strategy_a_nonlive.py"
       - "tests/test_m05_strategy_a_priority_preflight_readonly.py"
       - "tests/test_m05_strategy_a_priority_activate_nonlive.py"
+      - "tests/test_m05_strategy_a_priority_receipts_readonly.py"
+      - "scripts/m05_strategy_a_priority_receipts_readonly.py"
       - "scripts/m05_strategy_a_priority_activate_once.sh"
       - "scripts/m05_strategy_a_priority_heartbeat_readonly.py"
       - "systemd/user/indodax-v2-m05-telegram.service.d/strategy-a-priority.conf"
@@ -41,6 +43,8 @@ on:
       - "tests/test_m08_strategy_a_nonlive.py"
       - "tests/test_m05_strategy_a_priority_preflight_readonly.py"
       - "tests/test_m05_strategy_a_priority_activate_nonlive.py"
+      - "tests/test_m05_strategy_a_priority_receipts_readonly.py"
+      - "scripts/m05_strategy_a_priority_receipts_readonly.py"
       - "scripts/m05_strategy_a_priority_activate_once.sh"
       - "scripts/m05_strategy_a_priority_heartbeat_readonly.py"
       - "systemd/user/indodax-v2-m05-telegram.service.d/strategy-a-priority.conf"
@@ -93,6 +97,7 @@ jobs:
             tests.test_m08_strategy_a_durable_stop_nonlive \
             tests.test_m05_strategy_a_priority_preflight_readonly \
             tests.test_m05_strategy_a_priority_activate_nonlive \
+            tests.test_m05_strategy_a_priority_receipts_readonly \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
