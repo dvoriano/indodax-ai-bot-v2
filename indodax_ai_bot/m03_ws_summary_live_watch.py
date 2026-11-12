@@ -742,6 +742,25 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
                 "exchange_requests_added": 0,
                 "orders_sent": 0,
             }
+    # Separate opt-in from already-active 72h price archive. Preserve the
+    # original 2h micro table and M03 WATCH behavior. This is local research
+    # evidence only, with no additional WS/REST request or trading authority.
+    if (micro_enabled and
+            os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES"
+            and os.environ.get("M03_WS3_MICRO_72H_ARCHIVE_GO") == "YES"):
+        try:
+            from .m03_ws3_micro_research_archive_nonlive import (
+                archive_ws3_micro_research_nonlive,
+            )
+            report["research_micro_archive"] = archive_ws3_micro_research_nonlive(
+                source, now_epoch=now,
+            )
+        except Exception:
+            report["research_micro_archive"] = {
+                "status": "M03_WS3_MICRO_RESEARCH_ARCHIVE_UNAVAILABLE",
+                "extra_exchange_requests": 0,
+                "orders_sent": 0,
+            }
     if micro_enabled:
         current_source = source["microstructure_selection_source"]
         selected = source["microstructure_selected_pairs"]
