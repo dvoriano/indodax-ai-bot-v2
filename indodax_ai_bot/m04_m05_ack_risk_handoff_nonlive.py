@@ -53,13 +53,13 @@ def prepare_m04_m05_ack_research_role_inputs_nonlive(
     cautions = quality.get("research_cautions")
     if (type(pair) is not str or re.fullmatch(r"[a-z0-9]+_idr", pair) is None
             or type(clock) is not str or len(clock) > 40
-            or tier not in _ALLOWED_TIERS
+            or type(tier) is not str or tier not in _ALLOWED_TIERS
             or type(price) is not str
             or price not in ("PRICE_FRESH_AT_CLAIM",
                               "PRICE_SOURCE_NOT_RECONSTRUCTED")
             or type(micro) is not str or not 1 <= len(micro) <= 64
             or re.fullmatch(r"[A-Z0-9_]+", micro) is None
-            or timeline not in _ALLOWED_TIMELINES
+            or type(timeline) is not str or timeline not in _ALLOWED_TIMELINES
             or type(age) is not int or age < 0
             or type(trade) is not bool or type(book) is not bool
             or (micro_age is not None and (
@@ -73,7 +73,11 @@ def prepare_m04_m05_ack_research_role_inputs_nonlive(
             or not _REQUIRED_CAUTIONS.issubset(cautions)):
         raise ValueError("M04_ACK_QUALITY_SHAPE_INVALID")
     try:
-        datetime.fromisoformat(clock)
+        stamp = datetime.fromisoformat(clock)
+        if (stamp.tzinfo is None
+                or stamp.utcoffset() is None
+                or stamp.utcoffset().total_seconds() != 7*3600):
+            raise ValueError("M04_ACK_CLAIM_CLOCK_INVALID")
     except ValueError:
         raise ValueError("M04_ACK_CLAIM_CLOCK_INVALID") from None
     # The original read-only reconstruction is intentionally not a verified
