@@ -65,6 +65,67 @@ def _first_fresh_after(quotes: list[tuple[int, Decimal]],
                  if earliest <= q[0] <= earliest + FRESHNESS_SECONDS), None)
 
 
+def pre_claim_research_price_context(
+    research_rows: list[tuple[int, Decimal, int, int, str]], *,
+    source_epoch: int, claim_epoch: int, horizon_seconds: int,
+) -> dict:
+    """As-of-claim public last-price context, NOT first market momentum.
+
+    Consumes only archived M03 snapshots recorded no later than the real M05
+    claim. No original M04 micro PREALERT or source publication is invented.
+    Historical source exchange epoch is never a proof of executable fill.
+    """
+    if (type(source_epoch) is not int or type(claim_epoch) is not int
+            or source_epoch <= 0 or claim_epoch < source_epoch
+            or horizon_seconds not in HORIZONS):
+        raise ValueError("INVALID_PRE_CLAIM_PRICE_SCOPE")
+    source_prices = {
+        price for epoch, price, minute, recorded, status in research_rows
+        if epoch == source_epoch
+        and status == "ELIGIBLE_SOURCE_OBSERVATION"
+        and recorded <= claim_epoch and recorded >= epoch
+        and minute <= claim_epoch // 60 * 60
+    }
+    if len(source_prices) != 1:
+        return {"status": "SOURCE_PRICE_NOT_VERIFIED_IN_RESEARCH",
+                "pre_source_change_pct": None}
+    source_price = next(iter(source_prices))
+    target = source_epoch - horizon_seconds
+    earlier = [
+        (epoch, price)
+        for epoch, price, minute, recorded, status in research_rows
+        if target - FRESHNESS_SECONDS <= epoch <= target
+        and recorded <= claim_epoch and recorded >= epoch
+        and status in (
+            "ELIGIBLE_SOURCE_OBSERVATION",
+            "BELOW_150M_VOLUME_FLOOR",
+        )
+    ]
+    if not earlier:
+        return {"status": "NO_FRESH_PRE_SOURCE_QUOTE",
+                "pre_source_change_pct": None}
+    baseline_epoch = max(epoch for epoch, price in earlier)
+    baseline_prices = {
+        price for epoch, price in earlier if epoch == baseline_epoch
+    }
+    if len(baseline_prices) != 1:
+        return {"status": "CONFLICTING_PRE_SOURCE_PRICE",
+                "pre_source_change_pct": None}
+    baseline = next(iter(baseline_prices))
+    change = (source_price / baseline - Decimal(1)) * Decimal(100)
+    return {
+        "status": "OBSERVED_PRE_CLAIM_LAST_PRICE_ONLY",
+        "pre_source_change_pct": str(change.quantize(Decimal("0.01"))),
+        "source_price_idr": str(source_price),
+        "baseline_price_idr": str(baseline),
+        "baseline_quote_wib": _wib(baseline_epoch),
+        "source_quote_wib": _wib(source_epoch),
+        "baseline_freshness_gap_seconds": target - baseline_epoch,
+        "not_original_m04_prealert": True,
+        "not_executable_entry_or_net_profit": True,
+    }
+
+
 def post_ack_price_proxy(quotes: list[tuple[int, Decimal]], *,
                          ack_epoch: int, horizon_seconds: int,
                          now_epoch: int,
@@ -212,7 +273,9 @@ def inspect_postack_quality_readonly(
                 f"WHERE e.pair IN ({placeholders}) "
                 "AND e.minute_epoch BETWEEN ? AND ? "
                 "ORDER BY e.minute_epoch,e.pair LIMIT 20001",
-                (*pairs, start_epoch - 300,
+                # Add historical pre-source baseline coverage for
+                # 15m horizon, up to 90s prior, with minute-bucket margin.
+                (*pairs, start_epoch - 1200,
                  min(now, end_epoch + max(HORIZONS) + 180)),
             ).fetchall()
         if len(rows) > 20000:
@@ -324,16 +387,23 @@ def inspect_postack_quality_readonly(
                 stage["first_m04_quality_top2_replay_minute_end_wib"],
             "prealert_before_first_watch_replay_seconds": lead,
             "price_proxies": {},
+            "pre_source_price_context": {},
         }
         if state == "ACKED" and matched:
             for horizon in HORIZONS:
-                item["price_proxies"][str(horizon // 60) + "m"] = (
-                    post_ack_price_proxy(
-                        quote_map[pair], ack_epoch=ack,
-                        horizon_seconds=horizon, now_epoch=now,
-                        total_cost_bps=assumed_cost,
-                    )
+                label = str(horizon // 60) + "m"
+                item["price_proxies"][label] = post_ack_price_proxy(
+                    quote_map[pair], ack_epoch=ack,
+                    horizon_seconds=horizon, now_epoch=now,
+                    total_cost_bps=assumed_cost,
                 )
+                if research_status == "EXPLICIT_READONLY_RESEARCH_SOURCE":
+                    item["pre_source_price_context"][label] = (
+                        pre_claim_research_price_context(
+                            research_rows[pair], source_epoch=observed,
+                            claim_epoch=claimed, horizon_seconds=horizon,
+                        )
+                    )
         report.append(item)
 
     return {
@@ -352,6 +422,8 @@ def inspect_postack_quality_readonly(
         "research_evidence_source_status": research_status,
         "research_archive_cannot_reconstruct_original_m04_micro_replay": True,
         "research_archive_partial_source_coverage": True,
+        "pre_source_price_context_not_original_micro_prealert": True,
+        "pre_source_context_uses_only_quotes_recorded_by_m05_claim": True,
         "market_opportunity_first_appearance_unknown": True,
         "execution_allowed": False,
         "exchange_requests": 0,
