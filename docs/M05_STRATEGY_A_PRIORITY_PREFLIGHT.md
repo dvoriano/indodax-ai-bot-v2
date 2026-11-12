@@ -54,6 +54,62 @@ and verification of heartbeat, owner-private notification, unchanged M03
 scanner, and all three original no-trade flags. Never restart a second
 Telegram consumer or turn on live execution.
 
+## Single-restart priority rollout implementation (requires separate GO)
+
+Source includes an exact isolated \`systemd/user/indodax-v2-m05-telegram.service.d/strategy-a-priority.conf\`:
+
+\`\`\`ini
+[Service]
+Environment=M05_RADAR_PRIORITY_V2_GO=YES
+\`\`\`
+
+It is **not installed automatically by GitHub, git pull, CI or tests**.
+The original M05 only reads this flag when its longpoll process starts.
+The optional script \`scripts/m05_strategy_a_priority_activate_once.sh\`
+is the only owner-operated cutover path and requires the explicit environment
+variable \`M05_STRATEGY_A_PRIORITY_SINGLE_RESTART_GO=YES\`. It first runs
+the original live-process priority preflight; refuses a dirty/wrong branch,
+duplicate drop-in, EnvironmentFile override, unexpected drop-in content,
+unowned/insecure config directory, nonenabled M05 service, competing startup,
+unstable PID, disabled scanner timer, non-NO/NO/DRY_RUN flags or a recent
+restart. A single original-service restart installs ONLY that new opt-in
+drop-in; existing bot, longpoll, WS3 radar, ops alerts, owner authorization
+and M03 timer are preserved. No separate M05 worker is created.
+
+After restart it checks the **new running process** still has every no-trade,
+longpoll, radar and WS3 gate and the priority opt-in, verifies the original
+M03 timer is active, and observes a same-PID radar callback heartbeat
+without printing raw journal lines. An absent eligible coin is NOT a failed
+restart and NOT evidence an owner-private message was sent. The heartbeat
+verifier does not infer a BUY recommendation, AI assessment, SELL fill or
+realized net profit.
+
+If rollout fails after installing the new drop-in, the EXIT trap removes
+only that exact file, reloads original systemd and (if it attempted a restart)
+restarts the same original M05 without the priority flag. Rollback is
+**best effort**; if M05 fails to recover, manual owner review is required.
+Any restart interrupts existing longpoll briefly and restarts the receiver's
+uptime evidence window; do not claim uninterrupted 24h runtime.
+
+**Only after source is pinned and post-source CI and owner offline preflight
+pass,** the owner may run the one-time controlled activation:
+
+\`\`\`bash
+cd "$HOME/indodax-ai-bot-v2"
+export M05_STRATEGY_A_PRIORITY_SINGLE_RESTART_GO=YES
+bash scripts/m05_strategy_a_priority_activate_once.sh
+unset M05_STRATEGY_A_PRIORITY_SINGLE_RESTART_GO
+\`\`\`
+
+This is an actual restart command, not a read-only check. Verify code and
+the environment conditions BEFORE running it; never run during another
+M05 experiment, while M05 timer is active, or while a previous M05 restart
+needs audit. The command itself sends no Telegram message, but after the
+process resumes the original M05 may automatically send eligible owner-private
+WATCH alerts. Full runtime acceptance still requires a real source-qualified
+M03 WS3 candidate plus the actual owner-private M05 ACK and display evidence,
+not merely a new PID and a heartbeat. Keep BUY/SELL/CANCEL disabled.
+
 ## Evidence and acceptance separation
 
 - PR #283: code-level M05 priority filter, unit tests, original owner VPS
