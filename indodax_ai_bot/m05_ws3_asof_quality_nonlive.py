@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+import re
 import sqlite3
 from zoneinfo import ZoneInfo
 
@@ -61,7 +62,7 @@ def classify_ws3_preclaim_quality_nonlive(
     that the original sender consumed this observation. No hindsight prices.
     """
     if (type(pair) is not str or not pair.endswith("_idr")
-            or not pair[:-4].isalnum() or not pair.islower()
+            or re.fullmatch(r"[a-z0-9]+_idr", pair) is None
             or type(claim_epoch) is not int or claim_epoch <= 0
             or type(source_epoch) is not int
             or not 0 < source_epoch <= claim_epoch):
