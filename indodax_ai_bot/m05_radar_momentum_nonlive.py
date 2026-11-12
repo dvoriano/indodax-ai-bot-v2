@@ -1169,7 +1169,11 @@ def send_one_owner_radar_momentum_nonlive(
             return snapshot
         from .m08_strategy_a_nonlive import assess_ws3_priority_alert_offline
         eligible = []
-        for row in snapshot["candidates"]:
+        # Use the original WS3 top40 BEFORE top5 publication truncation.
+        # Otherwise five early scouts can mask a valid 1.5%/400m alert.
+        ranked = snapshot.get("ranked_review_shortlist_top40")
+        pool = ranked if isinstance(ranked, list) else snapshot["candidates"]
+        for row in pool:
             try:
                 verdict = assess_ws3_priority_alert_offline(
                     rise_pct=Decimal(row["observed_rise_pct"]),
@@ -1182,7 +1186,7 @@ def send_one_owner_radar_momentum_nonlive(
             except (KeyError, InvalidOperation, TypeError, ValueError):
                 # No fabricated positive eligibility for malformed sources.
                 continue
-        return dict(snapshot, candidates=eligible)
+        return dict(snapshot, candidates=eligible[:5])
 
     snap = priority_only(snap)
     # Explicit opt-in ONLY: use WS3 when original REST has no CURRENT
