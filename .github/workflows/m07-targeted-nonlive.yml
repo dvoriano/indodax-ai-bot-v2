@@ -24,8 +24,10 @@ on:
       - "tests/test_m05_strategy_a_asof_micro_risk_readonly.py"
       - "tests/test_m05_ws3_asof_quality_readonly.py"
       - "tests/test_m04_m05_ack_risk_handoff_nonlive.py"
+      - "tests/test_m04_g1_15m_1h_source_inventory_nonlive.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
       - "scripts/m05_ws3_asof_quality_readonly.py"
+      - "scripts/m04_g1_15m_1h_source_inventory_readonly.py"
       - "indodax_ai_bot/m04_m05_ack_risk_handoff_nonlive.py"
       - "scripts/m05_strategy_a_four_ack_followup_readonly.py"
       - "scripts/m05_strategy_a_priority_receipts_readonly.py"
@@ -66,8 +68,10 @@ on:
       - "tests/test_m05_strategy_a_asof_micro_risk_readonly.py"
       - "tests/test_m05_ws3_asof_quality_readonly.py"
       - "tests/test_m04_m05_ack_risk_handoff_nonlive.py"
+      - "tests/test_m04_g1_15m_1h_source_inventory_nonlive.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
       - "scripts/m05_ws3_asof_quality_readonly.py"
+      - "scripts/m04_g1_15m_1h_source_inventory_readonly.py"
       - "indodax_ai_bot/m04_m05_ack_risk_handoff_nonlive.py"
       - "scripts/m05_strategy_a_four_ack_followup_readonly.py"
       - "scripts/m05_strategy_a_priority_receipts_readonly.py"
@@ -131,6 +135,7 @@ jobs:
             tests.test_m05_strategy_a_asof_micro_risk_readonly \
             tests.test_m05_ws3_asof_quality_readonly \
             tests.test_m04_m05_ack_risk_handoff_nonlive \
+            tests.test_m04_g1_15m_1h_source_inventory_nonlive \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
