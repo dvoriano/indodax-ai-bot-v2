@@ -19,7 +19,7 @@ from indodax_ai_bot.m05_radar_momentum_nonlive import (
 from indodax_ai_bot.m05_pitiden_premium_layout import (
     DEFAULT_EVIDENCE_DB, FRAMES, build_timeframes, count_green,
     eligible_premium_watch, read_closed_candles, read_native_previous_24h,
-    read_price_references,
+    read_price_references, apply_ws3_trade_samples,
 )
 from indodax_ai_bot.scanner import MAIN_EXCLUDED_PAIRS
 from indodax_ai_bot.m03_ws3_evidence_archive_nonlive import _private_owned_regular
@@ -147,7 +147,6 @@ def inspect_named_pairs(*, pairs, now=None, db_path=DEFAULT_DB,
     independent={c["pair"]:c for c in snap.get("liquid_watch_candidates",[])}
     archive_ok=_private_owned_regular(Path(evidence_path))
     from indodax_ai_bot.m08_strategy_a_nonlive import assess_ws3_priority_alert_offline
-    from indodax_ai_bot.m05_pitiden_premium_layout import apply_ws3_trade_samples
     for pair in pairs:
         row={"pair":pair}
         result["pairs"].append(row)
