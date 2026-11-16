@@ -156,6 +156,63 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
                 expected_bot_id=BOT_ID, lock_path=self.lock,
             )
 
+    def test_m04_selection_routes_one_manual_review_and_auto_never_orders(self):
+        from indodax_ai_bot.m05_market_advisory import queue_scanner_owner_advisory
+        from indodax_ai_bot.three_role_ai import _candidate_decision_loop
+        from copy import deepcopy
+        bulk = public_cohort()
+        peer = public_cohort(pair="eth_idr")
+        for name in ("provisional_watchlist_preview","provisional_quality_reviews"):
+            bulk["eligible_cohort"][name].extend(peer["eligible_cohort"][name])
+        bulk["provisional_market_evidence"].extend(peer["provisional_market_evidence"])
+        digest = "f"*64
+        report={"pair":"eth_idr","evidence_digest_sha256":digest,
+                "reason":"STRATEGY_BUY_PREFLIGHT_UNVERIFIED",
+                "completed_roles":["MARKET","RISK","STRATEGY"],
+                "role_results":[
+                    {"role":"MARKET","bias":"BULLISH","evidence_status":{
+                        "spread_bps":{"status":"PUBLIC_DIAGNOSTIC","value":"20"}}},
+                    {"role":"RISK","decision":"ALLOW","risk_source_report":{"blockers":[]}},
+                    {"role":"STRATEGY","action":"BUY","projected_net_profit_idr":"15000",
+                     "projected_net_roi_percent":"2.5","strategy_source_plan":{
+                         "pair":"eth_idr","status":"SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED",
+                         "allocated_cost_idr":"600000","entry_price_idr":"1000",
+                         "stop_loss_price_idr":"980","estimated_net_profit_idr":"30000",
+                         "estimated_net_roi_percent":"5"}}]}
+        rejected={"pair":"inj_idr","evidence_digest_sha256":"a"*64,
+                  "reason":"RISK_VETO_NO_TRADE","completed_roles":[],"role_results":[]}
+        def shadow(reports):
+            return {"candidate_reports":reports,"final_decision":None,
+                    "execution_allowed":False,
+                    "candidate_decision_loop":_candidate_decision_loop(
+                        reports=reports,source_epoch=NOW,now_epoch=NOW)}
+        def queue(ai,now=NOW):
+            return queue_scanner_owner_advisory(bulk=bulk,ai_shadow=ai,
+                                               owner=self.ledger,now_epoch=now)
+        self.assertEqual(queue(shadow([rejected]))["queued"],0)
+        good=shadow([rejected,report])
+        forged=deepcopy(good)
+        forged["candidate_decision_loop"]["selected_pair"]="inj_idr"
+        self.assertEqual(queue(forged)["status"],"M05_AI_SELECTION_MISMATCH")
+        self.assertEqual(queue(good,NOW+61)["queued"],0)
+        self.ledger.switch_mode(user_id=OWNER,chat_id=OWNER,mode="AUTO",now_epoch=NOW)
+        auto=queue(good)
+        self.assertEqual(auto["status"],"M05_AUTO_AI_SHADOW_REVIEW_ONLY")
+        self.assertIsNone(auto["owner_final_decision"])
+        self.assertFalse(auto["execution_allowed"])
+        self.assertIsNone(self.ledger.claim_market_advisory_delivery(now_epoch=NOW))
+        self.ledger.switch_mode(user_id=OWNER,chat_id=OWNER,mode="MANUAL",now_epoch=NOW)
+        manual=queue(good)
+        self.assertEqual(manual["queued"],1)
+        self.assertEqual(manual["selected_pair"],"eth_idr")
+        out=self.ledger.claim_market_advisory_delivery(now_epoch=NOW)
+        self.assertIn("Pair: ETH_IDR",out["message_text"])
+        self.assertIn("SYNTHETIC_AI_SELECTED_REVIEW_ONLY",out["message_text"])
+        self.assertIn("NOT A BUY ORDER",out["message_text"])
+        self.assertEqual(queue(good)["queued"],0)
+        self.assertIsNone(self.ledger.claim_manual_trade_preview_delivery(now_epoch=NOW))
+        self.assertEqual(self.journal.count(),0)
+
     def test_original_bulk_to_owner_queue_without_final_or_order(self):
         out = self.market_cycle()
         self.assertIsNone(out.final_decision)
