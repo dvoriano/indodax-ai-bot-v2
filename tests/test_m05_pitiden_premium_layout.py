@@ -169,8 +169,20 @@ class PremiumWatchTests(unittest.TestCase):
         self.assertEqual(row["opening_price"],Decimal("100"))
         self.assertEqual(row["close_price"],Decimal("103"))
         self.assertEqual(row["change"],Decimal("3"))
-        for refs in ([(start-16,Decimal("100")),last],
+        for refs in ([(start-31,Decimal("100")),last],
                      [prior,(stop,Decimal("103"))], [last]):
+            self.assertIsNone(build_timeframes(c,refs)[0]["change"])
+
+    def test_sparse_minute_comparison_40_seconds_no_future_or_wrong_duration(self):
+        c=candidate()
+        _,start,stop=next(interval_windows(END))
+        row=build_timeframes(c,[(start-20,Decimal("100")),(stop-20,Decimal("103"))])[0]
+        self.assertEqual(row["change"],Decimal("3"))
+        self.assertTrue(row["approx"])
+        self.assertIsNone(row["volume"])
+        for refs in ([(start-20,Decimal("100")),(stop,Decimal("103"))],
+                     [(start-29,Decimal("100")),(stop-1,Decimal("103"))],
+                     [(start-1,Decimal("100")),(stop-29,Decimal("103"))]):
             self.assertIsNone(build_timeframes(c,refs)[0]["change"])
 
     def test_native_previous_preferred_and_history_fallback_marked(self):

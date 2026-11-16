@@ -489,6 +489,55 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertIn("OTHER/IDR",api.calls[0][1]["text"])
         self.assertIn("UAI/IDR",api.calls[1][1]["text"])
 
+    def test_independent_four_green_even_without_positive_momentum(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
+        self.add("cst_idr",-2,100,737000000,1)
+        self.add("cst_idr",-1,99,737000000,2)
+        self.add("thin_idr",-1,100,399999999,3)
+        self.add("stale_idr",-5,100,800000000,4)
+        snap=self.inspect()
+        self.assertEqual(snap["candidates"],[])
+        self.assertEqual(snap["micro_prealert_candidates_top40"],[])
+        self.assertEqual([c["pair"] for c in snap["liquid_watch_candidates"]],["cst_idr"])
+        def candles(c,**kw):
+            return {t:(Decimal("98"),Decimal("99"))
+                    for label,a,b in interval_windows(c["observed_epoch"])
+                    if label!="24h" for t in range(a,b,60)}
+        api=FakeTelegram()
+        with patch.dict("os.environ",{"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            side_effect=candles):
+            out=send_one_owner_radar_momentum_nonlive(
+                api=api,ledger=self.ledger,db_path=self.db_path,
+                now_epoch=NOW,ws3_enabled=True,priority_alert_enabled=True)
+            self.assertEqual(out["messages_sent"],1)
+            self.assertEqual(self.send(api)["messages_sent"],0)
+        msg=api.calls[0][1]["text"]
+        self.assertIn("CST/IDR",msg)
+        self.assertIn("independent scan",msg)
+        self.assertIn("Short move -1,00%",msg)
+        self.assertIn("Not BUY",msg)
+        with sqlite3.connect(self.owner_path) as db:
+            self.assertEqual(db.execute(
+                "SELECT watch_path,green_at_claim,delivery_state FROM m05_radar_delivery_events"
+            ).fetchone(),("INDEPENDENT_FOUR_GREEN",7,"ACKED"))
+
+    def test_independent_without_short_reference_keeps_unknown(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
+        self.add("cst_idr",-1,99,737000000,2)
+        def candles(c,**kw):
+            return {t:(Decimal("98"),Decimal("99"))
+                    for label,a,b in interval_windows(c["observed_epoch"])
+                    if label!="24h" for t in range(a,b,60)}
+        api=FakeTelegram()
+        with patch.dict("os.environ",{"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}),patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            side_effect=candles):
+            self.assertEqual(self.send(api)["messages_sent"],1)
+        self.assertIn("Short move unavailable",api.calls[0][1]["text"])
+
     def test_premium_sparse_data_or_render_failure_never_claim_or_send(self):
         self.seed()
         api=FakeTelegram()

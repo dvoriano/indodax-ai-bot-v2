@@ -286,6 +286,19 @@ def build_timeframes(candidate, references, *, candles=None, previous_24h=None):
                 before = [(t,p) for t,p in references
                           if start-tolerance <= t < start]
                 op = max(before,default=None,key=lambda x:x[0])
+            # Minute archives often record at :40 instead of :49.
+            # If the strict 15s edges fail, accept a real consecutive
+            # near-boundary sample pair only with 45-75s elapsed; still
+            # approximate, not a complete exchange candle. Never use a
+            # price after the completed interval.
+            if label == "1m" and not (op and cl and op[0] < cl[0]):
+                closes = [(t,p) for t,p in references if stop-30 <= t < stop]
+                opens = [(t,p) for t,p in references if start-30 <= t < start]
+                pairs = [(a,b) for a in opens for b in closes
+                         if 45 <= b[0]-a[0] <= 75]
+                if pairs:
+                    op,cl=min(pairs,key=lambda ab: (abs(ab[1][0]-ab[0][0]-60),
+                                                     -ab[1][0],-ab[0][0]))
             if op and cl and op[0] < cl[0]:
                 opening, closing_price = op[1],cl[1]
                 approx = True
@@ -408,10 +421,16 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     spread_text = _percent(spread/100).lstrip("+") if spread is not None else "N/A"
     # Keep the actual existing detector comparison visible even when all
     # requested nominal references are missing. This is a sample comparison.
-    ref = candidate["reference_epoch"]
-    trigger = Decimal(candidate["observed_rise_pct"])
-    elapsed = candidate["observed_epoch"] - ref
-    context = f"Trigger {_percent(trigger)} / {elapsed//60}m{elapsed%60:02d}s"
+    ref = candidate.get("reference_epoch")
+    trigger_raw = candidate.get("observed_rise_pct")
+    independent = candidate.get("watch_path") == "INDEPENDENT_FOUR_GREEN"
+    if type(ref) is int and 0 < ref < candidate["observed_epoch"] and trigger_raw is not None:
+        trigger = Decimal(trigger_raw)
+        elapsed = candidate["observed_epoch"] - ref
+        heading = "Short move" if independent else "Trigger"
+        context = f"{heading} {_percent(trigger)} / {elapsed//60}m{elapsed%60:02d}s"
+    else:
+        context = "Short move unavailable"
     green = count_green(rows)
     rolling = _decimal(candidate.get("volume_24h_idr"))
     total = ("Rp" + _number(rolling)) if rolling is not None else "—"
@@ -440,6 +459,7 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         "",
         f"{bar} <b>Green {green}/8</b>",
         escape(f"Momentum {_momentum(rows)} · Spread {spread_text}"),
+        *(["<b>4/8 WATCH · independent scan</b>"] if independent else []),
         escape(context),
         *([escape(sample_text)] if sample_text is not None else []),
         f"<i>{known}/8 data · ~ sampled · - unavailable</i>",

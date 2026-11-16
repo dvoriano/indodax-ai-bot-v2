@@ -87,7 +87,7 @@ def assess_ack_source_asof_offline(
                 "priority_threshold_reconstructed": False}
     admissible = []
     for row in rows:
-        if type(row) is not tuple or len(row) != 6:
+        if type(row) is not tuple or len(row) not in (6,8):
             return {"source_verdict": "SOURCE_ROW_MALFORMED",
                     "priority_threshold_reconstructed": False}
         minute, exchange, raw_price, raw_vol, status, recorded = row
@@ -147,9 +147,15 @@ def summarize_priority_receipts_offline(*, pid_start: int, now_epoch: int,
     counts = Counter()
     entries = []
     for row in events:
-        if type(row) is not tuple or len(row) != 6:
+        if type(row) is not tuple or len(row) not in (6,8):
             raise ValueError("M05_PRIORITY_AUDIT_EVENT_INVALID")
-        pair, claim, source_epoch, kind, delivery, ack_epoch = row
+        pair, claim, source_epoch, kind, delivery, ack_epoch = row[:6]
+        path, green = row[6:] if len(row)==8 else ("MOMENTUM",None)
+        if (path not in ("MOMENTUM","INDEPENDENT_FOUR_GREEN")
+                or (path=="INDEPENDENT_FOUR_GREEN" and (kind!="WS3" or
+                    type(green) is not int or not 4<=green<=8))
+                or (green is not None and (type(green) is not int or not 4<=green<=8))):
+            raise ValueError("M05_RADAR_ROUTE_INVALID")
         if (type(pair) is not str or not PAIRS.fullmatch(pair)
                 or type(claim) is not int or not pid_start <= claim <= now_epoch
                 or type(source_epoch) is not int or source_epoch > claim
@@ -164,7 +170,14 @@ def summarize_priority_receipts_offline(*, pid_start: int, now_epoch: int,
         row_out = {"pair": pair, "delivery": delivery, "source_kind": kind,
                    "claim_wib": datetime.fromtimestamp(
                        claim, WIB).strftime("%Y-%m-%d %H:%M WIB")}
-        if delivery == "ACKED":
+        if len(row)==8:
+            row_out.update(watch_path=path,green_at_claim=green)
+        if delivery == "ACKED" and path=="INDEPENDENT_FOUR_GREEN":
+            row_out.update(source_verdict="INDEPENDENT_FOUR_GREEN_CLAIM_RECORDED",
+                           priority_threshold_reconstructed=False,
+                           local_green_claim_not_independent_attestation=True)
+            counts["INDEPENDENT_FOUR_GREEN_CLAIM_RECORDED"] += 1
+        elif delivery == "ACKED":
             raw = source_reader(pair, source_epoch, claim) if kind == "WS3" else []
             observed = assess_ack_source_asof_offline(
                 source_kind=kind, source_epoch=source_epoch,
@@ -182,6 +195,7 @@ def summarize_priority_receipts_offline(*, pid_start: int, now_epoch: int,
         "delivery_uncertain": counts["UNCERTAIN"],
         "asof_threshold_reconstructed_count":
             counts["ASOF_ARCHIVE_PRIORITY_THRESHOLDS_OBSERVED"],
+        "independent_four_green_acked":counts["INDEPENDENT_FOUR_GREEN_CLAIM_RECORDED"],
         "archive_mismatch_needs_review":
             counts["ASOF_ARCHIVE_THRESHOLD_MISMATCH_REVIEW"],
         "missing_or_unverified_provenance":
@@ -280,9 +294,11 @@ def inspect_original_priority_ack_readonly() -> dict:
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='m05_radar_delivery_events'"
             ).fetchone()
+            columns={x[1] for x in db.execute("PRAGMA table_info(m05_radar_delivery_events)")} if exists else set()
+            route_fields=(",watch_path,green_at_claim" if {"watch_path","green_at_claim"}<=columns else "")
             rows = db.execute(
                 "SELECT pair,claimed_epoch,source_observed_epoch,source_kind,"
-                "delivery_state,ack_received_epoch "
+                "delivery_state,ack_received_epoch"+route_fields+" "
                 "FROM m05_radar_delivery_events "
                 "WHERE claimed_epoch BETWEEN ? AND ? "
                 "ORDER BY claimed_epoch DESC LIMIT ?",

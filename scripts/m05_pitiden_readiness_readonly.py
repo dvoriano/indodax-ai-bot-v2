@@ -110,6 +110,7 @@ def inspect_readiness(*, now=None, db_path=DEFAULT_DB,
         snap=inspect_original_m03_ws3_watch_readonly(db_path=db_path,now_epoch=now)
         out["original_ws3_status"]=snap["status"]
         out["original_ws3_candidates"]=len(snap.get("candidates",[]))
+        out["independent_liquid_ws3_candidates"]=len(snap.get("liquid_watch_candidates",[]))
         # A gate-only pass is not an actual publication: sender's original
         # momentum eligibility, source selection, cooldown/claim remain.
         out["gate_only_is_not_send_authority"]=True
@@ -140,6 +141,7 @@ def inspect_named_pairs(*, pairs, now=None, db_path=DEFAULT_DB,
     snap=inspect_original_m03_ws3_watch_readonly(db_path=db_path,now_epoch=now)
     result["ws3_status"]=snap["status"]
     rank={c["pair"]:(i+1,c) for i,c in enumerate(snap.get("ranked_review_shortlist_top40",[]))}
+    independent={c["pair"]:c for c in snap.get("liquid_watch_candidates",[])}
     archive_ok=_private_owned_regular(Path(evidence_path))
     from indodax_ai_bot.m08_strategy_a_nonlive import assess_ws3_priority_alert_offline
     for pair in pairs:
@@ -189,6 +191,10 @@ def inspect_named_pairs(*, pairs, now=None, db_path=DEFAULT_DB,
                                "close_idr":str(x["close_price"]) if x["close_price"] is not None else None,
                                "volume_idr":str(x["volume"]) if x["volume"] is not None else None,
                                "sampled":x["approx"]} for x in rows]})
+            independent_row=independent.get(pair)
+            row["independent_4_green_gate"] = bool(independent_row and
+                independent_row["observed_epoch"]==stamp and eligible_premium_watch(c,rows))
+            row["independent_gate_not_delivery_proof"]=True
             if not (0<=now-stamp<=150 and 0<=now-minute<=150):
                 row["reason"]="LATEST_WATCH_SAMPLE_STALE"
             elif volume<Decimal("400000000"):
