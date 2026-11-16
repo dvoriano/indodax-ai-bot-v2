@@ -1298,6 +1298,12 @@ def main(argv: list[str] | None = None) -> int:
                         "sell_price_idr","sell_all_in_fee_idr",
                         "incremental_slippage_idr","sell_epoch",
                     },
+                    "REVIEW":{
+                        "paper_id","observed_epoch","book_observed_epoch",
+                        "tier_sell_qty","bid_levels","best_ask",
+                        "taker_sell_fee_pct","maker_sell_fee_pct",
+                        "taker_slippage_pct",
+                    },
                     "SUMMARY":{"day_wib"},
                 }
                 if action not in fields or set(raw)!=(fields[action]|{"action"}):
@@ -1308,7 +1314,11 @@ def main(argv: list[str] | None = None) -> int:
                     "sell_qty","sell_price_idr","sell_all_in_fee_idr",
                     "incremental_slippage_idr",
                 }
-                epoch_keys={"buy_epoch","sell_epoch"}
+                money_keys.update(("tier_sell_qty","best_ask",
+                                   "taker_sell_fee_pct","maker_sell_fee_pct",
+                                   "taker_slippage_pct"))
+                epoch_keys={"buy_epoch","sell_epoch","observed_epoch",
+                            "book_observed_epoch"}
                 for k in fields[action]:
                     v=raw[k]
                     if k in money_keys:
@@ -1319,6 +1329,14 @@ def main(argv: list[str] | None = None) -> int:
                         if type(v) is not int:
                             raise ValueError("M09_PAPER_EPOCH_INPUT_INVALID")
                         typed[k]=v
+                    elif k=="bid_levels":
+                        if (type(v) is not list or len(v)>20
+                                or any(type(level) is not list or len(level)!=2
+                                       or any(type(x) is not str or len(x)>45
+                                              for x in level) for level in v)):
+                            raise ValueError("M09_PAPER_BOOK_INPUT_INVALID")
+                        typed[k]=tuple(tuple(Decimal(x) for x in level)
+                                       for level in v)
                     elif k=="day_wib":
                         if v is not None and type(v) is not str:
                             raise ValueError("M09_PAPER_DATE_INPUT_INVALID")
