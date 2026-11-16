@@ -2788,6 +2788,54 @@ class DecisionJournal:
             "replay":replay,
         }
 
+    def read_m09_open_paper_position_offline(self, *, paper_id: str,
+            observed_epoch: int) -> dict:
+        """Exact remaining virtual lot and cost basis, never a real holding."""
+        self._m09_paper_id(paper_id,"paper_")
+        self._m09_paper_epoch(observed_epoch)
+        with self._connect() as con:
+            con.execute("BEGIN")
+            buy=con.execute(
+                "SELECT symbol,buy_qty,buy_price_idr,buy_all_in_fee_idr,"
+                "buy_epoch,source FROM m09_paper_simulated_buys WHERE paper_id=?",
+                (paper_id,),
+            ).fetchone()
+            sells=con.execute(
+                "SELECT sell_qty,sell_epoch,source FROM "
+                "m09_paper_simulated_sells WHERE paper_id=?",
+                (paper_id,),
+            ).fetchall()
+        if buy is None:
+            raise DecisionConflictError("M09_PAPER_BUY_RECEIPT_MISSING")
+        try:
+            symbol,qty_raw,price_raw,fee_raw,epoch,source=buy
+            qty=self._m09_paper_decimal(Decimal(qty_raw),positive=True)
+            price=self._m09_paper_decimal(Decimal(price_raw),positive=True)
+            fee=self._m09_paper_decimal(Decimal(fee_raw),positive=False)
+            self._m09_paper_epoch(epoch)
+            if (source!="M09_PAPER_SCENARIO_ONLY"
+                    or type(symbol) is not str
+                    or re.fullmatch(r"[A-Z0-9]{2,20}IDR",symbol) is None
+                    or symbol[:-3] in ("FLOKI","PEPE","USDT","USDC")
+                    or observed_epoch<epoch):
+                raise ValueError("invalid paper buy")
+            used=Decimal(0)
+            for raw,stamp,scope in sells:
+                self._m09_paper_epoch(stamp)
+                if (scope!="M09_PAPER_SCENARIO_ONLY"
+                        or not epoch<=stamp<=observed_epoch):
+                    raise ValueError("invalid paper exit")
+                used+=self._m09_paper_decimal(Decimal(raw),positive=True)
+            if used>qty:
+                raise ValueError("oversold paper")
+        except (ValueError,TypeError,ArithmeticError,DecisionConflictError):
+            raise DecisionConflictError("M09_PAPER_POSITION_SOURCE_INVALID") from None
+        left=qty-used
+        if left==0:
+            raise DecisionConflictError("M09_PAPER_POSITION_CLOSED")
+        return {"symbol":symbol,"buy_epoch":epoch,"remaining_qty":left,
+                "remaining_cost_idr":(qty*price+fee)*left/qty}
+
     def review_m09_paper_pnl_offline(self, *,
             day_wib: str | None = None) -> dict:
         """Virtual PAPER realized-at-simulated-SELL only, WIB day boundary.
