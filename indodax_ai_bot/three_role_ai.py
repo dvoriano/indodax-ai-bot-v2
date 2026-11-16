@@ -357,6 +357,125 @@ def _finite_decimal(value: Any, name: str) -> Decimal:
     return d
 
 
+
+def _candidate_decision_loop(*, reports: list[dict], source_epoch: int,
+                             now_epoch: int) -> dict:
+    """Compare validated SHADOW reports only; never issue Final PASS or BUY.
+
+    Only source-bound synthetic plans can be compared at present. A model
+    BUY with unknown account/quote/costs is not a qualified scenario.
+    Comparisons use a conservative dominance rule, not a forecast.
+    """
+    out = {
+        "stage": "M04_CANDIDATE_DECISION_LOOP_SHADOW",
+        "status": "RESCAN_FRESH_EVIDENCE",
+        "selected_pair": None,
+        "selected_evidence_digest_sha256": None,
+        "qualified_scenario_count": 0,
+        "candidates": [],
+        "time_to_profit": "UNKNOWN",
+        "final_decision": None,
+        "execution_allowed": False,
+        "paper_fill_authorized": False,
+    }
+    if (type(source_epoch) is not int or type(now_epoch) is not int
+            or not 0 <= now_epoch - source_epoch <= 60):
+        return dict(out, status="RESCAN_STALE_EVIDENCE")
+    if (not isinstance(reports, list) or len(reports) > 2
+            or any(not isinstance(r, dict) or not isinstance(r.get("pair"), str)
+                   for r in reports)
+            or len({r["pair"] for r in reports}) != len(reports)):
+        return dict(out, status="RESCAN_INVALID_COHORT")
+    qualified = []
+    for r in reports:
+        pair, digest = r["pair"], r.get("evidence_digest_sha256")
+        reason = r.get("reason")
+        item = {"pair": pair, "evidence_digest_sha256": digest,
+                "reason": reason, "disposition": "ADVISORY_UNAVAILABLE"}
+        out["candidates"].append(item)
+        roles = r.get("role_results")
+        if isinstance(reason, str) and reason.startswith("RISK_VETO_"):
+            item["disposition"] = "RISK_REJECT"
+            continue
+        if reason == "STRATEGY_BUY_NET_TARGET_UNMET":
+            item["disposition"] = "NET_REJECT"
+            continue
+        if (r.get("completed_roles") != list(ROLES)
+                or not isinstance(roles, list) or len(roles) != 3
+                or any(not isinstance(x, dict) for x in roles)
+                or [x.get("role") for x in roles] != list(ROLES)):
+            continue
+        market, risk, strategy = roles
+        if risk.get("decision") != "ALLOW":
+            item["disposition"] = "RISK_REJECT"
+            continue
+        if strategy.get("action") != "BUY":
+            item["disposition"] = "STRATEGY_WAIT"
+            continue
+        if market.get("bias") == "BEARISH":
+            item["disposition"] = "MARKET_CONFLICT_WAIT"
+            continue
+        plan = strategy.get("strategy_source_plan")
+        if (reason != "STRATEGY_BUY_PREFLIGHT_UNVERIFIED"
+                or not isinstance(plan, dict)
+                or plan.get("status") != "SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED"
+                or plan.get("pair") != pair
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+                or risk.get("risk_source_report", {}).get("blockers") != []):
+            item["disposition"] = "WAIT_UNVERIFIED_QUOTE_OR_RISK"
+            continue
+        try:
+            net = _finite_decimal(strategy.get("projected_net_profit_idr"), "NET")
+            roi = _finite_decimal(strategy.get("projected_net_roi_percent"), "ROI")
+            cost = _finite_decimal(plan.get("allocated_cost_idr"), "COST")
+            entry = _finite_decimal(plan.get("entry_price_idr"), "ENTRY")
+            stop = _finite_decimal(plan.get("stop_loss_price_idr"), "STOP")
+            spread_row = market["evidence_status"]["spread_bps"]
+            if spread_row["status"] != "PUBLIC_DIAGNOSTIC":
+                raise ValueError("SPREAD_UNKNOWN")
+            spread = _finite_decimal(spread_row["value"], "SPREAD")
+            if (net < 10000 or roi < 2 or cost <= 0 or not 0 < stop < entry
+                    or spread > 80
+                    or net > _finite_decimal(plan.get("estimated_net_profit_idr"), "PLAN_NET")
+                    or roi > _finite_decimal(plan.get("estimated_net_roi_percent"), "PLAN_ROI")):
+                raise ValueError("SCENARIO_NOT_COMPARABLE")
+            stop_distance = (entry - stop) / entry * 100
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            item["disposition"] = "WAIT_INCOMPLETE_SCENARIO"
+            continue
+        item["disposition"] = "QUALIFIED_SYNTHETIC_SCENARIO"
+        item["scenario_metrics"] = {
+            "projected_net_profit_idr": str(net),
+            "projected_net_roi_percent": str(roi),
+            "allocated_cost_idr": str(cost),
+            "spread_bps": str(spread),
+            "stop_distance_percent_not_max_loss": str(stop_distance),
+        }
+        qualified.append((item, cost, (net, roi, -spread, -stop_distance)))
+    out["qualified_scenario_count"] = len(qualified)
+    if not qualified:
+        return out
+    winner = qualified[0]
+    if len(qualified) == 2:
+        a, b = qualified
+        # Same capital basis and strict dominance across all four dimensions.
+        # If tradeoffs conflict or tie, do not invent weights or confidence.
+        def dominates(x, y):
+            return (x[1] == y[1]
+                    and all(u >= v for u, v in zip(x[2], y[2]))
+                    and any(u > v for u, v in zip(x[2], y[2])))
+        if dominates(a, b):
+            winner = a
+        elif dominates(b, a):
+            winner = b
+        else:
+            return dict(out, status="RESCAN_INCOMPARABLE_SCENARIOS")
+    return dict(out, status="SELECTED_SYNTHETIC_REVIEW_ONLY",
+                selected_pair=winner[0]["pair"],
+                selected_evidence_digest_sha256=winner[0]["evidence_digest_sha256"])
+
+
 class ThreeRoleShadow:
     """One non-live AI boundary connected to the single bulk orchestrator.
 
@@ -433,6 +552,11 @@ class ThreeRoleShadow:
         result["source_digests_by_pair"] = dict(zip(preview, verified))
         result["completed_role_calls"] = sum(
             len(x["completed_roles"]) for x in reports
+        )
+        result["candidate_decision_loop"] = _candidate_decision_loop(
+            reports=reports,
+            source_epoch=bulk["eligible_cohort"]["screening_observed_epoch"],
+            now_epoch=int(self._clock()),
         )
         # Even synthetic signed receipts and six model-shaped responses
         # cannot authorize Final PASS or execution in this milestone.
