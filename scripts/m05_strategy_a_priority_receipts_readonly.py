@@ -147,7 +147,7 @@ def summarize_priority_receipts_offline(*, pid_start: int, now_epoch: int,
     counts = Counter()
     entries = []
     for row in events:
-        if type(row) is not tuple or len(row) != 6:
+        if type(row) is not tuple or len(row) not in (6,8):
             raise ValueError("M05_PRIORITY_AUDIT_EVENT_INVALID")
         pair, claim, source_epoch, kind, delivery, ack_epoch = row[:6]
         path, green = row[6:] if len(row)==8 else ("MOMENTUM",None)
