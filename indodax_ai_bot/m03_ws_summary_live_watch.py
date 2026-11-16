@@ -213,6 +213,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         indexed_pairs = set()
         recovery_requests = {}
         failed_trade_channels = set()
+        last_ping_clock=clock() if checkpoint is not None else None
+        last_summary_clock=None
 
         def subscribe_micro(pair, kind, channel, request_id):
             params={"channel":channel}
@@ -289,12 +291,23 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
             if trade_journal is not None:
                 report["indexed_trade_pairs"] = sorted(indexed_pairs)
                 report["indexed_trade_channels_failed"] = len(failed_trade_channels)
+                report["indexed_trade_channels_acknowledged"] = sum(
+                    ch in micro_active and ch not in failed_trade_channels
+                    for ch,(pair,kind) in micro_channels.items() if kind=="trade")
             return report
 
         while True:
             now = clock()
+            if checkpoint is not None and phase=="OBSERVE" and now-last_ping_clock>=30:
+                sock.send(json.dumps({"method":7,"id":999999}))
+                last_ping_clock=now
             if (checkpoint is not None and not pending and phase=="OBSERVE"
                     and now>=deadline):
+                if not observations:
+                    if last_summary_clock is None or now-last_summary_clock>=90:
+                        raise M03WSWatchError("M03_WS_WATCH_NO_FRESH_SUMMARY_PUBLICATION")
+                    deadline=clock()+observe_seconds
+                    continue
                 checkpoint(snapshot())
                 # Keep the authenticated connection and cursor, but reset
                 # only the short microstructure observation counters.
@@ -497,6 +510,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 if last_offset is not None and offset <= last_offset:
                     continue
                 last_offset = offset
+                last_summary_clock=clock() if checkpoint is not None else None
                 received_frames += 1
                 if received_frames > 300:
                     raise M03WSWatchError("M03_WS_WATCH_FRAME_LIMIT")
@@ -955,6 +969,7 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
         if trade_journal is not None:
             report["indexed_trade_pairs"]=source.get("indexed_trade_pairs",[])
             report["indexed_trade_channels_failed"]=source.get("indexed_trade_channels_failed",0)
+            report["indexed_trade_channels_acknowledged"]=source.get("indexed_trade_channels_acknowledged",0)
         return report
 
     def on_checkpoint(source):
@@ -964,6 +979,7 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
                           "fresh_liquid_pairs":report["fresh_liquid_main_idr_pairs"],
                           "indexed_trade_pairs":report.get("indexed_trade_pairs",[]),
                           "indexed_trade_channels_failed":report.get("indexed_trade_channels_failed",0),
+                          "indexed_trade_channels_acknowledged":report.get("indexed_trade_channels_acknowledged",0),
                           "execution_allowed":False},sort_keys=True),flush=True)
 
     source = collect_ws3_market_summary_once(
