@@ -369,10 +369,15 @@ def evaluate_m04_review_history_once(journal, *, now_epoch: int, evidence_db=Non
                     (now_epoch-360,now_epoch-3660,now_epoch-1860,
                      now_epoch-960,max_reviews)).fetchall()
                 for pair,digest,decision in reviews:
-                    existing={x[0] for x in con.execute(
-                        "SELECT horizon_minutes FROM m04_history_outcomes WHERE pair=? AND digest=?",
-                        (pair,digest))}
-                    anchor=mark(src,pair,decision)
+                    existing_rows=con.execute(
+                        "SELECT horizon_minutes,outcome_json FROM m04_history_outcomes "
+                        "WHERE pair=? AND digest=? ORDER BY horizon_minutes",
+                        (pair,digest)).fetchall()
+                    existing={x[0] for x in existing_rows}
+                    # Freeze the first evaluated anchor across horizons,
+                    # including UNKNOWN, even after archive retention expires.
+                    anchor=(json.loads(existing_rows[0][1])["anchor"]
+                            if existing_rows else mark(src,pair,decision))
                     for h in horizons:
                         target=decision+h*60
                         if h in existing or now_epoch<target+60:
