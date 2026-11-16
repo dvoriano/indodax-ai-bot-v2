@@ -121,6 +121,24 @@ def read_price_references(candidate, *, db_path, now_epoch,
                 "'BELOW_150M_VOLUME_FLOOR') "
                 "ORDER BY p.minute_epoch DESC LIMIT 1500",
                 (pair, start, now_epoch, end, now_epoch))
+            # New original-session boundary samples. Restrict to actual
+            # needed +/-30s edges (not thousands of irrelevant intrabar rows).
+            # Closed source timestamps never exceed the candidate observation.
+            boundaries = {start for _,start,stop in interval_windows(end)}
+            boundaries.update(stop for _,start,stop in interval_windows(end)
+                              if stop != end)
+            for edge in sorted(boundaries):
+                edge_rows = _read_rows(path,
+                    "SELECT (received_epoch/60)*60,exchange_epoch,price_idr,0 "
+                    "FROM ws3_local_summary_samples WHERE pair=? "
+                    "AND exchange_epoch BETWEEN ? AND ? "
+                    "AND exchange_epoch<=? AND archived_epoch<=? "
+                    "AND received_epoch BETWEEN exchange_epoch AND exchange_epoch+90 "
+                    "AND received_epoch<=archived_epoch "
+                    "ORDER BY exchange_epoch LIMIT 241",
+                    (pair,edge-30,edge+30,end,now_epoch))
+                if len(edge_rows)<=240:
+                    rows += edge_rows
     # Reject conflicting prices for the same source epoch. Do not average.
     prices = {}
     conflicts = set()
