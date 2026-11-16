@@ -169,6 +169,24 @@ class OriginalM07OwnerLastMomentSourceTests(unittest.TestCase):
         private.assert_not_called()
         paid.assert_not_called()
 
+    def test_current_main_only_funding_original_preview_click_and_recheck(self):
+        self.funding = {"commitments_not_locked_idr": D("1000"),
+                        "max_spread_bps": D("150")}
+        self.account["exchange_idr_locked_observed"] = "50000"
+        result = self.prepare()
+        cost = D(result["buy_max_cost_idr_reference"])
+        self.assertGreater(cost, D("100000"))
+        self.assertLessEqual(cost, D("919147"))
+        # Locked balance has already been excluded by exchange.
+        self.assertGreater(cost, D("869147"))
+        less = dict(self.account, exchange_idr_free_observed="900000")
+        self.assert_blocked_without_new_hold(self.review(account_snapshot=less))
+        accepted = self.review()
+        self.assertTrue(accepted["m07_manual_sender_hold_staged"])
+        self.assertFalse(accepted["execution_allowed"])
+        self.assertFalse(accepted["order_sent"])
+        self.assertEqual(self.holds(), 1)
+
     def test_unclicked_or_switched_owner_cannot_pass_recheck(self):
         self.prepare(click=False)
         self.assert_blocked_without_new_hold(self.review())
