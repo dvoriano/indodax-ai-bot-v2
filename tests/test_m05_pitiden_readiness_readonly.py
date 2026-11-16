@@ -20,6 +20,7 @@ class PitidenReadinessTests(unittest.TestCase):
                     last_idr TEXT,rolling_24h_idr TEXT,public_offset INTEGER,
                     PRIMARY KEY(pair,minute_epoch))""")
                 con.executemany("INSERT INTO m03_ws_summary_watch_minute VALUES (?,?,?,?,?,?)",[
+                    ("btc_idr",MINUTE-120,MINUTE-71,"99","500000000",0),
                     ("btc_idr",MINUTE-60,MINUTE-11,"100","500000000",1),
                     ("btc_idr",MINUTE,MINUTE+49,"103","500000000",2),
                     ("thin_idr",MINUTE,MINUTE+49,"100","399999999",3),
