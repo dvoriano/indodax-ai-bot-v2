@@ -332,11 +332,11 @@ def apply_ws3_trade_samples(candidate, rows, *, db_path, now_epoch):
     raw=_read_rows(db_path, """SELECT exchange_epoch,sequence,price_idr,quote_idr
         FROM m03_ws3_trade_samples WHERE pair=? AND exchange_epoch>=?
         AND exchange_epoch<? AND recorded_epoch<=?
-        ORDER BY exchange_epoch,sequence LIMIT 20001""",(pair,start,end,now_epoch))
-    if not raw or len(raw)>20000:
+        ORDER BY exchange_epoch DESC,sequence DESC LIMIT 20000""",(pair,start,end,now_epoch))
+    if not raw:
         return rows
     trades=[]
-    for stamp,seq,price,quote in raw:
+    for stamp,seq,price,quote in reversed(raw):
         p,q=_decimal(price,positive=True),_decimal(quote,positive=True)
         if type(stamp) is not int or type(seq) is not int or p is None or q is None:
             return rows
