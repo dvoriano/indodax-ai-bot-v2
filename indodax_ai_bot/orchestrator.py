@@ -3737,6 +3737,7 @@ class DailyScalpingOrchestrator:
         ai_shadow = ThreeRoleShadow(
             caller=self._ai_role_caller,
             source_verifier=self._source_verifier,
+            review_claim=self.journal.claim_m04_candidate_evidence_once,
         ).run(trace_id, result)
         self.journal.record_stage_observation(
             trace_id, "M03_M04_PRE_FINAL", reason,
