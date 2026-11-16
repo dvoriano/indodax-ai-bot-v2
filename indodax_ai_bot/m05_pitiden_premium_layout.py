@@ -53,7 +53,7 @@ def _number(n):
 def _volume(n):
     if n is None:
         return "N/A"
-    for unit, suffix in ((10**12, "T"), (10**9, "M"), (10**6, "jt"),
+    for unit, suffix in ((10**12, "T"), (10**9, " miliar"), (10**6, "jt"),
                          (1000, "rb")):
         if n >= unit:
             return _number((n/Decimal(unit)).quantize(
@@ -401,6 +401,18 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     daily = _percent(rows[-1]["change"]) if rows[-1]["change"] is not None else "—"
     known = sum(r["change"] is not None for r in rows)
     bar = "🟩"*green+"⬜"*(8-green)
+    sample_text = None
+    micro = candidate.get("microstructure_observation")
+    if (source_kind == "WS3" and isinstance(micro, dict)
+            and micro.get("status") == "PARTIAL_SOURCE_OBSERVATION"
+            and micro.get("source_malformed") is False
+            and micro.get("trade_activity_observed") is True
+            and type(micro.get("source_capture_epoch")) is int
+            and 0 <= now_epoch-micro["source_capture_epoch"] <= 90):
+        buy = _decimal(micro.get("source_reported_buy_idr"))
+        sell = _decimal(micro.get("source_reported_sell_idr"))
+        if buy is not None and sell is not None:
+            sample_text = "Trade sample · Rp" + _number(buy+sell) + " (partial)"
     lines = [
         f"📡 <b>PITIDEN RADAR</b> · {escape(time)} WIB",
         f"<b>{escape(pair)} · Rp{escape(current)}</b>  <b>{escape(daily)}</b> (24h)",
@@ -411,6 +423,7 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         f"{bar} <b>Green {green}/8</b>",
         escape(f"Momentum {_momentum(rows)} · Spread {spread_text}"),
         escape(context),
+        *([escape(sample_text)] if sample_text is not None else []),
         f"<i>{known}/8 returns observed · ~ sampled · — unavailable</i>",
         "<i>Close/Vol in IDR · 24h rolling · WATCH · Not BUY</i>",
         "<i>AI/G1 unverified</i>",
