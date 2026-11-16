@@ -2300,6 +2300,46 @@ class DailyScalpingOrchestrator:
                         "entry_policy":assessment}}
         return base
 
+    def _read_m09_observed_book(self, *, pair: str, now: int,
+            not_before: int, source_db=None):
+        """Reuse original M03 minute book read, with no connection to exchange."""
+        from .m05_radar_momentum_nonlive import (
+            DEFAULT_DB, _owned_private_regular, _ws3_micro_observation,
+        )
+        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
+        if (not _owned_private_regular(path)
+                or path.resolve()==Path(self.journal._db_path).resolve()):
+            return None
+        try:
+            with sqlite3.connect(path.absolute().as_uri()+"?mode=ro",
+                                 uri=True,timeout=2) as con:
+                con.execute("PRAGMA query_only=ON")
+                row=con.execute(
+                    "SELECT pair,minute_epoch,observed_local_epoch,"
+                    "trade_frames,source_buy_count,source_sell_count,"
+                    "source_buy_idr,source_sell_idr,last_trade_epoch,"
+                    "trade_offset,trade_gap_observed,trade_truncated,"
+                    "book_offset,book_local_epoch,best_bid_idr,best_ask_idr,"
+                    "spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,"
+                    "book_imbalance_top5_ratio,source_malformed "
+                    "FROM m03_ws_microstructure_watch_minute "
+                    "WHERE pair=? ORDER BY minute_epoch DESC LIMIT 1",
+                    (pair,),
+                ).fetchone()
+        except (sqlite3.Error,OSError,ValueError):
+            return None
+        if (not row or type(row[1]) is not int or row[1]%60
+                or type(row[2]) is not int or type(row[13]) is not int
+                or not not_before<=row[13]<=row[2]<=now
+                or not 0<=now-row[13]<=30
+                or not row[1]<=row[2]<row[1]+60):
+            return None
+        obs=_ws3_micro_observation(row,now=now,source_minute=row[1])
+        if (obs.get("orderbook_snapshot_observed") is not True
+                or obs.get("source_malformed") is not False):
+            return None
+        return obs
+
     def review_m09_paper_observed_market_once(self, *, paper_id: str,
             sell_fee_pct: Decimal, slippage_pct: Decimal,
             now_epoch: int | None = None, source_db=None) -> dict:
@@ -2309,9 +2349,6 @@ class DailyScalpingOrchestrator:
         or maker queue/fill receipt. A bid mark times quantity is an estimate,
         not a realizable VWAP. Never synthesize a bid level or a PAPER SELL.
         """
-        from .m05_radar_momentum_nonlive import (
-            DEFAULT_DB, _owned_private_regular, _ws3_micro_observation,
-        )
         from .m08_strategy_a_nonlive import STOP_NET_PCT, MIN_PROFIT_IDR
         self.settings.require_m01_safety()
         now=int(time.time()) if now_epoch is None else now_epoch
@@ -2340,37 +2377,9 @@ class DailyScalpingOrchestrator:
             "paper_net_mark_roi_percent":None,
             "paper_exit_reference":None,
         }
-        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
-        if (not _owned_private_regular(path)
-                or path.resolve()==Path(self.journal._db_path).resolve()):
-            return base
-        try:
-            with sqlite3.connect(path.absolute().as_uri()+"?mode=ro",
-                                 uri=True,timeout=2) as con:
-                con.execute("PRAGMA query_only=ON")
-                row=con.execute(
-                    "SELECT pair,minute_epoch,observed_local_epoch,"
-                    "trade_frames,source_buy_count,source_sell_count,"
-                    "source_buy_idr,source_sell_idr,last_trade_epoch,"
-                    "trade_offset,trade_gap_observed,trade_truncated,"
-                    "book_offset,book_local_epoch,best_bid_idr,best_ask_idr,"
-                    "spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,"
-                    "book_imbalance_top5_ratio,source_malformed "
-                    "FROM m03_ws_microstructure_watch_minute "
-                    "WHERE pair=? ORDER BY minute_epoch DESC LIMIT 1",
-                    (pair,),
-                ).fetchone()
-        except (sqlite3.Error,OSError,ValueError):
-            return base
-        if (not row or type(row[1]) is not int or row[1]%60
-                or type(row[2]) is not int or type(row[13]) is not int
-                or not lot["buy_epoch"]<=row[13]<=row[2]<=now
-                or not 0<=now-row[13]<=30
-                or not row[1]<=row[2]<row[1]+60):
-            return base
-        obs=_ws3_micro_observation(row,now=now,source_minute=row[1])
-        if (obs.get("orderbook_snapshot_observed") is not True
-                or obs.get("source_malformed") is not False):
+        obs=self._read_m09_observed_book(
+            pair=pair,now=now,not_before=lot["buy_epoch"],source_db=source_db)
+        if obs is None:
             return base
         bid=Decimal(obs["best_bid_idr"])
         gross=lot["remaining_qty"]*bid
@@ -2397,8 +2406,8 @@ class DailyScalpingOrchestrator:
         return {
             **base,"status":"M09_PAPER_OBSERVED_BOOK_MARK_REVIEW",
             "paper_market_book_observed":True,
-            "paper_book_epoch":row[13],
-            "paper_book_age_seconds":now-row[13],
+            "paper_book_epoch":obs["orderbook_locally_observed_epoch"],
+            "paper_book_age_seconds":now-obs["orderbook_locally_observed_epoch"],
             "paper_best_bid_idr":str(bid),
             "paper_best_ask_idr":obs["best_ask_idr"],
             "paper_bid_depth_top5_idr":obs["bid_depth_top5_idr"],
@@ -2408,6 +2417,225 @@ class DailyScalpingOrchestrator:
             "paper_friction_is_modeled_not_account_fee":True,
             "paper_mark_is_not_executable_vwap":True,
         }
+
+    def step_m09_managed_paper_cycle_once(self, *, seed_idr: Decimal,
+            buy_fee_pct: Decimal, maker_sell_fee_pct: Decimal,
+            taker_sell_fee_pct: Decimal, slippage_pct: Decimal,
+            depth_fraction_pct: Decimal, trailing_pct: Decimal,
+            now_epoch: int | None = None, source_db=None) -> dict:
+        """One atomic virtual order/position step on the existing PAPER journal.
+
+        Explicit quote-cross + aggregate-depth haircut MODEL, not a fill
+        simulator calibrated against real orders. Pending maker order waits
+        for a later quote crossing the limit; partial BUY cancels remainder.
+        Partial SELL retains the position. No exchange or AI transport.
+        """
+        from decimal import ROUND_DOWN
+        from .m05_radar_momentum_nonlive import DEFAULT_DB
+        from .m08_strategy_a_nonlive import STOP_NET_PCT, MIN_PROFIT_IDR
+        from .journal import DecisionConflictError
+        self.settings.require_m01_safety()
+        now=int(time.time()) if now_epoch is None else now_epoch
+        self.journal._m09_paper_epoch(now)
+        source=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
+        if source.resolve()==Path(self.journal._db_path).resolve():
+            raise ValueError("M09_PAPER_SOURCE_WALLET_COLLISION")
+        amounts=(seed_idr,buy_fee_pct,maker_sell_fee_pct,taker_sell_fee_pct,
+                 slippage_pct,depth_fraction_pct,trailing_pct)
+        if (any(type(v) is not Decimal or not v.is_finite() for v in amounts)
+                or not 0<seed_idr<Decimal("1e18")
+                or any(not 0<=v<5 for v in amounts[1:5])
+                or not 0<depth_fraction_pct<=10 or not 0<trailing_pct<=10):
+            raise ValueError("M09_PAPER_AUTO_CONFIG_INVALID")
+        config=[str(v.normalize()) for v in amounts]+[str(source.absolute())]
+        quantum=Decimal("0.00000001")
+        def size_at_most(amount,price):
+            return (amount/price).quantize(quantum,rounding=ROUND_DOWN)
+        def book(pair,after):
+            return self._read_m09_observed_book(
+                pair=pair,now=now,not_before=after+1,source_db=source)
+        with self.journal._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            # Lazy creation ONLY in an isolated managed PAPER wallet.
+            con.execute("CREATE TABLE IF NOT EXISTS m09_paper_auto_state ("
+                        "id INTEGER PRIMARY KEY CHECK(id=1), state_json TEXT NOT NULL)")
+            row=con.execute("SELECT state_json FROM m09_paper_auto_state WHERE id=1").fetchone()
+            buys=con.execute("SELECT paper_id,buy_qty,buy_price_idr,buy_all_in_fee_idr "
+                             "FROM m09_paper_simulated_buys").fetchall()
+            sells=con.execute("SELECT paper_id,sell_qty,sell_price_idr,sell_all_in_fee_idr,"
+                              "incremental_slippage_idr FROM m09_paper_simulated_sells").fetchall()
+            if row is None:
+                if buys or sells:
+                    raise DecisionConflictError("M09_PAPER_AUTO_REQUIRES_EMPTY_WALLET")
+                state=dict(config=config,position=None,pending=None,last_tick=0,
+                           last_book=0,high_roi=None,protective=False)
+            else:
+                state=json.loads(row[0])
+                if state.get("config")!=config:
+                    raise DecisionConflictError("M09_PAPER_AUTO_CONFIG_CHANGED")
+            if type(state["last_tick"]) is not int or now<state["last_tick"]:
+                raise DecisionConflictError("M09_PAPER_AUTO_CLOCK_REVERSED")
+            cash=seed_idr
+            remaining={}
+            for pid,q,p,f in buys:
+                qty,price,fee=map(Decimal,(q,p,f))
+                if (not pid.startswith("paper_auto_") or any(not x.is_finite()
+                        for x in (qty,price,fee)) or qty<=0 or price<=0 or fee<0):
+                    raise DecisionConflictError("M09_PAPER_AUTO_RECEIPT_INVALID")
+                cash-=qty*price+fee
+                remaining[pid]=qty
+            for pid,q,p,f,sl in sells:
+                qty,price,fee,slip=map(Decimal,(q,p,f,sl))
+                if (pid not in remaining or any(not x.is_finite()
+                        for x in (qty,price,fee,slip)) or qty<=0 or price<=0
+                        or fee<0 or slip<0 or fee+slip>qty*price):
+                    raise DecisionConflictError("M09_PAPER_AUTO_RECEIPT_INVALID")
+                remaining[pid]-=qty
+                cash+=qty*price-fee-slip
+            open_ids=[pid for pid,q in remaining.items() if q>0]
+            pid=state["position"]
+            if (cash<0 or any(q<0 for q in remaining.values())
+                    or open_ids!=([pid] if pid else [])):
+                raise DecisionConflictError("M09_PAPER_AUTO_WALLET_MISMATCH")
+            status="M09_PAPER_AUTO_WAIT"
+            receipt=None
+            note=None
+            pending=state["pending"]
+            if now==state["last_tick"]:
+                status="M09_PAPER_AUTO_TICK_REPLAY"
+            elif pid is None:
+                if pending is not None:
+                    if pending["side"]!="BUY":
+                        raise DecisionConflictError("M09_PAPER_AUTO_PENDING_MISMATCH")
+                    if now-pending["created"]>=300:
+                        state["pending"]=None
+                        status="M09_PAPER_AUTO_BUY_EXPIRED"
+                    else:
+                        obs=book(pending["pair"],pending["created"])
+                        limit=Decimal(pending["limit"])
+                        if obs and Decimal(obs["best_ask_idr"])<=limit:
+                            # Haircut aggregate ask depth, never infer L1 size.
+                            cap=Decimal(obs["ask_depth_top5_idr"])*depth_fraction_pct/100
+                            desired=size_at_most(cash,limit*(1+buy_fee_pct/100))
+                            qty=min(desired,size_at_most(cap,limit))
+                            if qty>0:
+                                fee=qty*limit*buy_fee_pct/100
+                                stamp=obs["orderbook_locally_observed_epoch"]
+                                pid="paper_auto_"+str(pending["created"])
+                                receipt=self.journal.record_m09_paper_buy_offline(
+                                    paper_id=pid,symbol=pending["pair"][:-4].upper()+"IDR",
+                                    buy_qty=qty,buy_price_idr=limit,buy_all_in_fee_idr=fee,
+                                    buy_epoch=stamp,_paper_con=con)
+                                cash-=qty*limit+fee
+                                state.update(position=pid,pending=None,last_book=stamp,
+                                             high_roi=None,protective=False)
+                                status=("M09_PAPER_AUTO_BUY_PARTIAL_REMAINDER_CANCELLED"
+                                        if qty<desired else "M09_PAPER_AUTO_BUY_FILLED")
+                        if receipt is None:
+                            status="M09_PAPER_AUTO_BUY_PENDING"
+                elif cash>0:
+                    found=self.discover_m09_paper_entry_reference_once(
+                        now_epoch=now,source_db=source)
+                    entry=found.get("paper_entry_reference")
+                    if entry and entry["observed_epoch"]>state["last_book"]:
+                        state["pending"]=dict(side="BUY",pair=entry["pair"],
+                                              limit=entry["maker_limit_price_idr"],
+                                              created=now)
+                        status="M09_PAPER_AUTO_BUY_PENDING"
+                    else:
+                        status="M09_PAPER_AUTO_DISCOVER_WAIT"
+            else:
+                # Existing read helper uses a separate committed snapshot;
+                # this transaction serializes writes before policy review.
+                lot=self.journal.read_m09_open_paper_position_offline(
+                    paper_id=pid,observed_epoch=now)
+                pair=lot["symbol"][:-3].lower()+"_idr"
+                obs=book(pair,max(state["last_book"],lot["buy_epoch"]))
+                status="M09_PAPER_AUTO_POSITION_WAIT_BOOK"
+                if obs:
+                    stamp=obs["orderbook_locally_observed_epoch"]
+                    state["last_book"]=stamp
+                    qty=lot["remaining_qty"]
+                    cost=lot["remaining_cost_idr"]
+                    bid,ask=Decimal(obs["best_bid_idr"]),Decimal(obs["best_ask_idr"])
+                    taker_factor=1-(taker_sell_fee_pct+slippage_pct)/100
+                    maker_factor=1-maker_sell_fee_pct/100
+                    full_profit=qty*bid*taker_factor-cost
+                    roi=100*full_profit/cost
+                    high=roi if state["high_roi"] is None else max(roi,Decimal(state["high_roi"]))
+                    state["high_roi"]=str(high)
+                    phase=ScalpingPolicy().assess_position_holding_time(
+                        actual_buy_fill_epoch=lot["buy_epoch"],observed_epoch=now).phase
+                    if roi<=STOP_NET_PCT:
+                        state["protective"]=True
+                        note="STOP_LOSS"
+                    elif high>=2 and high-roi>=trailing_pct:
+                        state["protective"]=True
+                        note="TRAILING_STOP"
+                    elif phase in ("TIME_STOP_PROTECTIVE_REVIEW","EXTENDED_POSITION_RISK_REVIEW"):
+                        state["protective"]=True
+                        note="TIME_STOP"
+                    if state["protective"]:
+                        note=note or "PROTECTIVE_LATCH"
+                        state["pending"]=None
+                    spread=Decimal(obs["spread_bps"])
+                    price=None
+                    is_maker=False
+                    if state["protective"] or (roi>=8 and full_profit>=MIN_PROFIT_IDR
+                                               and spread<=50):
+                        price=bid
+                        if not state["protective"]:
+                            note="T3" if roi>=11 else "T2"
+                        state["pending"]=None
+                    elif pending and pending["side"]=="SELL" and stamp>pending["created"] \
+                            and bid>=Decimal(pending["limit"]):
+                        price=Decimal(pending["limit"])
+                        is_maker=True
+                        note="T1"
+                    elif pending is None and (qty*ask*maker_factor-cost>=MIN_PROFIT_IDR
+                                               and qty*ask*maker_factor>=cost*Decimal("1.02")):
+                        state["pending"]=dict(side="SELL",pair=pair,limit=str(ask),created=now)
+                        status="M09_PAPER_AUTO_T1_PENDING"
+                    else:
+                        status="M09_PAPER_AUTO_HOLD"
+                    if price is not None:
+                        cap=Decimal(obs["bid_depth_top5_idr"])*depth_fraction_pct/100
+                        exit_qty=min(qty,size_at_most(cap,price))
+                        gross=exit_qty*price
+                        fee=gross*(maker_sell_fee_pct if is_maker else taker_sell_fee_pct)/100
+                        slip=Decimal(0) if is_maker else gross*slippage_pct/100
+                        profit=gross-fee-slip-cost*exit_qty/qty
+                        minimum_roi=Decimal(11 if note=="T3" else 8 if note=="T2" else 2)
+                        if exit_qty>0 and (state["protective"] or (
+                                profit>=MIN_PROFIT_IDR
+                                and profit>=cost*exit_qty/qty*minimum_roi/100)):
+                            receipt=self.journal.record_m09_paper_sell_offline(
+                                paper_id=pid,paper_exit_id="pexit_auto_"+str(stamp),
+                                sell_qty=exit_qty,sell_price_idr=price,
+                                sell_all_in_fee_idr=fee,incremental_slippage_idr=slip,
+                                sell_epoch=stamp,_paper_con=con)
+                            cash+=gross-fee-slip
+                            closed=receipt["status"]=="M09_PAPER_CLOSED"
+                            if closed:
+                                state.update(position=None,pending=None,high_roi=None,protective=False)
+                            status="M09_PAPER_AUTO_SELL_CLOSED" if closed else "M09_PAPER_AUTO_SELL_PARTIAL"
+                        else:
+                            status="M09_PAPER_AUTO_EXIT_WAIT_DEPTH_OR_NET_TARGET"
+            state["last_tick"]=now
+            con.execute("INSERT INTO m09_paper_auto_state(id,state_json) VALUES(1,?) "
+                        "ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json",
+                        (json.dumps(state,sort_keys=True),))
+            return {
+                **self.journal._m09_paper_source_only(),"status":status,
+                "paper_virtual_free_idr":str(cash),
+                "paper_position_id":state["position"],
+                "paper_pending_order":state["pending"],
+                "paper_modeled_receipt":receipt,"paper_exit_reason":note,
+                "paper_fill_model":"QUOTE_CROSS_AND_AGGREGATE_DEPTH_HAIRCUT",
+                "paper_fill_depth_verified":False,
+                "paper_ai_review_verified":False,"paper_source_g1_verified":False,
+                "paper_quantity_precision_is_modeled":True,
+            }
 
     def run_m09_original_paper_cycle_offline_once(self, *,
             action: str, details: dict,
@@ -2452,6 +2680,8 @@ class DailyScalpingOrchestrator:
             result=self.review_m09_paper_observed_market_once(**details)
         elif action == "DISCOVER":
             result=self.discover_m09_paper_entry_reference_once(**details)
+        elif action == "AUTO_STEP":
+            result=self.step_m09_managed_paper_cycle_once(**details)
         elif action == "SUMMARY":
             result=self.journal.review_m09_paper_pnl_offline(**details)
         else:

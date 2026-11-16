@@ -233,6 +233,84 @@ class OriginalM09VirtualPaper(unittest.TestCase):
                              "M09_PAPER_MONITOR_EXISTING_POSITION")
             self.assertEqual(read.call_count,1)
 
+    def test_managed_paper_buys_partial_sells_recycles_idr_after_restart(self):
+        cfg=dict(seed_idr=D("1000000"),buy_fee_pct=D("0.2"),
+                 maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
+                 slippage_pct=D("0.1"),depth_fraction_pct=D("5"),
+                 trailing_pct=D("2"))
+        def discover(now_epoch,source_db):
+            return {"paper_entry_reference":{
+                "pair":"xrp_idr","maker_limit_price_idr":"1000",
+                "observed_epoch":now_epoch}}
+        books=[]
+        def read(**kw):
+            if not books:
+                return None
+            row=books[-1]
+            return row if kw["not_before"]<=row["orderbook_locally_observed_epoch"]<=kw["now"] else None
+        def snap(t,bid,ask,bid_depth,ask_depth):
+            books.append(dict(orderbook_locally_observed_epoch=t,
+                              best_bid_idr=str(bid),best_ask_idr=str(ask),
+                              bid_depth_top5_idr=str(bid_depth),
+                              ask_depth_top5_idr=str(ask_depth),
+                              spread_bps="15"))
+        def step(t,**overrides):
+            app=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+            with patch.object(app,"discover_m09_paper_entry_reference_once",
+                              side_effect=discover),patch.object(
+                              app,"_read_m09_observed_book",side_effect=read):
+                report=app.run_m09_original_paper_cycle_offline_once(
+                    action="AUTO_STEP",details={**cfg,**overrides,
+                                "now_epoch":t,"source_db":self.db.parent/"m03.sqlite"})
+                self.check_isolation(report)
+                return report["paper"]
+        start=BUY_EPOCH
+        self.assertEqual(step(start)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        snap(start,999,1000,2000000,2000000)
+        self.assertEqual(step(start+1)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        self.assertEqual(step(start+1)["status"],"M09_PAPER_AUTO_TICK_REPLAY")
+        snap(start+2,998,999,2000000,2000000)
+        buy=step(start+2)
+        self.assertEqual(buy["status"],"M09_PAPER_AUTO_BUY_PARTIAL_REMAINDER_CANCELLED")
+        self.assertEqual(D(buy["paper_virtual_free_idr"]),D("899800"))
+        self.assertEqual(D(buy["paper_modeled_receipt"]["paper_buy_qty"]),D("100"))
+        snap(start+3,1300,1302,1300000,2000000)
+        partial=step(start+3)
+        self.assertEqual(partial["status"],"M09_PAPER_AUTO_SELL_PARTIAL")
+        self.assertEqual(partial["paper_exit_reason"],"T3")
+        self.assertEqual(D(partial["paper_modeled_receipt"]["paper_remaining_qty"]),D("50"))
+        no_repeat=step(start+4)
+        self.assertEqual(no_repeat["status"],"M09_PAPER_AUTO_POSITION_WAIT_BOOK")
+        snap(start+5,1300,1302,5000000,2000000)
+        closed=step(start+5)
+        self.assertEqual(closed["status"],"M09_PAPER_AUTO_SELL_CLOSED")
+        self.assertIsNone(closed["paper_position_id"])
+        self.assertEqual(D(closed["paper_virtual_free_idr"]),D("1029280"))
+        self.assertEqual(D(self.summary()["paper"]["paper_net_pnl_idr_reference"]),D("29280"))
+        self.assertEqual(step(start+6)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        with self.assertRaisesRegex(DecisionConflictError,"M09_PAPER_AUTO_CONFIG_CHANGED"):
+            step(start+7,seed_idr=D("2000000"))
+        with self.assertRaisesRegex(DecisionConflictError,"M09_PAPER_AUTO_WALLET_MANAGED"):
+            self.buy()
+
+    def test_managed_paper_pending_expiry_no_fill(self):
+        cfg=dict(seed_idr=D("500000"),buy_fee_pct=D("0.2"),
+                 maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
+                 slippage_pct=D("0.1"),depth_fraction_pct=D("5"),
+                 trailing_pct=D("2"))
+        result={"paper_entry_reference":{"pair":"xrp_idr",
+                    "maker_limit_price_idr":"1000","observed_epoch":BUY_EPOCH}}
+        with patch.object(self.app,"discover_m09_paper_entry_reference_once",
+                          return_value=result),patch.object(
+                          self.app,"_read_m09_observed_book",return_value=None):
+            a=self.app.step_m09_managed_paper_cycle_once(**cfg,now_epoch=BUY_EPOCH)
+            b=self.app.step_m09_managed_paper_cycle_once(**cfg,now_epoch=BUY_EPOCH+300)
+        self.assertEqual(a["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        self.assertEqual(b["status"],"M09_PAPER_AUTO_BUY_EXPIRED")
+        self.assertIsNone(b["paper_pending_order"])
+        self.assertEqual(D(b["paper_virtual_free_idr"]),D("500000"))
+        self.assertEqual(self.summary()["paper"]["paper_buy_count"],0)
+
     def test_loss_accepted_on_paper_protection_does_not_stop_or_buy(self):
         self.buy()
         loss=self.sell(sell_price_idr=D("24000"),
