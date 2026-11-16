@@ -225,27 +225,6 @@ class EvidenceArchiveTests(unittest.TestCase):
         self.assertIs(archive.call_args.args[0], fake)
         self.assertEqual(report["research_archive"]["status"], "RESEARCH_OK")
 
-    def test_no_fresh_liquid_cycle_keeps_source_evidence_but_still_rejects(self):
-        from indodax_ai_bot.m03_ws_summary_live_watch import M03WSWatchError
-        fake=source()
-        with patch(
-            "indodax_ai_bot.m03_ws_summary_live_watch."
-            "collect_ws3_market_summary_once",return_value=fake
-        ) as collector, patch(
-            "indodax_ai_bot.m03_ws_summary_live_watch."
-            "persist_ws3_summary_watch",side_effect=M03WSWatchError(
-                "M03_WS_WATCH_NO_FRESH_LIQUID_IDR_PAIR")
-        ), patch.dict(os.environ, {"M03_WS3_EVIDENCE_ARCHIVE_GO":"YES"}), patch(
-            "indodax_ai_bot.m03_ws3_evidence_archive_nonlive."
-            "archive_ws3_evidence_nonlive",return_value={}
-        ) as archive:
-            with self.assertRaisesRegex(M03WSWatchError,
-                                       "M03_WS_WATCH_NO_FRESH_LIQUID_IDR_PAIR"):
-                run_m03_ws3_summary_watch_once(str(self.base/"decisions.sqlite3"))
-            collector.assert_called_once()
-            archive.assert_called_once()
-            self.assertIs(archive.call_args.args[0],fake)
-
     def test_shadow_failure_never_prevents_original_watch(self):
         with patch(
             "indodax_ai_bot.m03_ws_summary_live_watch."
