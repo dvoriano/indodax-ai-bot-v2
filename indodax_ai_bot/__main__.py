@@ -1567,21 +1567,17 @@ def main(argv: list[str] | None = None) -> int:
                         or not Path(args.m07_runtime_funding_file).is_absolute()):
                     raise M07PreflightBlocked("M07_RUNTIME_FUNDING_FILE_REQUIRED")
                 raw = _owner_private_file(args.m07_runtime_funding_file)
-                keys = {
-                    "requested_ticket_ceiling_idr",
-                    "new_floki_sell_rebuy_hold_idr",
-                    "new_pepe_sell_rebuy_hold_idr",
-                    "commitments_not_locked_idr",
-                    "max_spread_bps",
-                }
-                if type(raw) is not dict or set(raw) != keys:
+                from .m07_main_idr_sizing import valid_main_funding_schema
+                if not valid_main_funding_schema(raw):
                     raise M07PreflightBlocked("M07_RUNTIME_FUNDING_SCHEMA_INVALID")
+                keys = set(raw)
                 if any(type(raw[k]) is not str or len(raw[k]) > 40
                        or not raw[k].isascii() for k in keys):
                     raise M07PreflightBlocked("M07_RUNTIME_FUNDING_AMOUNT_INVALID")
                 funding = {k: Decimal(raw[k]) for k in keys}
                 if (any(not v.is_finite() or v < 0 for v in funding.values())
-                        or funding["requested_ticket_ceiling_idr"] <= 0
+                        or ("requested_ticket_ceiling_idr" in funding
+                            and funding["requested_ticket_ceiling_idr"] <= 0)
                         or funding["max_spread_bps"] > 500):
                     raise M07PreflightBlocked("M07_RUNTIME_FUNDING_AMOUNT_INVALID")
                 credentials_path = _existing_v2_credentials()
@@ -1742,23 +1738,17 @@ def main(argv: list[str] | None = None) -> int:
                         or not args.m07_main_sizing_file.startswith("/")):
                     raise M07PreflightBlocked("M07_MAIN_SIZING_FILE_REQUIRED")
                 raw = _owner_private_file(args.m07_main_sizing_file)
-                required = {
-                    "public_candidate", "account_snapshot",
-                    "owner_main_source_classified", "requested_ticket_ceiling_idr",
-                    "new_floki_sell_rebuy_hold_idr",
-                    "new_pepe_sell_rebuy_hold_idr",
-                    "commitments_not_locked_idr", "max_spread_bps",
-                }
-                if (type(raw) is not dict or set(raw) != required
+                from .m07_main_idr_sizing import valid_main_funding_schema
+                required = {"public_candidate", "account_snapshot",
+                            "owner_main_source_classified"}
+                if (type(raw) is not dict or not required.issubset(raw)
+                        or not valid_main_funding_schema(
+                            {k:v for k,v in raw.items() if k not in required})
                         or type(raw["public_candidate"]) is not dict
                         or type(raw["account_snapshot"]) is not dict
                         or type(raw["owner_main_source_classified"]) is not bool):
                     raise M07PreflightBlocked("M07_MAIN_SIZING_FILE_SCHEMA_INVALID")
-                numeric = (
-                    "requested_ticket_ceiling_idr", "new_floki_sell_rebuy_hold_idr",
-                    "new_pepe_sell_rebuy_hold_idr",
-                    "commitments_not_locked_idr", "max_spread_bps",
-                )
+                numeric = set(raw) - required
                 if any(type(raw[k]) is not str or len(raw[k]) > 40
                        or not raw[k].isascii() for k in numeric):
                     raise M07PreflightBlocked("M07_MAIN_SIZING_AMOUNT_INVALID")
