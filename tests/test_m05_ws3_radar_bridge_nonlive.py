@@ -467,6 +467,28 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertEqual(out["messages_sent"],1)
         self.assertIn("UAI/IDR",api.calls[0][1]["text"])
 
+    def test_premium_spacing_15_seconds_between_pairs_not_same_evidence(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
+        self.seed()
+        self.add("other_idr",-2,100,500000000,60)
+        self.add("other_idr",-1,102,500030000,61)
+        api=FakeTelegram()
+        def candles(c,**kw):
+            return {t:(Decimal("100"),Decimal("101"))
+                    for label,a,b in interval_windows(c["observed_epoch"])
+                    if label!="24h" for t in range(a,b,60)}
+        with patch.dict("os.environ",{"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            side_effect=candles):
+            self.assertEqual(self.send(api)["messages_sent"],1)
+            self.assertEqual(self.send(api,now=NOW+14)["messages_sent"],0)
+            self.assertEqual(self.send(api,now=NOW+15)["messages_sent"],1)
+            self.assertEqual(self.send(api,now=NOW+30)["messages_sent"],0)
+        self.assertEqual(len(api.calls),2)
+        self.assertIn("OTHER/IDR",api.calls[0][1]["text"])
+        self.assertIn("UAI/IDR",api.calls[1][1]["text"])
+
     def test_premium_sparse_data_or_render_failure_never_claim_or_send(self):
         self.seed()
         api=FakeTelegram()
