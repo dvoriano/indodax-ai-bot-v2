@@ -2300,6 +2300,46 @@ class DailyScalpingOrchestrator:
                         "entry_policy":assessment}}
         return base
 
+    def _read_m09_observed_book(self, *, pair: str, now: int,
+            not_before: int, source_db=None):
+        """Reuse original M03 minute book read, with no connection to exchange."""
+        from .m05_radar_momentum_nonlive import (
+            DEFAULT_DB, _owned_private_regular, _ws3_micro_observation,
+        )
+        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
+        if (not _owned_private_regular(path)
+                or path.resolve()==Path(self.journal._db_path).resolve()):
+            return None
+        try:
+            with sqlite3.connect(path.absolute().as_uri()+"?mode=ro",
+                                 uri=True,timeout=2) as con:
+                con.execute("PRAGMA query_only=ON")
+                row=con.execute(
+                    "SELECT pair,minute_epoch,observed_local_epoch,"
+                    "trade_frames,source_buy_count,source_sell_count,"
+                    "source_buy_idr,source_sell_idr,last_trade_epoch,"
+                    "trade_offset,trade_gap_observed,trade_truncated,"
+                    "book_offset,book_local_epoch,best_bid_idr,best_ask_idr,"
+                    "spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,"
+                    "book_imbalance_top5_ratio,source_malformed "
+                    "FROM m03_ws_microstructure_watch_minute "
+                    "WHERE pair=? ORDER BY minute_epoch DESC LIMIT 1",
+                    (pair,),
+                ).fetchone()
+        except (sqlite3.Error,OSError,ValueError):
+            return None
+        if (not row or type(row[1]) is not int or row[1]%60
+                or type(row[2]) is not int or type(row[13]) is not int
+                or not not_before<=row[13]<=row[2]<=now
+                or not 0<=now-row[13]<=30
+                or not row[1]<=row[2]<row[1]+60):
+            return None
+        obs=_ws3_micro_observation(row,now=now,source_minute=row[1])
+        if (obs.get("orderbook_snapshot_observed") is not True
+                or obs.get("source_malformed") is not False):
+            return None
+        return obs
+
     def review_m09_paper_observed_market_once(self, *, paper_id: str,
             sell_fee_pct: Decimal, slippage_pct: Decimal,
             now_epoch: int | None = None, source_db=None) -> dict:
@@ -2309,9 +2349,6 @@ class DailyScalpingOrchestrator:
         or maker queue/fill receipt. A bid mark times quantity is an estimate,
         not a realizable VWAP. Never synthesize a bid level or a PAPER SELL.
         """
-        from .m05_radar_momentum_nonlive import (
-            DEFAULT_DB, _owned_private_regular, _ws3_micro_observation,
-        )
         from .m08_strategy_a_nonlive import STOP_NET_PCT, MIN_PROFIT_IDR
         self.settings.require_m01_safety()
         now=int(time.time()) if now_epoch is None else now_epoch
@@ -2340,37 +2377,9 @@ class DailyScalpingOrchestrator:
             "paper_net_mark_roi_percent":None,
             "paper_exit_reference":None,
         }
-        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
-        if (not _owned_private_regular(path)
-                or path.resolve()==Path(self.journal._db_path).resolve()):
-            return base
-        try:
-            with sqlite3.connect(path.absolute().as_uri()+"?mode=ro",
-                                 uri=True,timeout=2) as con:
-                con.execute("PRAGMA query_only=ON")
-                row=con.execute(
-                    "SELECT pair,minute_epoch,observed_local_epoch,"
-                    "trade_frames,source_buy_count,source_sell_count,"
-                    "source_buy_idr,source_sell_idr,last_trade_epoch,"
-                    "trade_offset,trade_gap_observed,trade_truncated,"
-                    "book_offset,book_local_epoch,best_bid_idr,best_ask_idr,"
-                    "spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,"
-                    "book_imbalance_top5_ratio,source_malformed "
-                    "FROM m03_ws_microstructure_watch_minute "
-                    "WHERE pair=? ORDER BY minute_epoch DESC LIMIT 1",
-                    (pair,),
-                ).fetchone()
-        except (sqlite3.Error,OSError,ValueError):
-            return base
-        if (not row or type(row[1]) is not int or row[1]%60
-                or type(row[2]) is not int or type(row[13]) is not int
-                or not lot["buy_epoch"]<=row[13]<=row[2]<=now
-                or not 0<=now-row[13]<=30
-                or not row[1]<=row[2]<row[1]+60):
-            return base
-        obs=_ws3_micro_observation(row,now=now,source_minute=row[1])
-        if (obs.get("orderbook_snapshot_observed") is not True
-                or obs.get("source_malformed") is not False):
+        obs=self._read_m09_observed_book(
+            pair=pair,now=now,not_before=lot["buy_epoch"],source_db=source_db)
+        if obs is None:
             return base
         bid=Decimal(obs["best_bid_idr"])
         gross=lot["remaining_qty"]*bid
@@ -2397,8 +2406,8 @@ class DailyScalpingOrchestrator:
         return {
             **base,"status":"M09_PAPER_OBSERVED_BOOK_MARK_REVIEW",
             "paper_market_book_observed":True,
-            "paper_book_epoch":row[13],
-            "paper_book_age_seconds":now-row[13],
+            "paper_book_epoch":obs["orderbook_locally_observed_epoch"],
+            "paper_book_age_seconds":now-obs["orderbook_locally_observed_epoch"],
             "paper_best_bid_idr":str(bid),
             "paper_best_ask_idr":obs["best_ask_idr"],
             "paper_bid_depth_top5_idr":obs["bid_depth_top5_idr"],
