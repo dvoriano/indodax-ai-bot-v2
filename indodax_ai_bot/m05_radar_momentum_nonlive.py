@@ -1281,6 +1281,7 @@ def send_one_owner_radar_momentum_nonlive(
                 read_price_references, read_closed_candles,
                 read_native_previous_24h, build_timeframes,
                 eligible_premium_watch, MIN_TURNOVER_24H, count_green,
+                apply_ws3_trade_samples,
             )
             evidence_path = DEFAULT_EVIDENCE_DB if Path(db_path) == DEFAULT_DB else None
             try:
@@ -1302,6 +1303,8 @@ def send_one_owner_radar_momentum_nonlive(
                 if not eligible_premium_watch(candidate, rows):
                     continue
                 green_at_claim = count_green(rows)
+                if source_kind == "WS3":
+                    rows = apply_ws3_trade_samples(candidate, rows, db_path=db_path, now_epoch=now)
                 message = format_pitiden_premium(
                     candidate, refs, source_kind=source_kind,
                     now_epoch=now, rows=rows,

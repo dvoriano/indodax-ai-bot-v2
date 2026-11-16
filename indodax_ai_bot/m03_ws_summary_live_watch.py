@@ -22,7 +22,7 @@ from .m03_ws_summary_offline_contract import (
     MarketSummaryContractError, normalize_documented_market_summary_offline,
 )
 from .scanner import MAIN_EXCLUDED_PAIRS
-from .trade_stream import PUBLIC_TOKEN, WS_URL
+from .trade_stream import PUBLIC_TOKEN, WS_URL, PublicTradeStreamJournal, StreamEvidenceError
 
 _CHANNEL = "market:summary-24h"
 _MIN_TURNOVER_IDR = Decimal("150000000")
@@ -140,7 +140,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     observe_seconds: int = 12,
                                     micro_pairs: tuple[str, ...] = (),
                                     epoch_fn=None,
-                                    micro_autoselect_from_stream: bool = False) -> dict:
+                                    micro_autoselect_from_stream: bool = False,
+                                    trade_journal=None, checkpoint=None) -> dict:
     """Authenticate to OFFICIAL public WS3 and collect documented summary frames.
 
     Socket lifetime is bounded. Source frames/contents are never logged.
@@ -163,6 +164,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
             book_channel(pair)
     except WS3MicrostructureInvalid:
         raise M03WSWatchError("M03_WS_MICRO_PAIRS_INVALID") from None
+    if checkpoint is not None and (not callable(checkpoint) or trade_journal is None):
+        raise M03WSWatchError("M03_WS_CONTINUOUS_SCOPE_INVALID")
     source_epoch = epoch_fn or time.time
     micro = {pair: {
         "pair": pair,
@@ -207,8 +210,122 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         next_micro_subscribe_id = 2
         pending = deque()
         coalesced_frames = 0
+        indexed_pairs = set()
+        recovery_requests = {}
+        failed_trade_channels = set()
+        last_ping_clock=clock() if checkpoint is not None else None
+        last_summary_clock=None
+
+        def subscribe_micro(pair, kind, channel, request_id):
+            params={"channel":channel}
+            if kind=="trade" and trade_journal is not None:
+                subscription=trade_journal.subscription(pair)
+                params=subscription["params"]
+                recovery_requests[request_id]=(
+                    "recover" in params,trade_journal.status(pair).get("stream_status")=="GAP")
+                indexed_pairs.add(pair)
+            sock.send(json.dumps({"method":1,"params":params,"id":request_id}))
+
+        def snapshot():
+            if phase != "OBSERVE":
+                raise M03WSWatchError("M03_WS_WATCH_HANDSHAKE_TIMEOUT")
+            if not observations:
+                raise M03WSWatchError("M03_WS_WATCH_NO_SUMMARY_PUBLICATION")
+            report = {
+                "status": "M03_WS3_PUBLIC_SUMMARY_OBSERVED",
+                "channel": _CHANNEL,
+                "pairs": list(observations.values()),
+                "frames_observed": received_frames,
+                "requested_observation_seconds": observe_seconds,
+                "last_public_offset": last_offset,
+                "public_ws_authentication_observed": True,
+                "not_full_universe_proof": True,
+            }
+            if coalesced_frames:
+                report["coalesced_publication_frames"] = coalesced_frames
+            if micro_pairs or micro_autoselect_from_stream:
+                report["microstructure_selection_source"] = (
+                    "CURRENT_AUTHENTICATED_WS3_SUMMARY"
+                    if micro_autoselect_from_stream else
+                    "PRIOR_M03_MINUTE_ARCHIVE"
+                )
+                report["microstructure_current_liquid_pool_count"] = (
+                    len(in_session_liquid_pairs)
+                )
+                report["microstructure_selected_pairs"] = list(micro)
+                report["microstructure_channels_requested"] = sum(v[0] in micro for v in micro_ids.values())
+                report["microstructure_channels_acknowledged"] = sum(micro_channels[ch][0] in micro for ch in micro_active)
+                report["microstructure_trade_frames_received"] = sum(
+                    state["trade_frames"] for state in micro.values()
+                )
+                report["microstructure_book_snapshots_received"] = sum(
+                    state["book"] is not None for state in micro.values()
+                )
+                report["microstructure_malformed_pair_count"] = sum(
+                    bool(state["source_malformed"]) for state in micro.values()
+                )
+                report["microstructure"] = [{
+                    "pair": pair,
+                    "trade_frames": state["trade_frames"],
+                    "source_buy_count": state["buy_count"]
+                        if state["trade_frames"] else None,
+                    "source_sell_count": state["sell_count"]
+                        if state["trade_frames"] else None,
+                    "source_buy_idr": format(state["buy_idr"], "f")
+                        if state["trade_frames"] else None,
+                    "source_sell_idr": format(state["sell_idr"], "f")
+                        if state["trade_frames"] else None,
+                    "last_trade_epoch": state["last_trade_epoch"],
+                    "trade_offset": state["trade_offset"],
+                    "trade_gap_observed": state["trade_gap_observed"],
+                    "trade_truncated": state["trade_truncated"],
+                    "book": state["book"],
+                    "book_local_epoch": state["book_local_epoch"],
+                    "book_offset": state["book_offset"],
+                    "source_malformed": state["source_malformed"],
+                    "source_coverage_complete": False,
+                    "aggressor_side_verified": False,
+                    "g1_verified": False,
+                    "execution_allowed": False,
+                } for pair, state in micro.items()]
+            if trade_journal is not None:
+                report["indexed_trade_pairs"] = sorted(indexed_pairs)
+                report["indexed_trade_channels_failed"] = len(failed_trade_channels)
+                report["indexed_trade_channels_acknowledged"] = sum(
+                    ch in micro_active and ch not in failed_trade_channels
+                    for ch,(pair,kind) in micro_channels.items() if kind=="trade")
+            return report
+
         while True:
             now = clock()
+            if checkpoint is not None and phase=="OBSERVE" and now-last_ping_clock>=30:
+                sock.send(json.dumps({"method":7,"id":999999}))
+                last_ping_clock=now
+            if (checkpoint is not None and not pending and phase=="OBSERVE"
+                    and now>=deadline):
+                if not observations:
+                    if last_summary_clock is None or now-last_summary_clock>=90:
+                        raise M03WSWatchError("M03_WS_WATCH_NO_FRESH_SUMMARY_PUBLICATION")
+                    deadline=clock()+observe_seconds
+                    continue
+                checkpoint(snapshot())
+                # Keep the authenticated connection and cursor, but reset
+                # only the short microstructure observation counters.
+                if failed_trade_channels:
+                    raise M03WSWatchError("M03_WS_INDEXED_TRADE_RECONNECT_REQUIRED")
+                observations.clear()
+                received_frames=0
+                micro_frame_count=0
+                coalesced_frames=0
+                for state in micro.values():
+                    state.update(trade_frames=0,buy_count=0,sell_count=0,
+                                 buy_idr=Decimal(0),sell_idr=Decimal(0),
+                                 last_trade_epoch=None,seen_sequence=set(),
+                                 trade_gap_observed=False,trade_truncated=False,
+                                 book=None,book_local_epoch=None,book_offset=None,
+                                 source_malformed=False)
+                deadline=clock()+observe_seconds
+                continue
             if not pending and (
                     phase == "AUTH" and now >= auth_deadline
                     or phase == "SUBSCRIBE" and now >= auth_deadline
@@ -271,22 +388,28 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         next_micro_subscribe_id += 1
                         micro_ids[next_micro_subscribe_id] = (pair, kind, channel)
                         micro_channels[channel] = (pair, kind)
-                        sock.send(json.dumps({
-                            "method": 1, "params": {"channel": channel},
-                            "id": next_micro_subscribe_id,
-                        }))
+                        subscribe_micro(pair,kind,channel,next_micro_subscribe_id)
             else:
                 request_id = msg.get("id")
                 if type(request_id) is int and request_id in micro_ids:
                     pair, kind, channel = micro_ids[request_id]
                     ack = msg.get("result")
+                    if request_id in recovery_requests:
+                        recovering,fresh_segment=recovery_requests[request_id]
+                        try:
+                            state=trade_journal.acknowledge(pair,{"id":2,"result":ack},
+                                                           fresh_segment=fresh_segment)
+                            if state.get("stream_status")=="GAP":
+                                failed_trade_channels.add(channel)
+                        except (StreamEvidenceError,ValueError):
+                            failed_trade_channels.add(channel)
                     if (isinstance(ack, dict)
                             and ack.get("recoverable") is True
                             and type(ack.get("offset")) is int
                             and ack["offset"] >= 0):
                         micro_active.add(channel)
                         micro_offsets[channel] = ack["offset"]
-                    else:
+                    elif pair in micro:
                         micro[pair]["source_malformed"] = True
                     continue
                 result = msg.get("result")
@@ -299,10 +422,11 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     pair, kind = micro_channels[channel]
                     # A noisy micro channel must never fabricate metrics or
                     # kill the existing authenticated summary WATCH lane.
-                    micro_frame_count += 1
-                    if micro_frame_count > 600:
-                        micro[pair]["trade_truncated"] = True
-                        continue
+                    if pair in micro:
+                        micro_frame_count += 1
+                        if micro_frame_count > 600 and trade_journal is None:
+                            micro[pair]["trade_truncated"] = True
+                            continue
                     try:
                         parsed = (
                             parse_trade_activity_frame(msg, pair=pair)
@@ -310,9 +434,21 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             parse_orderbook_frame(msg, pair=pair)
                         )
                     except WS3MicrostructureInvalid:
-                        micro[pair]["source_malformed"] = True
+                        if pair in micro:
+                            micro[pair]["source_malformed"] = True
+                        if kind=="trade" and trade_journal is not None:
+                            failed_trade_channels.add(channel)
                         continue
                     off = parsed["offset"]
+                    if kind=="trade" and trade_journal is not None and channel not in failed_trade_channels:
+                        try:
+                            state=trade_journal.ingest(pair,msg)
+                            if state.get("stream_status")=="GAP":
+                                failed_trade_channels.add(channel)
+                        except (StreamEvidenceError,ValueError):
+                            failed_trade_channels.add(channel)
+                    if pair not in micro:
+                        continue
                     last = micro_offsets.get(channel)
                     if last is not None and off <= last:
                         continue
@@ -374,6 +510,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 if last_offset is not None and offset <= last_offset:
                     continue
                 last_offset = offset
+                last_summary_clock=clock() if checkpoint is not None else None
                 received_frames += 1
                 if received_frames > 300:
                     raise M03WSWatchError("M03_WS_WATCH_FRAME_LIMIT")
@@ -427,11 +564,31 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                 micro_ids[next_micro_subscribe_id] = (
                                     pair, kind, micro_channel)
                                 micro_channels[micro_channel] = (pair, kind)
-                                sock.send(json.dumps({
-                                    "method": 1,
-                                    "params": {"channel": micro_channel},
-                                    "id": next_micro_subscribe_id,
-                                }))
+                                subscribe_micro(pair,kind,micro_channel,next_micro_subscribe_id)
+                if checkpoint is not None and len(indexed_pairs)<8:
+                    # Same authenticated summary socket. Keep the original
+                    # two book+trade scouts; add up to eight total trade
+                    # channels from fresh liquid WS3 summaries.
+                    liquid=[]
+                    observed_local_epoch=int(source_epoch())
+                    for sample in parsed["samples"]:
+                        pair=sample["pair"]
+                        if pair in indexed_pairs or pair in MAIN_EXCLUDED_PAIRS:
+                            continue
+                        try:
+                            trade_channel(pair)
+                            turnover=Decimal(sample["volume_24h_idr"])
+                            stamp=sample["observed_exchange_epoch"]
+                            if turnover.is_finite() and turnover>=Decimal("400000000") and 0<=observed_local_epoch-stamp<=90:
+                                liquid.append((-turnover,pair))
+                        except (ValueError,ArithmeticError,TypeError,KeyError):
+                            continue
+                    for _,pair in sorted(set(liquid))[:8-len(indexed_pairs)]:
+                        channel=trade_channel(pair)
+                        next_micro_subscribe_id+=1
+                        micro_ids[next_micro_subscribe_id]=(pair,"trade",channel)
+                        micro_channels[channel]=(pair,"trade")
+                        subscribe_micro(pair,"trade",channel,next_micro_subscribe_id)
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
                     # Multiple publications can share an exchange second.
@@ -445,68 +602,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         observations[row["pair"]] = dict(
                             row, source_public_offset=offset,
                         )
-        if phase != "OBSERVE":
-            raise M03WSWatchError("M03_WS_WATCH_HANDSHAKE_TIMEOUT")
-        if not observations:
-            raise M03WSWatchError("M03_WS_WATCH_NO_SUMMARY_PUBLICATION")
-        report = {
-            "status": "M03_WS3_PUBLIC_SUMMARY_OBSERVED",
-            "channel": _CHANNEL,
-            "pairs": list(observations.values()),
-            "frames_observed": received_frames,
-            "requested_observation_seconds": observe_seconds,
-            "last_public_offset": last_offset,
-            "public_ws_authentication_observed": True,
-            "not_full_universe_proof": True,
-        }
-        if coalesced_frames:
-            report["coalesced_publication_frames"] = coalesced_frames
-        if micro_pairs or micro_autoselect_from_stream:
-            report["microstructure_selection_source"] = (
-                "CURRENT_AUTHENTICATED_WS3_SUMMARY"
-                if micro_autoselect_from_stream else
-                "PRIOR_M03_MINUTE_ARCHIVE"
-            )
-            report["microstructure_current_liquid_pool_count"] = (
-                len(in_session_liquid_pairs)
-            )
-            report["microstructure_selected_pairs"] = list(micro)
-            report["microstructure_channels_requested"] = len(micro_ids)
-            report["microstructure_channels_acknowledged"] = len(micro_active)
-            report["microstructure_trade_frames_received"] = sum(
-                state["trade_frames"] for state in micro.values()
-            )
-            report["microstructure_book_snapshots_received"] = sum(
-                state["book"] is not None for state in micro.values()
-            )
-            report["microstructure_malformed_pair_count"] = sum(
-                bool(state["source_malformed"]) for state in micro.values()
-            )
-            report["microstructure"] = [{
-                "pair": pair,
-                "trade_frames": state["trade_frames"],
-                "source_buy_count": state["buy_count"]
-                    if state["trade_frames"] else None,
-                "source_sell_count": state["sell_count"]
-                    if state["trade_frames"] else None,
-                "source_buy_idr": format(state["buy_idr"], "f")
-                    if state["trade_frames"] else None,
-                "source_sell_idr": format(state["sell_idr"], "f")
-                    if state["trade_frames"] else None,
-                "last_trade_epoch": state["last_trade_epoch"],
-                "trade_offset": state["trade_offset"],
-                "trade_gap_observed": state["trade_gap_observed"],
-                "trade_truncated": state["trade_truncated"],
-                "book": state["book"],
-                "book_local_epoch": state["book_local_epoch"],
-                "book_offset": state["book_offset"],
-                "source_malformed": state["source_malformed"],
-                "source_coverage_complete": False,
-                "aggressor_side_verified": False,
-                "g1_verified": False,
-                "execution_allowed": False,
-            } for pair, state in micro.items()]
-        return report
+        return snapshot()
     except M03WSWatchError:
         raise
     except Exception:
@@ -784,82 +880,114 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
             db_path=Path(db_path), now_epoch=int((now_fn or time.time)()),
         )
         watch_pairs = tuple(selection["pairs"])
+    import os
+    trade_journal = None
+    if micro_enabled and os.environ.get("M03_WS3_TRADE_SAMPLES_GO") == "YES":
+        trade_journal=PublicTradeStreamJournal(db_path,index_m03_samples=True)
+    continuous=os.environ.get("M03_WS3_CONTINUOUS_GO")=="YES"
+    if continuous:
+        if trade_journal is None or any(os.environ.get(k)!=v for k,v in {
+            "INDODAX_TRADING_ENABLED":"NO","INDODAX_ALLOW_LIVE_EXECUTION":"NO",
+            "INDODAX_EXECUTION_MODE":"DRY_RUN"}.items()):
+            raise M03WSWatchError("M03_WS_CONTINUOUS_NONLIVE_FLAGS_REQUIRED")
+
+    def record(source):
+        now = int((now_fn or time.time)())
+        report = persist_ws3_summary_watch(
+            DecisionJournal(db_path), source, now_epoch=now,
+        )
+        if trade_journal is not None:
+            trade_journal.prune_m03_samples(now)
+        # Optional separate research DB, using the SAME already-received WS3
+        # snapshot. Never change original WATCH candidates, trading, or the
+        # original M03 DB's 2h retention. Best-effort evidence must not turn a
+        # successful scanner tick into a failure.
+        import os
+        if os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES":
+            try:
+                from .m03_ws3_evidence_archive_nonlive import (
+                    archive_ws3_evidence_nonlive,
+                )
+                report["research_archive"] = archive_ws3_evidence_nonlive(
+                    source, now_epoch=now,
+                )
+            except Exception:
+                report["research_archive"] = {
+                    "status": "M03_WS3_RESEARCH_ARCHIVE_UNAVAILABLE",
+                    "exchange_requests_added": 0,
+                    "orders_sent": 0,
+                }
+        # Separate opt-in from already-active 72h price archive. Preserve the
+        # original 2h micro table and M03 WATCH behavior. This is local research
+        # evidence only, with no additional WS/REST request or trading authority.
+        if (micro_enabled and
+                os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES"
+                and os.environ.get("M03_WS3_MICRO_72H_ARCHIVE_GO") == "YES"):
+            try:
+                from .m03_ws3_micro_research_archive_nonlive import (
+                    archive_ws3_micro_research_nonlive,
+                )
+                report["research_micro_archive"] = archive_ws3_micro_research_nonlive(
+                    source, now_epoch=now,
+                )
+            except Exception:
+                report["research_micro_archive"] = {
+                    "status": "M03_WS3_MICRO_RESEARCH_ARCHIVE_UNAVAILABLE",
+                    "extra_exchange_requests": 0,
+                    "orders_sent": 0,
+                }
+        if micro_enabled:
+            current_source = source["microstructure_selection_source"]
+            selected = source["microstructure_selected_pairs"]
+            report["microstructure_discovery_status"] = (
+                "M03_MICRO_DISCOVERY_CURRENT_WS3_SELECTED"
+                if current_source == "CURRENT_AUTHENTICATED_WS3_SUMMARY"
+                and selected else selection["status"]
+            )
+            report["microstructure_discovery_pool_count"] = max(
+                selection["fresh_liquid_pair_count"],
+                source["microstructure_current_liquid_pool_count"],
+            )
+            report["microstructure_selected_pairs"] = selected
+            report["microstructure_selection_source"] = current_source
+            report["microstructure_channels_requested"] = (
+                source["microstructure_channels_requested"]
+            )
+            report["microstructure_channels_acknowledged"] = (
+                source["microstructure_channels_acknowledged"]
+            )
+            report["microstructure_trade_frames_received"] = (
+                source["microstructure_trade_frames_received"]
+            )
+            report["microstructure_book_snapshots_received"] = (
+                source["microstructure_book_snapshots_received"]
+            )
+            report["microstructure_malformed_pair_count"] = (
+                source["microstructure_malformed_pair_count"]
+            )
+            report["microstructure_selection_is_telegram_alert"] = False
+        if trade_journal is not None:
+            report["indexed_trade_pairs"]=source.get("indexed_trade_pairs",[])
+            report["indexed_trade_channels_failed"]=source.get("indexed_trade_channels_failed",0)
+            report["indexed_trade_channels_acknowledged"]=source.get("indexed_trade_channels_acknowledged",0)
+        return report
+
+    def on_checkpoint(source):
+        report=record(source)
+        print(json.dumps({"status":"M03_WS3_CONTINUOUS_CHECKPOINT",
+                          "observed_epoch":report["observed_epoch"],
+                          "fresh_liquid_pairs":report["fresh_liquid_main_idr_pairs"],
+                          "indexed_trade_pairs":report.get("indexed_trade_pairs",[]),
+                          "indexed_trade_channels_failed":report.get("indexed_trade_channels_failed",0),
+                          "indexed_trade_channels_acknowledged":report.get("indexed_trade_channels_acknowledged",0),
+                          "execution_allowed":False},sort_keys=True),flush=True)
+
     source = collect_ws3_market_summary_once(
         ws_module=ws_module, monotonic=monotonic,
         observe_seconds=observe_seconds, micro_pairs=watch_pairs,
         epoch_fn=now_fn,
         micro_autoselect_from_stream=(micro_enabled and not watch_pairs),
+        **({"trade_journal":trade_journal} if trade_journal is not None else {}),
+        **({"checkpoint":on_checkpoint} if continuous else {}),
     )
-    now = int((now_fn or time.time)())
-    report = persist_ws3_summary_watch(
-        DecisionJournal(db_path), source, now_epoch=now,
-    )
-    # Optional separate research DB, using the SAME already-received WS3
-    # snapshot. Never change original WATCH candidates, trading, or the
-    # original M03 DB's 2h retention. Best-effort evidence must not turn a
-    # successful scanner tick into a failure.
-    import os
-    if os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES":
-        try:
-            from .m03_ws3_evidence_archive_nonlive import (
-                archive_ws3_evidence_nonlive,
-            )
-            report["research_archive"] = archive_ws3_evidence_nonlive(
-                source, now_epoch=now,
-            )
-        except Exception:
-            report["research_archive"] = {
-                "status": "M03_WS3_RESEARCH_ARCHIVE_UNAVAILABLE",
-                "exchange_requests_added": 0,
-                "orders_sent": 0,
-            }
-    # Separate opt-in from already-active 72h price archive. Preserve the
-    # original 2h micro table and M03 WATCH behavior. This is local research
-    # evidence only, with no additional WS/REST request or trading authority.
-    if (micro_enabled and
-            os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES"
-            and os.environ.get("M03_WS3_MICRO_72H_ARCHIVE_GO") == "YES"):
-        try:
-            from .m03_ws3_micro_research_archive_nonlive import (
-                archive_ws3_micro_research_nonlive,
-            )
-            report["research_micro_archive"] = archive_ws3_micro_research_nonlive(
-                source, now_epoch=now,
-            )
-        except Exception:
-            report["research_micro_archive"] = {
-                "status": "M03_WS3_MICRO_RESEARCH_ARCHIVE_UNAVAILABLE",
-                "extra_exchange_requests": 0,
-                "orders_sent": 0,
-            }
-    if micro_enabled:
-        current_source = source["microstructure_selection_source"]
-        selected = source["microstructure_selected_pairs"]
-        report["microstructure_discovery_status"] = (
-            "M03_MICRO_DISCOVERY_CURRENT_WS3_SELECTED"
-            if current_source == "CURRENT_AUTHENTICATED_WS3_SUMMARY"
-            and selected else selection["status"]
-        )
-        report["microstructure_discovery_pool_count"] = max(
-            selection["fresh_liquid_pair_count"],
-            source["microstructure_current_liquid_pool_count"],
-        )
-        report["microstructure_selected_pairs"] = selected
-        report["microstructure_selection_source"] = current_source
-        report["microstructure_channels_requested"] = (
-            source["microstructure_channels_requested"]
-        )
-        report["microstructure_channels_acknowledged"] = (
-            source["microstructure_channels_acknowledged"]
-        )
-        report["microstructure_trade_frames_received"] = (
-            source["microstructure_trade_frames_received"]
-        )
-        report["microstructure_book_snapshots_received"] = (
-            source["microstructure_book_snapshots_received"]
-        )
-        report["microstructure_malformed_pair_count"] = (
-            source["microstructure_malformed_pair_count"]
-        )
-        report["microstructure_selection_is_telegram_alert"] = False
-    return report
+    return record(source)

@@ -130,7 +130,7 @@ def _positive_decimal(value: Any, reason: str) -> str:
     return str(parsed)
 
 
-def _trade_rows(rows: Any, pair: str) -> list[list[Any]]:
+def _trade_rows(rows: Any, pair: str, *, m03_index=False) -> list[list[Any]]:
     if not isinstance(rows, list) or not rows or len(rows) > 500:
         raise StreamEvidenceError("INVALID_PUBLIC_WS_TRADE_ROWS")
     result = []
@@ -141,6 +141,8 @@ def _trade_rows(rows: Any, pair: str) -> list[list[Any]]:
         seq = _nonneg_int(row[2], "PUBLIC_WS_TRADE_SEQUENCE_INVALID")
         if not ts or not seq or row[3] not in ("buy", "sell"):
             raise StreamEvidenceError("PUBLIC_WS_TRADE_FIELDS_INVALID")
+        if m03_index:
+            row = row[:4]+[str(x) if type(x) is float else x for x in row[4:]]
         result.append([
             row[0], ts, seq, row[3],
             _positive_decimal(row[4], "PUBLIC_WS_PRICE_INVALID"),
@@ -159,10 +161,11 @@ class PublicTradeStreamJournal:
     Even contiguous WS offsets do not establish upstream historical completeness.
     """
 
-    def __init__(self, database: str | Path):
+    def __init__(self, database: str | Path, *, index_m03_samples: bool = False):
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
+        self._index_m03_samples = index_m03_samples
         with self._connect() as con:
             con.execute("""CREATE TABLE IF NOT EXISTS ws_stream_state(
                 pair TEXT PRIMARY KEY, epoch TEXT NOT NULL,
@@ -185,6 +188,35 @@ class PublicTradeStreamJournal:
                 reason TEXT NOT NULL,
                 observed_at_epoch INTEGER NOT NULL
             )""")
+
+            if index_m03_samples:
+                con.execute("""CREATE TABLE IF NOT EXISTS m03_ws3_trade_samples(
+                    pair TEXT NOT NULL, exchange_epoch INTEGER NOT NULL,
+                    sequence INTEGER NOT NULL, price_idr TEXT NOT NULL,
+                    quote_idr TEXT NOT NULL, recorded_epoch INTEGER NOT NULL,
+                    PRIMARY KEY(pair,exchange_epoch,sequence))""")
+                con.execute("CREATE INDEX IF NOT EXISTS m03_trade_sample_expiry ON m03_ws3_trade_samples(exchange_epoch)")
+                con.execute("""CREATE TABLE IF NOT EXISTS m03_ws3_trade_publication_times(
+                    pair TEXT NOT NULL, epoch TEXT NOT NULL, offset INTEGER NOT NULL,
+                    recorded_epoch INTEGER NOT NULL, PRIMARY KEY(pair,epoch,offset))""")
+                con.execute("CREATE INDEX IF NOT EXISTS m03_trade_publication_expiry ON m03_ws3_trade_publication_times(recorded_epoch)")
+
+    def prune_m03_samples(self, now_epoch: int) -> None:
+        """Bound only M03-owned indexed data; keep current cursor boundary."""
+        if not getattr(self,"_index_m03_samples",False):
+            return
+        cutoff=now_epoch-86400
+        with self._connect() as con:
+            con.execute("DELETE FROM m03_ws3_trade_samples WHERE exchange_epoch<?",(cutoff,))
+            con.execute("""DELETE FROM ws_trade_publications AS p WHERE (pair,epoch,offset) IN (
+                SELECT pair,epoch,offset FROM m03_ws3_trade_publication_times
+                WHERE recorded_epoch<?) AND NOT EXISTS (
+                SELECT 1 FROM ws_stream_state s WHERE s.pair=p.pair
+                AND s.epoch=p.epoch AND s.last_offset=p.offset)""",(cutoff,))
+            con.execute("""DELETE FROM m03_ws3_trade_publication_times AS t
+                WHERE recorded_epoch<? AND NOT EXISTS (
+                SELECT 1 FROM ws_trade_publications p WHERE p.pair=t.pair
+                AND p.epoch=t.epoch AND p.offset=t.offset)""",(cutoff,))
 
     @classmethod
     def readonly(cls, database: str | Path) -> "PublicTradeStreamJournal":
@@ -262,6 +294,21 @@ class PublicTradeStreamJournal:
             "INSERT INTO ws_trade_publications VALUES (?,?,?,?,?)",
             (pair, epoch, offset, digest, encoded),
         )
+        if getattr(self,"_index_m03_samples",False):
+            recorded=int(time.time())
+            for row in rows:
+                if not 0 <= recorded-row[1] <= 86400:
+                    continue
+                old=con.execute("""SELECT price_idr,quote_idr FROM m03_ws3_trade_samples
+                    WHERE pair=? AND exchange_epoch=? AND sequence=?""",
+                    (pair,row[1],row[2])).fetchone()
+                if old is not None and (Decimal(old[0])!=Decimal(row[4]) or
+                                        Decimal(old[1])!=Decimal(row[5])):
+                    raise StreamEvidenceError("M03_TRADE_IDENTITY_COLLISION")
+                con.execute("""INSERT OR IGNORE INTO m03_ws3_trade_samples VALUES(?,?,?,?,?,?)""",
+                            (pair,row[1],row[2],row[4],row[5],recorded))
+            con.execute("INSERT INTO m03_ws3_trade_publication_times VALUES(?,?,?,?)",
+                        (pair,epoch,offset,recorded))
         con.execute(
             "UPDATE ws_stream_state SET last_offset=?,status='CONTIGUOUS_OBSERVED' WHERE pair=?",
             (offset, pair),
@@ -400,7 +447,7 @@ class PublicTradeStreamJournal:
         if not isinstance(publication, dict):
             raise StreamEvidenceError("INVALID_WS_RECOVERY_FRAME")
         offset = _nonneg_int(publication.get("offset"), "INVALID_WS_TRADE_OFFSET")
-        rows = _trade_rows(publication.get("data"), pair)
+        rows = _trade_rows(publication.get("data"), pair, m03_index=getattr(self,"_index_m03_samples",False))
         return offset, rows
 
     def ingest(self, pair: str, frame: dict[str, Any]) -> dict[str, Any]:
@@ -413,7 +460,7 @@ class PublicTradeStreamJournal:
         if not isinstance(data, dict):
             raise StreamEvidenceError("INVALID_PUBLIC_WS_ENVELOPE")
         offset = _nonneg_int(data.get("offset"), "INVALID_WS_TRADE_OFFSET")
-        rows = _trade_rows(data.get("data"), pair)
+        rows = _trade_rows(data.get("data"), pair, m03_index=getattr(self,"_index_m03_samples",False))
         with self._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             epoch_row = con.execute(
