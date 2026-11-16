@@ -159,10 +159,11 @@ class PublicTradeStreamJournal:
     Even contiguous WS offsets do not establish upstream historical completeness.
     """
 
-    def __init__(self, database: str | Path):
+    def __init__(self, database: str | Path, *, index_m03_samples: bool = False):
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
+        self._index_m03_samples = index_m03_samples
         with self._connect() as con:
             con.execute("""CREATE TABLE IF NOT EXISTS ws_stream_state(
                 pair TEXT PRIMARY KEY, epoch TEXT NOT NULL,
@@ -185,6 +186,34 @@ class PublicTradeStreamJournal:
                 reason TEXT NOT NULL,
                 observed_at_epoch INTEGER NOT NULL
             )""")
+
+            if index_m03_samples:
+                con.execute("""CREATE TABLE IF NOT EXISTS m03_ws3_trade_samples(
+                    pair TEXT NOT NULL, exchange_epoch INTEGER NOT NULL,
+                    sequence INTEGER NOT NULL, price_idr TEXT NOT NULL,
+                    quote_idr TEXT NOT NULL, recorded_epoch INTEGER NOT NULL,
+                    PRIMARY KEY(pair,exchange_epoch,sequence))""")
+                con.execute("""CREATE TABLE IF NOT EXISTS m03_ws3_trade_publication_times(
+                    pair TEXT NOT NULL, epoch TEXT NOT NULL, offset INTEGER NOT NULL,
+                    recorded_epoch INTEGER NOT NULL, PRIMARY KEY(pair,epoch,offset))""")
+
+    def prune_m03_samples(self, now_epoch: int) -> None:
+        """Bound only M03-owned indexed data; keep current cursor boundary."""
+        if not getattr(self,"_index_m03_samples",False):
+            return
+        cutoff=now_epoch-86400
+        with self._connect() as con:
+            con.execute("DELETE FROM m03_ws3_trade_samples WHERE exchange_epoch<?",(cutoff,))
+            con.execute("""DELETE FROM ws_trade_publications AS p WHERE EXISTS (
+                SELECT 1 FROM m03_ws3_trade_publication_times t WHERE
+                t.pair=p.pair AND t.epoch=p.epoch AND t.offset=p.offset
+                AND t.recorded_epoch<?) AND NOT EXISTS (
+                SELECT 1 FROM ws_stream_state s WHERE s.pair=p.pair
+                AND s.epoch=p.epoch AND s.last_offset=p.offset)""",(cutoff,))
+            con.execute("""DELETE FROM m03_ws3_trade_publication_times AS t
+                WHERE recorded_epoch<? AND NOT EXISTS (
+                SELECT 1 FROM ws_trade_publications p WHERE p.pair=t.pair
+                AND p.epoch=t.epoch AND p.offset=t.offset)""",(cutoff,))
 
     @classmethod
     def readonly(cls, database: str | Path) -> "PublicTradeStreamJournal":
@@ -262,6 +291,21 @@ class PublicTradeStreamJournal:
             "INSERT INTO ws_trade_publications VALUES (?,?,?,?,?)",
             (pair, epoch, offset, digest, encoded),
         )
+        if getattr(self,"_index_m03_samples",False):
+            recorded=int(time.time())
+            for row in rows:
+                if not 0 <= recorded-row[1] <= 86400:
+                    continue
+                old=con.execute("""SELECT price_idr,quote_idr FROM m03_ws3_trade_samples
+                    WHERE pair=? AND exchange_epoch=? AND sequence=?""",
+                    (pair,row[1],row[2])).fetchone()
+                if old is not None and (Decimal(old[0])!=Decimal(row[4]) or
+                                        Decimal(old[1])!=Decimal(row[5])):
+                    raise StreamEvidenceError("M03_TRADE_IDENTITY_COLLISION")
+                con.execute("""INSERT OR IGNORE INTO m03_ws3_trade_samples VALUES(?,?,?,?,?,?)""",
+                            (pair,row[1],row[2],row[4],row[5],recorded))
+            con.execute("INSERT INTO m03_ws3_trade_publication_times VALUES(?,?,?,?)",
+                        (pair,epoch,offset,recorded))
         con.execute(
             "UPDATE ws_stream_state SET last_offset=?,status='CONTIGUOUS_OBSERVED' WHERE pair=?",
             (offset, pair),
