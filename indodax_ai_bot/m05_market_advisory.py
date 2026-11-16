@@ -55,6 +55,53 @@ def queue_scanner_owner_advisory(
             or len(preview) != len(set(str(p) for p in preview))
             or not isinstance(rows, list) or not isinstance(reviews, list)):
         return {"status": "NO_VALID_PREVIEW", "queued": 0}
+    # Keep the old public WATCH path when no model has reviewed a source.
+    # Once a role attempt/decision exists, do NOT fall back to rank-only
+    # owner buttons on veto, provider failure, stale or incomparable results.
+    ai = ai_shadow if isinstance(ai_shadow, dict) else {}
+    decision = ai.get("candidate_decision_loop")
+    reviewed = (decision is not None or bool(ai.get("completed_roles"))
+                or "candidate_reports" in ai
+                or ai.get("reason") in ("M04_ROLE_INVALID_OR_UNAVAILABLE",
+                                        "M04_REVIEW_EVIDENCE_ALREADY_CLAIMED",
+                                        "M04_REVIEW_CLAIM_UNAVAILABLE"))
+    ai_selected = False
+    if reviewed:
+        blocked = {"status": "M05_AI_RESCAN_REQUIRED", "queued": 0,
+                   "owner_final_decision": None, "execution_allowed": False}
+        if (not isinstance(decision, dict)
+                or ai.get("execution_allowed") is not False
+                or ai.get("final_decision") is not None
+                or decision.get("stage") != "M04_CANDIDATE_DECISION_LOOP_SHADOW"
+                or decision.get("status") != "SELECTED_SYNTHETIC_REVIEW_ONLY"
+                or decision.get("execution_allowed") is not False
+                or decision.get("final_decision") is not None
+                or decision.get("paper_fill_authorized") is not False):
+            return blocked
+        source_epoch = decision.get("source_observed_epoch")
+        decision_epoch = decision.get("decision_observed_epoch")
+        if (type(source_epoch) is not int or type(decision_epoch) is not int
+                or source_epoch != bulk.get("screening_observed_epoch")
+                or not 0 < source_epoch <= decision_epoch <= now_epoch
+                or now_epoch-source_epoch > 60):
+            return dict(blocked, status="M05_AI_STALE_SELECTION")
+        reports = ai.get("candidate_reports")
+        if reports is None:
+            reports = [{"pair":ai.get("candidate_pair"),
+                        "evidence_digest_sha256":ai.get("source_digest_sha256"),
+                        "reason":ai.get("reason"),
+                        "completed_roles":ai.get("completed_roles"),
+                        "role_results":ai.get("role_results")}]
+        from .three_role_ai import _candidate_decision_loop
+        rebuilt = _candidate_decision_loop(
+            reports=reports,source_epoch=source_epoch,now_epoch=decision_epoch)
+        if rebuilt != decision:
+            return dict(blocked,status="M05_AI_SELECTION_MISMATCH")
+        pair = rebuilt.get("selected_pair")
+        if pair not in preview or pair in _EXCLUDED:
+            return dict(blocked,status="M05_AI_SELECTED_PAIR_NOT_IN_SOURCE")
+        preview = [pair]
+        ai_selected = True
     # These are observed technical setups for OWNER WATCH, not a complete
     # AI/Risk/Final trade approval. Never promote "NO_CONFIRMED_ENTRY_SETUP"
     # just because the scanner filled its two public watchlist slots.
@@ -126,6 +173,9 @@ def queue_scanner_owner_advisory(
             "CAUTION_NO_TRADE" if "RISK_VETO" in ai_reason
             else "UNVERIFIED_ACCOUNT_AND_G1"
         )
+        if ai_selected:
+            market_label = "SYNTHETIC_AI_SELECTED_REVIEW_ONLY"
+            risk_label = "SYNTHETIC_RISK_ONLY_ACCOUNT_G1_UNVERIFIED"
         # Local source identity only, NEVER a signed issuer receipt.
         try:
             snapshot = json.dumps({
@@ -165,11 +215,21 @@ def queue_scanner_owner_advisory(
                 "score": score,
                 "volume_ratio": ratio,
             }
+        if ai_selected:
+            mode = owner.status(user_id=owner.owner_user_id,chat_id=owner.owner_user_id)
+            if mode.get("owner_mode") == "AUTO":
+                # AUTO may produce an advisory observation only; never make
+                # a synthetic candidate a Final or create an order preview.
+                return {"status":"M05_AUTO_AI_SHADOW_REVIEW_ONLY","queued":0,
+                        "selected_pair":pair,"source_digest_sha256":digest,
+                        "owner_final_decision":None,"execution_allowed":False,
+                        "order_sent":False}
         proposal = owner.issue_market_advisory_proposal(
             pair=pair, digest=digest,
             closed_1m_epoch=closed_epoch,
             now_epoch=now_epoch,
-            source_expires_epoch=closed_epoch + 90,
+            source_expires_epoch=(min(closed_epoch + 90, source_epoch+61)
+                                  if ai_selected else closed_epoch + 90),
             setup=setup, market_status=market_label,
             risk_status=risk_label,
             public_reference=public_reference,
@@ -186,4 +246,6 @@ def queue_scanner_owner_advisory(
         "execution_allowed": False,
         "public_source_not_authenticated": True,
         "paid_ai_not_inferred": True,
+        **({"selected_pair":preview[0], "m04_synthetic_review_only":True}
+           if ai_selected else {}),
     }
