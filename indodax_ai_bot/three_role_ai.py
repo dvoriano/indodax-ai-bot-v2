@@ -379,6 +379,7 @@ def _candidate_decision_loop(*, reports: list[dict], source_epoch: int,
         "paper_fill_authorized": False,
     }
     if (type(source_epoch) is not int or type(now_epoch) is not int
+            or source_epoch <= 0
             or not 0 <= now_epoch - source_epoch <= 60):
         return dict(out, status="RESCAN_STALE_EVIDENCE")
     if (not isinstance(reports, list) or len(reports) > 2
@@ -422,7 +423,8 @@ def _candidate_decision_loop(*, reports: list[dict], source_epoch: int,
                 or plan.get("pair") != pair
                 or not isinstance(digest, str) or len(digest) != 64
                 or any(c not in "0123456789abcdef" for c in digest)
-                or risk.get("risk_source_report", {}).get("blockers") != []):
+                or not isinstance(risk.get("risk_source_report"), dict)
+                or risk["risk_source_report"].get("blockers") != []):
             item["disposition"] = "WAIT_UNVERIFIED_QUOTE_OR_RISK"
             continue
         try:
@@ -555,7 +557,7 @@ class ThreeRoleShadow:
         )
         result["candidate_decision_loop"] = _candidate_decision_loop(
             reports=reports,
-            source_epoch=bulk["eligible_cohort"]["screening_observed_epoch"],
+            source_epoch=bulk["screening_observed_epoch"],
             now_epoch=int(self._clock()),
         )
         # Even synthetic signed receipts and six model-shaped responses
@@ -563,6 +565,27 @@ class ThreeRoleShadow:
         return result
 
     def run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
+        result = self._run(trace_id, bulk)
+        # Attach the same decision diagnostics to a single validated review.
+        # Early admission failures keep their original reason and cannot
+        # obtain a selection or cause a model call through this wrapper.
+        if ("candidate_decision_loop" not in result
+                and result.get("completed_roles") == list(ROLES)
+                and isinstance(bulk, dict)):
+            result["candidate_decision_loop"] = _candidate_decision_loop(
+                reports=[{
+                    "pair": result["candidate_pair"],
+                    "evidence_digest_sha256": result["source_digest_sha256"],
+                    "reason": result["reason"],
+                    "completed_roles": result["completed_roles"],
+                    "role_results": result["role_results"],
+                }],
+                source_epoch=bulk.get("screening_observed_epoch"),
+                now_epoch=int(self._clock()),
+            )
+        return result
+
+    def _run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(trace_id, str) or not trace_id.strip():
             return _reject("INVALID_TRACE_ID")
         if (isinstance(bulk, dict)
