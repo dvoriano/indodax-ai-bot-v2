@@ -1217,12 +1217,38 @@ def send_one_owner_radar_momentum_nonlive(
             if snap["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"
             else format_owner_radar_compact(candidate)
         )
+        # Explicit owner rollout: presentation only, after original eligibility
+        # and durable claim. Missing optional history never blocks the WATCH.
+        parse_mode = None
+        if os.environ.get("M05_RADAR_PREMIUM_LAYOUT_GO") == "YES":
+            from .m05_pitiden_premium_layout import (
+                DEFAULT_EVIDENCE_DB, format_pitiden_premium,
+                read_price_references,
+            )
+            source_kind = ("WS3" if snap["status"] ==
+                           "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
+            try:
+                refs = read_price_references(
+                    candidate, db_path=db_path, now_epoch=now,
+                    source_kind=source_kind,
+                    evidence_path=(DEFAULT_EVIDENCE_DB
+                                   if Path(db_path) == DEFAULT_DB else None),
+                )
+                message = format_pitiden_premium(
+                    candidate, refs, source_kind=source_kind, now_epoch=now,
+                )
+                parse_mode = "HTML"
+            except (OSError, sqlite3.Error, ValueError, TypeError,
+                    ArithmeticError, KeyError):
+                # Original text fallback; never create a second claim/send.
+                pass
         # Claim is durable BEFORE send; uncertainty must never replay it.
         # The added audit row is informational, never an order authorization.
         try:
             msg = api.call("sendMessage", {
                 "chat_id": ledger.owner_user_id,
                 "text": message,
+                **({"parse_mode": parse_mode} if parse_mode else {}),
             })
             if (not isinstance(msg, dict)
                     or type(msg.get("message_id")) is not int

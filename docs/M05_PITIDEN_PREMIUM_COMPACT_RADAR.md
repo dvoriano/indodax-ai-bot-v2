@@ -1,0 +1,13 @@
+# PITIDEN premium compact radar (M05) — owner WATCH only
+
+Approved layout: bold pair and current IDR price; one compact aligned seven-timeframe table; direction icon on each independent return, reference price, and volume; short momentum, acceleration, spread, score and WATCH disclaimer. Telegram Bot API HTML bold and preformatted text do not support arbitrary font sizes. Device zoom and line widths remain client dependent.
+
+- Same original M05 sender and durable claim/ACK ledger. Original discovery, alert eligibility, throttling, no-order authority and delivery logic are unchanged. Activate presentation on the existing M05 process only with M05_RADAR_PREMIUM_LAYOUT_GO=YES. Absent flag retains the original layout.
+- All timeframes anchored to the actual alert source observation. Compare with an existing source timestamp at or before the target (15s tolerance for 1m, 30s for others); approximate rows marked ~, missing rows N/A, never interpolation. Price column is the reference price in IDR, not a candle close. Single-source REST and WS3 remain separate. WS3 uses original cached summary rows and the existing private 72h source archive, with source-cycle as-of cutoff. Same-timestamp conflicting observations dropped. Source reads are bounded, read-only and confined to the selected pair.
+- Vol in IDR: 24h = existing source rolling turnover. Short-window executed volume, volume acceleration and watch score remain N/A until real source coverage and calibration exist. Never substitute a rolling turnover difference for executed volume. jt = million, M = billion, T = trillion. Spread is existing validated REST spread or fresh (<=90s) partial WS3 book; otherwise N/A.
+- Momentum label describes available short returns only, not a prediction. Display missing numeric values as N/A. Original detector trigger comparison remains visible as a sample-duration comparison. No BUY signal, no G1 or AI verification.
+- No additional exchange API request, network subscription, private credential access or AI call. No new sender, no test-message send to production. On optional history/format failure original message fallback remains; one durable claim and at most one Telegram send. No automatic VPS activation or service restart.
+
+## Validation and rollout
+
+Run targeted offline tests for the layout and original WS3 bridge. Check natural original M05 messages after owner-approved restart of M05 only (not M03 or BTC). Preserve trading NO/NO/DRY_RUN, original alert settings and original ledger. Rollback by removing only the layout opt-in and restarting original M05. Do not label PR merge as VPS activation. Master checklist remains unchanged.
