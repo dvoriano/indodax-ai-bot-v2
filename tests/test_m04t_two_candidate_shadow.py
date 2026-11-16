@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import unittest
 
 from indodax_ai_bot.g1_receipt import G1ReceiptVerifier, canonical_receipt_bytes
-from indodax_ai_bot.three_role_ai import ThreeRoleShadow
+from indodax_ai_bot.three_role_ai import ThreeRoleShadow, _candidate_decision_loop
 from test_m04a_three_role_shadow import RoleCaller, TEST_G1_SECRET, source, synthetic_issuer_coverage_manifest
 
 
@@ -44,8 +44,10 @@ def two_pair_source(*, trusted=True):
     return bulk
 
 
-def signed_two_pair_source():
+def signed_two_pair_source(*, quote_claims=None):
     bulk = two_pair_source()
+    if quote_claims is not None:
+        bulk["strategy_quote_claims_by_pair"] = deepcopy(quote_claims)
     receipts = {}
     for pair in PAIRS:
         single = deepcopy(bulk)
@@ -167,6 +169,89 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         ))
         self.assertIsNone(result["final_decision"])
         self.assertFalse(result["execution_allowed"])
+
+
+    def test_two_buy_opinions_without_bound_quote_stay_rescan(self):
+        bulk, verifier = signed_two_pair_source()
+        result = ThreeRoleShadow(
+            caller=RoleCaller(), clock=lambda: CLOCK, source_verifier=verifier,
+        ).run("trace", bulk)
+        decision = result["candidate_decision_loop"]
+        self.assertEqual(decision["status"], "RESCAN_FRESH_EVIDENCE")
+        self.assertEqual(decision["qualified_scenario_count"], 0)
+        self.assertIsNone(decision["selected_pair"])
+        self.assertFalse(decision["execution_allowed"])
+
+    def test_one_bound_scenario_and_one_risk_veto_select_review_only(self):
+        from test_m04_strategy_source_plan import test_quote
+        bulk, verifier = signed_two_pair_source(
+            quote_claims={p: test_quote(p) for p in PAIRS})
+        def caller(role, evidence):
+            risk = "NO_TRADE" if evidence["source"]["pair"] == PAIRS[1] else "ALLOW"
+            return RoleCaller(risk=risk)(role, evidence)
+        result = ThreeRoleShadow(
+            caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
+        ).run("trace", bulk)
+        decision = result["candidate_decision_loop"]
+        self.assertEqual(decision["status"], "SELECTED_SYNTHETIC_REVIEW_ONLY")
+        self.assertEqual(decision["selected_pair"], PAIRS[0])
+        self.assertEqual(decision["qualified_scenario_count"], 1)
+        self.assertEqual(decision["candidates"][1]["disposition"], "RISK_REJECT")
+        self.assertIsNone(decision["final_decision"])
+        self.assertFalse(decision["paper_fill_authorized"])
+        self.assertFalse(result["execution_allowed"])
+
+    def test_decision_matrix_comparison_and_staleness(self):
+        def report(pair, net="15000", roi="2.5", spread="20", stop="98000"):
+            return {
+                "pair": pair, "evidence_digest_sha256": sha256(pair.encode()).hexdigest(),
+                "reason": "STRATEGY_BUY_PREFLIGHT_UNVERIFIED",
+                "completed_roles": ["MARKET", "RISK", "STRATEGY"],
+                "role_results": [
+                    {"role": "MARKET", "bias": "BULLISH", "evidence_status": {
+                        "spread_bps": {"status": "PUBLIC_DIAGNOSTIC", "value": spread}}},
+                    {"role": "RISK", "decision": "ALLOW",
+                     "risk_source_report": {"blockers": []}},
+                    {"role": "STRATEGY", "action": "BUY",
+                     "projected_net_profit_idr": net, "projected_net_roi_percent": roi,
+                     "strategy_source_plan": {
+                         "pair": pair, "status": "SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED",
+                         "allocated_cost_idr": "600000", "entry_price_idr": "100000",
+                         "stop_loss_price_idr": stop,
+                         "estimated_net_profit_idr": "30000",
+                         "estimated_net_roi_percent": "5"}},
+                ],
+            }
+        def decide(rows, now=CLOCK):
+            decision = _candidate_decision_loop(
+                reports=rows, source_epoch=CLOCK, now_epoch=now)
+            self.assertIsNone(decision["final_decision"])
+            self.assertFalse(decision["execution_allowed"])
+            self.assertFalse(decision["paper_fill_authorized"])
+            return decision
+        a = report(PAIRS[0])
+        b = report(PAIRS[1], net="18000", roi="3", spread="10")
+        self.assertEqual(decide([])["status"], "RESCAN_FRESH_EVIDENCE")
+        self.assertEqual(decide([a])["selected_pair"], PAIRS[0])
+        self.assertEqual(decide([a,b])["selected_pair"], PAIRS[1])
+        self.assertEqual(decide([b,a])["selected_pair"], PAIRS[1])
+        self.assertEqual(decide([a,report(PAIRS[1])])["status"],
+                         "RESCAN_INCOMPARABLE_SCENARIOS")
+        self.assertEqual(decide([a,report(PAIRS[1], net="18000", roi="3",
+                                         spread="40")])["status"],
+                         "RESCAN_INCOMPARABLE_SCENARIOS")
+        self.assertEqual(decide([a,b], CLOCK+61)["status"], "RESCAN_STALE_EVIDENCE")
+        self.assertEqual(decide([a,a])["status"], "RESCAN_INVALID_COHORT")
+        veto = deepcopy(a)
+        veto["reason"] = "RISK_VETO_NO_TRADE"
+        self.assertEqual(decide([veto,b])["selected_pair"], PAIRS[1])
+        veto2 = deepcopy(b)
+        veto2["reason"] = "RISK_VETO_NO_TRADE"
+        self.assertEqual(decide([veto,veto2])["qualified_scenario_count"], 0)
+        unavailable = deepcopy(a)
+        unavailable["reason"] = "M04_ROLE_INVALID_OR_UNAVAILABLE"
+        unavailable["completed_roles"] = []
+        self.assertEqual(decide([unavailable,b])["selected_pair"], PAIRS[1])
 
 
 if __name__ == "__main__":
