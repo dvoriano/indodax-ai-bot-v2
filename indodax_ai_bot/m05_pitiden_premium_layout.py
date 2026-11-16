@@ -322,6 +322,40 @@ def build_timeframes(candidate, references, *, candles=None, previous_24h=None):
     return rows
 
 
+def apply_ws3_trade_samples(candidate, rows, *, db_path, now_epoch):
+    """Real executed IDR amounts; sample coverage is never full volume."""
+    from .m05_radar_momentum_nonlive import _owned_private_regular
+    pair,end=candidate["pair"],candidate["observed_epoch"]
+    if not _owned_private_regular(Path(db_path)) or type(end) is not int or end>now_epoch:
+        return rows
+    start=min(r["start_epoch"] for r in rows if r["tf"]!="24h")
+    raw=_read_rows(db_path, """SELECT exchange_epoch,sequence,price_idr,quote_idr
+        FROM m03_ws3_trade_samples WHERE pair=? AND exchange_epoch>=?
+        AND exchange_epoch<? AND recorded_epoch<=?
+        ORDER BY exchange_epoch,sequence LIMIT 20001""",(pair,start,end,now_epoch))
+    if not raw or len(raw)>20000:
+        return rows
+    trades=[]
+    for stamp,seq,price,quote in raw:
+        p,q=_decimal(price,positive=True),_decimal(quote,positive=True)
+        if type(stamp) is not int or type(seq) is not int or p is None or q is None:
+            return rows
+        trades.append((stamp,seq,p,q))
+    out=[]
+    for row in rows:
+        r=dict(row)
+        if r["tf"]!="24h":
+            sample=[t for t in trades if r["start_epoch"]<=t[0]<r["end_epoch"]]
+            if sample:
+                r["volume"]=sum((t[3] for t in sample),Decimal(0))
+                r["volume_sampled"]=True
+                if r["close_price"] is None:
+                    r["close_price"]=sample[-1][2]
+                    r["approx"]=True
+        out.append(r)
+    return out
+
+
 def count_green(rows):
     """Count only eight distinct finite, strictly positive displayed returns."""
     if [row.get("tf") for row in rows] != [label for label,_ in FRAMES]:
@@ -387,6 +421,8 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         close = _number(row["close_price"]) if row["close_price"] is not None else "-"
         volume = (_volume(row["volume"]).replace(" miliar", "M")
                   if row["volume"] is not None else "-")
+        if row.get("volume_sampled") and row["volume"] is not None:
+            volume = "~"+volume
         label = row["tf"] + ("~" if row["approx"] else "")
         cells.append((label, change, close, volume, _direction(row["change"])))
     headers = ("TF", "CHG", "CLOSE", "VOL")
@@ -463,6 +499,7 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         escape(context),
         *([escape(sample_text)] if sample_text is not None else []),
         f"<i>{known}/8 data · ~ sampled · - unavailable</i>",
+        *(["<i>~VOL = observed trades only</i>"] if any(r.get("volume_sampled") for r in rows) else []),
         "<i>IDR · M=miliar · jt=juta · rb=ribu · T=triliun</i>",
         "<i>24h rolling · WATCH · Not BUY · AI/G1 unverified</i>",
     ]
