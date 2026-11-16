@@ -487,11 +487,13 @@ class ThreeRoleShadow:
 
     def __init__(self, *, caller: Callable[[str, dict[str, Any]], Mapping[str, Any]] | None = None,
                  clock: Callable[[], float] = time,
-                 source_verifier: G1ReceiptVerifier | None = None) -> None:
+                 source_verifier: G1ReceiptVerifier | None = None,
+                 review_claim: Callable[..., bool] | None = None) -> None:
         self._caller = caller
         self._clock = clock
         # No verifier is wired from production public market or env flags.
         self._source_verifier = source_verifier
+        self._review_claim = review_claim
 
     def _run_two_candidates(self, trace_id: str, bulk: dict[str, Any],
                             preview: list[str]) -> dict[str, Any]:
@@ -545,6 +547,7 @@ class ThreeRoleShadow:
                 result = ThreeRoleShadow(
                     caller=self._caller, clock=self._clock,
                     source_verifier=self._source_verifier,
+                    review_claim=self._review_claim,
                 ).run(trace_id, item)
             reports.append({
                 "pair": pair,
@@ -789,6 +792,25 @@ class ThreeRoleShadow:
         if self._caller is None:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,
                            candidate_pair=source["pair"])
+
+        if self._review_claim is not None:
+            # Unlike the signed digest, this key ignores transport trace
+            # identity. A new trace cannot replay unchanged market evidence.
+            identity = json.loads(frozen.source_bytes)
+            identity.pop("trace_id", None)
+            key = sha256(json.dumps(identity, sort_keys=True,
+                                    separators=(",", ":"), allow_nan=False
+                                    ).encode("utf-8")).hexdigest()
+            try:
+                claimed = self._review_claim(
+                    pair=source["pair"], evidence_key=key,
+                    signed_digest=digest, observed_epoch=observed)
+            except Exception:
+                return _reject("M04_REVIEW_CLAIM_UNAVAILABLE", digest=digest,
+                               candidate_pair=source["pair"])
+            if claimed is not True:
+                return _reject("M04_REVIEW_EVIDENCE_ALREADY_CLAIMED", digest=digest,
+                               candidate_pair=source["pair"])
 
         roles: list[str] = []
         validated: list[dict[str, Any]] = []
