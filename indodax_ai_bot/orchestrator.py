@@ -2245,6 +2245,61 @@ class DailyScalpingOrchestrator:
             "paper_sell_fill_recorded":False,
         }
 
+    def discover_m09_paper_entry_reference_once(self, *,
+            now_epoch: int | None = None, source_db=None) -> dict:
+        """Reuse the original early WS3 radar, never a second scanner.
+
+        This is a maker entry reference, not a simulated fill. Existing
+        aggregate depth cannot prove our passive order got executed.
+        """
+        from .m05_radar_momentum_nonlive import (
+            DEFAULT_DB, inspect_original_m03_ws3_watch_readonly,
+        )
+        self.settings.require_m01_safety()
+        now=int(time.time()) if now_epoch is None else now_epoch
+        if type(now) is not int or now<=0:
+            raise ValueError("M09_PAPER_CLOCK_INVALID")
+        base={
+            **self.journal._m09_paper_source_only(),
+            "status":"M09_PAPER_WAIT_FOR_ENTRY_SOURCE",
+            "paper_entry_reference":None,"paper_buy_fill_recorded":False,
+            "paper_source_g1_verified":False,"paper_ai_review_verified":False,
+        }
+        if self.journal.review_m09_paper_pnl_offline()[
+                "paper_open_or_partial_positions"]!=0:
+            return {**base,"status":"M09_PAPER_MONITOR_EXISTING_POSITION"}
+        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
+        if path.resolve()==Path(self.journal._db_path).resolve():
+            return base
+        report=inspect_original_m03_ws3_watch_readonly(
+            db_path=path,now_epoch=now)
+        for candidate in report.get("micro_prealert_candidates_top40",[]):
+            micro=candidate.get("microstructure_observation",{})
+            if (micro.get("orderbook_snapshot_observed") is not True
+                    or micro.get("source_malformed") is not False
+                    or micro.get("trade_activity_observed") is not True
+                    or micro.get("trade_source_gap_or_truncation") is not False
+                    or not 0<=now-micro["orderbook_locally_observed_epoch"]<=30
+                    or not 0<=now-candidate["observed_epoch"]<=90
+                    or Decimal(candidate["volume_24h_idr"])<Decimal("400000000")):
+                continue
+            bid=Decimal(micro["best_bid_idr"])
+            assessment=self.review_strategy_a_nonlive_once(
+                review_type="BUY_MAKER",proposed_buy_price=bid,
+                best_bid=bid,best_ask=Decimal(micro["best_ask_idr"]))
+            if assessment.get("maker_buy_eligible") is not True:
+                continue
+            return {**base,"status":"M09_PAPER_MAKER_ENTRY_REFERENCE_NO_FILL",
+                    "paper_entry_reference":{
+                        "pair":candidate["pair"],
+                        "observed_epoch":micro["orderbook_locally_observed_epoch"],
+                        "maker_limit_price_idr":str(bid),
+                        "rolling_24h_idr":candidate["volume_24h_idr"],
+                        "observed_rise_pct":candidate["observed_rise_pct"],
+                        "maker_fill_verified":False,
+                        "entry_policy":assessment}}
+        return base
+
     def review_m09_paper_observed_market_once(self, *, paper_id: str,
             sell_fee_pct: Decimal, slippage_pct: Decimal,
             now_epoch: int | None = None, source_db=None) -> dict:
@@ -2395,6 +2450,8 @@ class DailyScalpingOrchestrator:
             result=self.review_m09_paper_position_policy_offline(**details)
         elif action == "OBSERVE":
             result=self.review_m09_paper_observed_market_once(**details)
+        elif action == "DISCOVER":
+            result=self.discover_m09_paper_entry_reference_once(**details)
         elif action == "SUMMARY":
             result=self.journal.review_m09_paper_pnl_offline(**details)
         else:
