@@ -357,6 +357,9 @@ def evaluate_m04_review_history_once(journal, *, now_epoch: int, evidence_db=Non
                         "FROM ws3_source_evidence LIMIT 0")
             src.execute("SELECT recorded_local_epoch FROM ws3_source_cycles LIMIT 0")
             with journal._connect() as con:
+                # Serialize anchor and outcomes so simultaneous evaluators
+                # cannot persist differing anchors for the same review.
+                con.execute("BEGIN IMMEDIATE")
                 journal._m04_history_tables(con)
                 reviews=con.execute("""SELECT r.pair,r.digest,r.decision_epoch
                     FROM m04_history_reviews r WHERE r.decision_epoch<=?
@@ -394,13 +397,12 @@ def evaluate_m04_review_history_once(journal, *, now_epoch: int, evidence_db=Non
                                         net_proxy_bps={str(cost):str(gross-cost)
                                             for cost in (Decimal("20"),Decimal("50"))})
                         pending.append((pair,digest,h,json.dumps(item,sort_keys=True)))
+                recorded=0
+                for row in pending:
+                    recorded+=con.execute("INSERT OR IGNORE INTO m04_history_outcomes VALUES(?,?,?,?)",row).rowcount
     except (sqlite3.Error,OSError,ValueError,ArithmeticError):
         return base
     with journal._connect() as con:
-        con.execute("BEGIN IMMEDIATE")
-        recorded=0
-        for row in pending:
-            recorded+=con.execute("INSERT OR IGNORE INTO m04_history_outcomes VALUES(?,?,?,?)",row).rowcount
         # Group by decision disposition and horizon; UNKNOWN has its own
         # denominator. A favorable mark on a rejected pair is a review lead,
         # not proof that the veto was wrong or a trade would have filled.
