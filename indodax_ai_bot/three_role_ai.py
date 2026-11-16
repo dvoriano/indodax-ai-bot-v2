@@ -495,11 +495,12 @@ class ThreeRoleShadow:
 
     def _run_two_candidates(self, trace_id: str, bulk: dict[str, Any],
                             preview: list[str]) -> dict[str, Any]:
-        """M04-T: two *independently* source-bound candidates, shadow only.
+        """Preflight both candidates before any caller; isolate valid receipts.
 
-        Preflight BOTH receipt+digest pairs before ANY injected model call, so
-        a valid first candidate cannot trigger billable work if the second
-        lacks a trustworthy issuer. Public G1 never passes this gate.
+        Shared cohort facts remain in BOTH signed digests. A shared fact
+        mutation can invalidate both; one bad individual receipt alone
+        cannot invalidate the other pair's independently verified digest.
+        No source/coverage/paid-provider check is bypassed.
         """
         if (len(preview) != 2 or any(not isinstance(p, str) for p in preview)
                 or len(set(preview)) != 2):
@@ -508,42 +509,46 @@ class ThreeRoleShadow:
                 "g1_verified", "source_trust_verified", "trade_history_complete")):
             return _reject("G1_PUBLIC_EVIDENCE_UNTRUSTED")
         receipts = bulk.get("g1_attestations")
-        if not isinstance(receipts, dict) or set(receipts) != set(preview):
+        if not isinstance(receipts, dict) or not set(receipts).issubset(preview):
             return _reject("G1_ISSUER_RECEIPT_UNVERIFIED")
         now = int(self._clock())
+        # Fail closed on malformed shared cohort; never rebuild signed facts.
         isolated = []
         for pair in preview:
             item = deepcopy(bulk)
             item["eligible_cohort"]["provisional_watchlist_preview"] = [pair]
-            item["g1_attestation"] = receipts[pair]
-            # Never forward another candidate's private issuer claim.
+            item["g1_attestation"] = receipts.get(pair)
             item.pop("g1_attestations", None)
             isolated.append(item)
         preflight = ThreeRoleShadow(
             caller=None, clock=lambda: now, source_verifier=self._source_verifier,
         )
-        verified = []
-        for pair, item in zip(preview, isolated):
-            result = preflight.run(trace_id, item)
-            if result["reason"] != "M04_PROVIDER_NOT_CONFIGURED":
-                return _reject(
-                    result["reason"], digest=result.get("source_digest_sha256"),
-                    candidate_pair=pair,
-                )
-            verified.append(result["source_digest_sha256"])
+        checked = [preflight.run(trace_id, item) for item in isolated]
+        verified = {
+            pair: result["source_digest_sha256"]
+            for pair, result in zip(preview, checked)
+            if result["reason"] == "M04_PROVIDER_NOT_CONFIGURED"
+        }
+        if not verified:
+            failure = checked[0]
+            return _reject(failure["reason"],
+                           digest=failure.get("source_digest_sha256"),
+                           candidate_pair=preview[0])
         if self._caller is None:
             return _reject("M04_PROVIDER_NOT_CONFIGURED")
         reports = []
-        for pair, item, digest in zip(preview, isolated, verified):
-            result = ThreeRoleShadow(
-                caller=self._caller, clock=lambda: now,
-                source_verifier=self._source_verifier,
-            ).run(trace_id, item)
-            # No receipt, digest, pair, or prior-role results may migrate
-            # between independently processed candidates.
+        for pair, item, admitted in zip(preview, isolated, checked):
+            result = admitted
+            if pair in verified:
+                # Recheck freshness and receipt at each actual candidate call,
+                # especially after a preceding slow provider response.
+                result = ThreeRoleShadow(
+                    caller=self._caller, clock=self._clock,
+                    source_verifier=self._source_verifier,
+                ).run(trace_id, item)
             reports.append({
                 "pair": pair,
-                "evidence_digest_sha256": digest,
+                "evidence_digest_sha256": result.get("source_digest_sha256"),
                 "reason": result["reason"],
                 "completed_roles": result["completed_roles"],
                 "role_results": result["role_results"],
@@ -551,17 +556,16 @@ class ThreeRoleShadow:
         result = _reject("M04_TWO_CANDIDATE_SHADOW_ONLY")
         result["candidate_reports"] = reports
         result["candidate_count"] = 2
-        result["source_digests_by_pair"] = dict(zip(preview, verified))
+        result["source_digests_by_pair"] = verified
         result["completed_role_calls"] = sum(
             len(x["completed_roles"]) for x in reports
         )
         result["candidate_decision_loop"] = _candidate_decision_loop(
             reports=reports,
-            source_epoch=bulk["screening_observed_epoch"],
+            source_epoch=bulk.get("screening_observed_epoch"),
             now_epoch=int(self._clock()),
         )
-        # Even synthetic signed receipts and six model-shaped responses
-        # cannot authorize Final PASS or execution in this milestone.
+        # Even synthetic signed receipts and role responses authorize no order.
         return result
 
     def run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
