@@ -586,6 +586,84 @@ class M03WSLiveWatchTests(unittest.TestCase):
             self.assertTrue(provider.sock.closed)
             self.assertEqual(journal.status("btc_idr")["last_publication_offset"],41)
 
+    def test_adaptive_trade_channels_expand_above_eight_and_rotate_on_ack(self):
+        from unittest.mock import patch
+        from indodax_ai_bot.trade_stream import PublicTradeStreamJournal
+        class SlowClock:
+            def __init__(self): self.value=0
+            def __call__(self):
+                self.value+=.02
+                return self.value
+        def summary(pairs,offset):
+            return {"result":{"channel":"market:summary-24h","data":{"offset":offset,
+                "data":[[p+"idr",NOW,100,90,120,95,str(v),"1"] for p,v in pairs]}}}
+        def ack(i): return {"id":i,"result":{"recoverable":True,"epoch":"123","offset":40}}
+        pairs=[("t"+str(i),500000000+i) for i in range(12)]
+        prefix=frames(NOW,100)[:2]
+        with TemporaryDirectory() as tmp:
+            journal=PublicTradeStreamJournal(Path(tmp)/"decisions.sqlite3",index_m03_samples=True)
+            provider=FakeWS(prefix+[summary(pairs,124)]+[ack(i) for i in range(3,15)])
+            seen=[]
+            def stop(s):
+                seen.append(s)
+                raise M03WSWatchError("TEST_STOP")
+            with self.assertRaisesRegex(M03WSWatchError,"TEST_STOP"):
+                collect_ws3_market_summary_once(ws_module=provider,monotonic=SlowClock(),
+                    epoch_fn=lambda:NOW,observe_seconds=3,trade_journal=journal,checkpoint=stop)
+            self.assertEqual(len(seen[0]["indexed_trade_pairs"]),12)
+            self.assertEqual(seen[0]["indexed_trade_channels_acknowledged"],12)
+            self.assertEqual(len(seen[0]["dense_price_rows"]),12)
+        with TemporaryDirectory() as tmp, patch("indodax_ai_bot.m03_ws_summary_live_watch._TRADE_CHANNEL_CAP",2):
+            journal=PublicTradeStreamJournal(Path(tmp)/"decisions.sqlite3",index_m03_samples=True)
+            provider=FakeWS(prefix+[summary([("aa",600000000),("bb",500000000)],124),
+                       ack(3),ack(4),summary([("cc",900000000)],125),
+                       {"id":5,"result":{}},ack(6)])
+            seen=[]
+            with self.assertRaisesRegex(M03WSWatchError,"TEST_STOP"):
+                collect_ws3_market_summary_once(ws_module=provider,monotonic=SlowClock(),
+                    epoch_fn=lambda:NOW,observe_seconds=3,trade_journal=journal,checkpoint=stop)
+            self.assertEqual(seen[0]["indexed_trade_pairs"],["aa_idr","cc_idr"])
+            self.assertEqual(seen[0]["indexed_trade_channels_acknowledged"],2)
+            self.assertEqual(provider.sock.sent[4]["method"],2)
+            self.assertEqual(provider.sock.sent[4]["params"]["channel"],"market:trade-activity-bbidr")
+            self.assertEqual(provider.sock.sent[5]["params"]["channel"],"market:trade-activity-ccidr")
+
+    def test_dense_summary_and_trade_edge_returns_enrich_original_timeframes(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m03_ws_summary_live_watch import persist_dense_ws3_prices
+        from indodax_ai_bot.trade_stream import PublicTradeStreamJournal
+        from indodax_ai_bot.m05_pitiden_premium_layout import (
+            build_timeframes,read_price_references,apply_ws3_trade_samples,
+        )
+        end=NOW//60*60+61
+        b=end//60*60
+        a=b-60
+        with TemporaryDirectory() as tmp:
+            db=Path(tmp)/"decisions.sqlite3"
+            PublicTradeStreamJournal(db,index_m03_samples=True)
+            db.chmod(0o600)
+            persist_dense_ws3_prices(db,[("uai_idr",a,a+1,"100",1,a+2),
+                  ("uai_idr",b-5,b-2,"110",2,b-1),
+                  ("uai_idr",b,b,"999",3,end+10)],now_epoch=end)
+            c={"pair":"uai_idr","observed_epoch":end,"latest_price_idr":"110",
+               "volume_24h_idr":"500000000"}
+            refs=read_price_references(c,db_path=db,now_epoch=end,source_kind="WS3")
+            self.assertEqual(refs,[(a+1,Decimal("100")),(b-2,Decimal("110"))])
+            rows=build_timeframes(c,refs)
+            self.assertEqual(rows[0]["change"],Decimal("10"))
+            with sqlite3.connect(db) as con:
+                con.executemany("INSERT INTO m03_ws3_trade_samples VALUES(?,?,?,?,?,?)",[
+                    ("uai_idr",a+2,1,"100","1000",a+3),
+                    ("uai_idr",a+30,2,"115","1150",a+31),
+                    ("uai_idr",b-2,3,"112","1120",b-1)])
+            out=apply_ws3_trade_samples(c,rows,db_path=db,now_epoch=end)
+            self.assertEqual(out[0]["change"],Decimal("12"))
+            self.assertEqual(out[0]["observed_high"],Decimal("115"))
+            self.assertEqual(out[0]["observed_low"],Decimal("100"))
+            self.assertEqual(out[0]["volume"],Decimal("3270"))
+            self.assertTrue(out[0]["volume_sampled"])
+            self.assertTrue(out[0]["trade_return_sampled"])
+
     def test_m03_micro_runner_discovers_below_telegram_threshold_and_subscribes(self):
         from indodax_ai_bot.m03_ws_summary_live_watch import (
             run_m03_ws3_summary_watch_once,

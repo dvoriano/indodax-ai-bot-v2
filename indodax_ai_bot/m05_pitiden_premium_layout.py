@@ -136,6 +136,24 @@ def read_price_references(candidate, *, db_path, now_epoch,
         if stamp in prices and prices[stamp] != p:
             conflicts.add(stamp)
         prices[stamp] = p
+    if source_kind=="WS3" and _owned_private_regular(Path(db_path)):
+        # Recent higher-density summary samples are selected as-of receipt,
+        # never interpolated or forward-filled across an absent observation.
+        dense=_read_rows(db_path, """SELECT bucket_epoch,exchange_epoch,last_idr,public_offset
+            FROM m03_ws3_price_samples_5s WHERE pair=? AND bucket_epoch BETWEEN ? AND ?
+            AND exchange_epoch<=? AND recorded_epoch<=? ORDER BY bucket_epoch DESC LIMIT 5761""",
+            (pair,end-8*3600,end,end,now_epoch))
+        for bucket,stamp,raw,offset in dense:
+            if (type(bucket) is not int or bucket%5 or type(stamp) is not int
+                    or not bucket<=stamp<bucket+5 or not 0<stamp<=end
+                    or type(offset) is not int or offset<0):
+                continue
+            p=_decimal(raw,positive=True)
+            if p is None:
+                continue
+            # Newer summary publication wins in this source family.
+            prices[stamp]=p
+            conflicts.discard(stamp)
     return sorted((stamp, p) for stamp, p in prices.items()
                   if stamp not in conflicts)
 
@@ -349,7 +367,25 @@ def apply_ws3_trade_samples(candidate, rows, *, db_path, now_epoch):
             if sample:
                 r["volume"]=sum((t[3] for t in sample),Decimal(0))
                 r["volume_sampled"]=True
-                if r["close_price"] is None:
+                r["observed_open"]=sample[0][2]
+                r["observed_high"]=max(t[2] for t in sample)
+                r["observed_low"]=min(t[2] for t in sample)
+                r["observed_close"]=sample[-1][2]
+                r["observed_trade_count"]=len(sample)
+                # Use a trade-derived return only if two distinct trades
+                # bracket near both closed interval edges; never pretend a
+                # late isolated trade describes the full timeframe.
+                tolerance=15 if r["tf"]=="1m" else 30
+                if (len(sample)>=2 and sample[0][0]<sample[-1][0]
+                        and sample[0][0]-r["start_epoch"]<=tolerance
+                        and r["end_epoch"]-1-sample[-1][0]<=tolerance
+                        and (r["change"] is None or r["approx"])):
+                    r["opening_price"]=sample[0][2]
+                    r["close_price"]=sample[-1][2]
+                    r["change"]=(sample[-1][2]/sample[0][2]-1)*100
+                    r["approx"]=True
+                    r["trade_return_sampled"]=True
+                elif r["close_price"] is None:
                     r["close_price"]=sample[-1][2]
                     r["approx"]=True
         out.append(r)

@@ -1300,11 +1300,11 @@ def send_one_owner_radar_momentum_nonlive(
                 ) if source_kind == "WS3" else None)
                 rows = build_timeframes(candidate, refs, candles=candles,
                                         previous_24h=previous)
+                if source_kind == "WS3":
+                    rows = apply_ws3_trade_samples(candidate, rows, db_path=db_path, now_epoch=now)
                 if not eligible_premium_watch(candidate, rows):
                     continue
                 green_at_claim = count_green(rows)
-                if source_kind == "WS3":
-                    rows = apply_ws3_trade_samples(candidate, rows, db_path=db_path, now_epoch=now)
                 message = format_pitiden_premium(
                     candidate, refs, source_kind=source_kind,
                     now_epoch=now, rows=rows,
