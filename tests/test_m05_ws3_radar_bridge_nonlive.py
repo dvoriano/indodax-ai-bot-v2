@@ -426,7 +426,7 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
             "indodax_ai_bot.m05_radar_momentum_nonlive._claim_once"
         ) as claim:
             self.assertEqual(self.send(api)["status"],
-                             "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET")
+                             "M05_RADAR_PREMIUM_FOUR_GREEN_NOT_MET")
             with patch(
                 "indodax_ai_bot.m05_pitiden_premium_layout.read_price_references",
                 side_effect=ValueError("test")
