@@ -30,7 +30,8 @@ def _number(value, *, positive=True):
         if not n.is_finite() or abs(n.adjusted()) > 20 or (
                 n <= 0 if positive else n < 0):
             return None
-        return format(n.normalize(), "f")
+        raw = format(n, "f")
+        return raw.rstrip("0").rstrip(".") if "." in raw else raw
     except (InvalidOperation, ValueError):
         return None
 
