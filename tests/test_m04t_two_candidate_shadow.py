@@ -273,5 +273,56 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         self.assertEqual(decide([unavailable,b])["selected_pair"], PAIRS[1])
 
 
+    def test_original_journal_dedupes_same_source_after_restart(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from indodax_ai_bot.journal import DecisionJournal
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "original.sqlite3"
+            bulk, verifier = signed_two_pair_source()
+            caller = RoleCaller(risk="NO_TRADE")
+            def run(data, trace, injected):
+                return ThreeRoleShadow(
+                    caller=injected, clock=lambda: CLOCK, source_verifier=verifier,
+                    review_claim=DecisionJournal(path).claim_m04_candidate_evidence_once,
+                ).run(trace, data)
+            first = run(bulk, "trace", caller)
+            self.assertEqual(first["completed_role_calls"], 6)
+            # A new trace and valid new signatures cannot replay the same
+            # immutable facts. No provider invocation after restart.
+            replay = deepcopy(bulk)
+            for pair in PAIRS:
+                one = deepcopy(replay)
+                one["eligible_cohort"]["provisional_watchlist_preview"] = [pair]
+                check = ThreeRoleShadow(clock=lambda: CLOCK).run("trace2", one)
+                claims = replay["g1_attestations"][pair]["claims"]
+                claims["trace_id"] = "trace2"
+                claims["source_digest_sha256"] = check["source_digest_sha256"]
+                replay["g1_attestations"][pair]["mac_sha256"] = hmac.new(
+                    TEST_G1_SECRET, canonical_receipt_bytes(claims), sha256
+                ).hexdigest()
+            blocked = Mock()
+            second = run(replay, "trace2", blocked)
+            blocked.assert_not_called()
+            self.assertEqual(second["completed_role_calls"], 0)
+            self.assertEqual([r["reason"] for r in second["candidate_reports"]],
+                             ["M04_REVIEW_EVIDENCE_ALREADY_CLAIMED"] * 2)
+            self.assertFalse(second["execution_allowed"])
+
+    def test_claim_failure_never_reaches_provider(self):
+        bulk, verifier = signed_two_pair_source()
+        caller = Mock()
+        claim = Mock(side_effect=OSError("offline"))
+        result = ThreeRoleShadow(
+            caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
+            review_claim=claim,
+        ).run("trace", bulk)
+        self.assertEqual(claim.call_count, 2)
+        caller.assert_not_called()
+        self.assertEqual([r["reason"] for r in result["candidate_reports"]],
+                         ["M04_REVIEW_CLAIM_UNAVAILABLE"] * 2)
+        self.assertFalse(result["execution_allowed"])
+
+
 if __name__ == "__main__":
     unittest.main()
