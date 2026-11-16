@@ -42,6 +42,7 @@ MAX_AGE_SECONDS = 90
 LOOKBACK_SECONDS = 300
 PAIR_COOLDOWN_SECONDS = 900
 GLOBAL_SPACING_SECONDS = 60
+PREMIUM_GLOBAL_SPACING_SECONDS = 15
 PAIR_ID = re.compile(r"^[a-z0-9]+_idr$")
 
 
@@ -917,14 +918,16 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
 
 
 def _claim_once(ledger, pair: str, observed_epoch: int,
-                now_epoch: int, *, source_kind: str) -> bool:
+                now_epoch: int, *, source_kind: str,
+                global_spacing_seconds: int = GLOBAL_SPACING_SECONDS) -> bool:
     """Durable at-most-once claim, plus bounded per-pair delivery audit.
 
     The ORIGINAL one-row-per-pair cooldown table is untouched. An additive
     private append-only event row is committed in the SAME transaction, before
     a Bot API send. An ACK is never inferred just from this claim.
     """
-    if source_kind not in ("WS3", "REST"):
+    if (source_kind not in ("WS3", "REST") or global_spacing_seconds not in
+            (GLOBAL_SPACING_SECONDS, PREMIUM_GLOBAL_SPACING_SECONDS)):
         return False
     dbpath = Path(ledger.db_path)
     if not _owned_private_regular(dbpath):
@@ -970,7 +973,7 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
             if db.execute(
                 "SELECT 1 FROM m05_radar_momentum_attempts "
                 "WHERE claimed_epoch > ? LIMIT 1",
-                (now_epoch - GLOBAL_SPACING_SECONDS,),
+                (now_epoch - global_spacing_seconds,),
             ).fetchone():
                 return False
             row = db.execute(
@@ -1265,6 +1268,8 @@ def send_one_owner_radar_momentum_nonlive(
         if not _claim_once(
             ledger, candidate["pair"], candidate["observed_epoch"], now,
             source_kind=source_kind,
+            global_spacing_seconds=(PREMIUM_GLOBAL_SPACING_SECONDS if premium
+                                    else GLOBAL_SPACING_SECONDS),
         ):
             continue
         # Claim is durable BEFORE send; uncertainty must never replay it.
