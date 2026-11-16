@@ -22,7 +22,7 @@ from .m03_ws_summary_offline_contract import (
     MarketSummaryContractError, normalize_documented_market_summary_offline,
 )
 from .scanner import MAIN_EXCLUDED_PAIRS
-from .trade_stream import PUBLIC_TOKEN, WS_URL
+from .trade_stream import PUBLIC_TOKEN, WS_URL, PublicTradeStreamJournal, StreamEvidenceError
 
 _CHANNEL = "market:summary-24h"
 _MIN_TURNOVER_IDR = Decimal("150000000")
@@ -140,7 +140,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     observe_seconds: int = 12,
                                     micro_pairs: tuple[str, ...] = (),
                                     epoch_fn=None,
-                                    micro_autoselect_from_stream: bool = False) -> dict:
+                                    micro_autoselect_from_stream: bool = False,
+                                    trade_journal=None, checkpoint=None) -> dict:
     """Authenticate to OFFICIAL public WS3 and collect documented summary frames.
 
     Socket lifetime is bounded. Source frames/contents are never logged.
@@ -207,6 +208,20 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         next_micro_subscribe_id = 2
         pending = deque()
         coalesced_frames = 0
+        indexed_pairs = set()
+        recovery_requests = {}
+        failed_trade_channels = set()
+
+        def subscribe_micro(pair, kind, channel, request_id):
+            params={"channel":channel}
+            if kind=="trade" and trade_journal is not None:
+                subscription=trade_journal.subscription(pair)
+                params=subscription["params"]
+                recovery_requests[request_id]=(
+                    "recover" in params,trade_journal.status(pair).get("status")=="GAP")
+                indexed_pairs.add(pair)
+            sock.send(json.dumps({"method":1,"params":params,"id":request_id}))
+
         while True:
             now = clock()
             if not pending and (
@@ -271,15 +286,21 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         next_micro_subscribe_id += 1
                         micro_ids[next_micro_subscribe_id] = (pair, kind, channel)
                         micro_channels[channel] = (pair, kind)
-                        sock.send(json.dumps({
-                            "method": 1, "params": {"channel": channel},
-                            "id": next_micro_subscribe_id,
-                        }))
+                        subscribe_micro(pair,kind,channel,next_micro_subscribe_id)
             else:
                 request_id = msg.get("id")
                 if type(request_id) is int and request_id in micro_ids:
                     pair, kind, channel = micro_ids[request_id]
                     ack = msg.get("result")
+                    if request_id in recovery_requests:
+                        recovering,fresh_segment=recovery_requests[request_id]
+                        try:
+                            state=trade_journal.acknowledge(pair,{"id":2,"result":ack},
+                                                           fresh_segment=fresh_segment)
+                            if state.get("status")=="GAP":
+                                failed_trade_channels.add(channel)
+                        except (StreamEvidenceError,ValueError):
+                            failed_trade_channels.add(channel)
                     if (isinstance(ack, dict)
                             and ack.get("recoverable") is True
                             and type(ack.get("offset")) is int
@@ -313,6 +334,13 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         micro[pair]["source_malformed"] = True
                         continue
                     off = parsed["offset"]
+                    if kind=="trade" and trade_journal is not None and channel not in failed_trade_channels:
+                        try:
+                            state=trade_journal.ingest(pair,msg)
+                            if state.get("status")=="GAP":
+                                failed_trade_channels.add(channel)
+                        except (StreamEvidenceError,ValueError):
+                            failed_trade_channels.add(channel)
                     last = micro_offsets.get(channel)
                     if last is not None and off <= last:
                         continue
@@ -427,11 +455,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                 micro_ids[next_micro_subscribe_id] = (
                                     pair, kind, micro_channel)
                                 micro_channels[micro_channel] = (pair, kind)
-                                sock.send(json.dumps({
-                                    "method": 1,
-                                    "params": {"channel": micro_channel},
-                                    "id": next_micro_subscribe_id,
-                                }))
+                                subscribe_micro(pair,kind,micro_channel,next_micro_subscribe_id)
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
                     # Multiple publications can share an exchange second.
@@ -784,16 +808,23 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
             db_path=Path(db_path), now_epoch=int((now_fn or time.time)()),
         )
         watch_pairs = tuple(selection["pairs"])
+    import os
+    trade_journal = None
+    if micro_enabled and os.environ.get("M03_WS3_TRADE_SAMPLES_GO") == "YES":
+        trade_journal=PublicTradeStreamJournal(db_path,index_m03_samples=True)
     source = collect_ws3_market_summary_once(
         ws_module=ws_module, monotonic=monotonic,
         observe_seconds=observe_seconds, micro_pairs=watch_pairs,
         epoch_fn=now_fn,
         micro_autoselect_from_stream=(micro_enabled and not watch_pairs),
+        **({"trade_journal":trade_journal} if trade_journal is not None else {}),
     )
     now = int((now_fn or time.time)())
     report = persist_ws3_summary_watch(
         DecisionJournal(db_path), source, now_epoch=now,
     )
+    if trade_journal is not None:
+        trade_journal.prune_m03_samples(now)
     # Optional separate research DB, using the SAME already-received WS3
     # snapshot. Never change original WATCH candidates, trading, or the
     # original M03 DB's 2h retention. Best-effort evidence must not turn a
