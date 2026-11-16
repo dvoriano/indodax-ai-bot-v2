@@ -22,6 +22,7 @@ from indodax_ai_bot.m04_public_watch_paid_once import (
 )
 from indodax_ai_bot.m04_radar_three_role_handoff_readonly import (
     inspect_original_radar_three_role_handoff_readonly,
+    inspect_original_ws3_micro_prealert_three_role_handoff_readonly,
 )
 
 BUDGET_DB = CONFIG_DIR / "public-watch-paid-budget.sqlite3"
@@ -45,12 +46,31 @@ def main() -> int:
         description="Original V2 paid one-shot PUBLIC WATCH; default is OFF"
     )
     parser.add_argument("--execute-paid-once", action="store_true")
+    parser.add_argument("--ws3-micro", action="store_true",
+                        help="Use current original WS3 micro prealert instead of legacy ticker")
+    parser.add_argument("--preview-current-source", action="store_true",
+                        help="Inspect current WS3 packet only, no credentials or provider calls")
     parser.add_argument("--owner-confirm")
     parser.add_argument("--owner-pricing-reviewed", action="store_true")
     parser.add_argument("--daily-limit-micro-usd", type=int)
     parser.add_argument("--per-request-reservation-micro-usd", type=int)
     args = parser.parse_args()
 
+    if args.preview_current_source:
+        if args.execute_paid_once or not args.ws3_micro:
+            parser.error("preview requires --ws3-micro and excludes paid execution")
+        from indodax_ai_bot.m04_public_watch_provider_preview_nonlive import (
+            prepare_ws3_micro_provider_request_preview_offline,
+        )
+        import time
+        now = int(time.time())
+        source = inspect_original_ws3_micro_prealert_three_role_handoff_readonly(now_epoch=now)
+        prepared = prepare_ws3_micro_provider_request_preview_offline(
+            handoff=source,now_epoch=now)
+        print(json.dumps({"status":prepared["status"],"source_status":source.get("status"),
+            "candidate_count":prepared["candidate_count"],"role_count":prepared["request_preview_count"],
+            "provider_http_attempts":0,"execution_allowed":False},sort_keys=True))
+        return 0
     # The default CLI always returns safely BEFORE secrets, disk writes,
     # real owner API keys or any network capability.
     if not args.execute_paid_once:
@@ -77,9 +97,11 @@ def main() -> int:
         return 2
     # DO NOT allow historical force-asof. One ORIGINAL current M03
     # observation only, at the instant of the requested paid test.
-    handoff = inspect_original_radar_three_role_handoff_readonly()
-    if (handoff.get("status") !=
-            "M04_RADAR_HANDOFF_PUBLIC_PACKETS_PREPARED"
+    handoff = (inspect_original_ws3_micro_prealert_three_role_handoff_readonly()
+               if args.ws3_micro else inspect_original_radar_three_role_handoff_readonly())
+    expected = ("M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED" if args.ws3_micro
+                else "M04_RADAR_HANDOFF_PUBLIC_PACKETS_PREPARED")
+    if (handoff.get("status") != expected
             or not handoff.get("candidates")):
         print(json.dumps({
             "status": "M04_NO_FRESH_PUBLIC_WATCH_FOR_PAID_TEST",
