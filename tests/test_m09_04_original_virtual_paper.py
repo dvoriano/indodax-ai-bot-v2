@@ -293,6 +293,87 @@ class OriginalM09VirtualPaper(unittest.TestCase):
         with self.assertRaisesRegex(DecisionConflictError,"M09_PAPER_AUTO_WALLET_MANAGED"):
             self.buy()
 
+
+    def test_explicit_m04_shadow_paper_selection_no_fallback_and_one_position(self):
+        from indodax_ai_bot.three_role_ai import _candidate_decision_loop
+        from hashlib import sha256
+        start = BUY_EPOCH
+        source = self.db.parent/"m03.sqlite"
+        cfg=dict(seed_idr=D("1000000"),buy_fee_pct=D("0.2"),
+                 maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
+                 slippage_pct=D("0.1"),depth_fraction_pct=D("5"),
+                 trailing_pct=D("2"),source_db=source,require_m04_review=True)
+        def selection(t):
+            pair="xrp_idr"
+            report={
+                "pair":pair,"evidence_digest_sha256":sha256(str(t).encode()).hexdigest(),
+                "reason":"STRATEGY_BUY_PREFLIGHT_UNVERIFIED",
+                "completed_roles":["MARKET","RISK","STRATEGY"],
+                "role_results":[
+                    {"role":"MARKET","bias":"BULLISH","evidence_status":{
+                        "spread_bps":{"status":"PUBLIC_DIAGNOSTIC","value":"20"}}},
+                    {"role":"RISK","decision":"ALLOW","risk_source_report":{"blockers":[]}},
+                    {"role":"STRATEGY","action":"BUY","projected_net_profit_idr":"15000",
+                     "projected_net_roi_percent":"2.5","strategy_source_plan":{
+                         "pair":pair,"status":"SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED",
+                         "allocated_cost_idr":"600000","entry_price_idr":"1000",
+                         "stop_loss_price_idr":"980","estimated_net_profit_idr":"30000",
+                         "estimated_net_roi_percent":"5"}}]}
+            return _candidate_decision_loop(reports=[report],source_epoch=t,now_epoch=t)
+        def candidate(pair,t):
+            return {"pair":pair,"observed_epoch":t,"volume_24h_idr":"500000000",
+                    "observed_rise_pct":"0.35","microstructure_observation":{
+                        "orderbook_snapshot_observed":True,"trade_activity_observed":True,
+                        "source_malformed":False,"trade_source_gap_or_truncation":False,
+                        "orderbook_locally_observed_epoch":t,
+                        "best_bid_idr":"1000","best_ask_idr":"1002"}}
+        def book(**kw):
+            t=kw["now"]
+            if t==start+2:
+                return dict(orderbook_locally_observed_epoch=t,
+                            best_bid_idr="999",best_ask_idr="1000",
+                            bid_depth_top5_idr="20000000",ask_depth_top5_idr="20000000",
+                            spread_bps="10")
+            if t==start+3:
+                return dict(orderbook_locally_observed_epoch=t,
+                            best_bid_idr="1300",best_ask_idr="1302",
+                            bid_depth_top5_idr="30000000",ask_depth_top5_idr="30000000",
+                            spread_bps="15")
+            return None
+        def step(t,decision=None):
+            app=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+            with patch("indodax_ai_bot.m05_radar_momentum_nonlive."
+                       "inspect_original_m03_ws3_watch_readonly",
+                       return_value={"micro_prealert_candidates_top40":[
+                           candidate("eth_idr",t),candidate("xrp_idr",t)]}),patch.object(
+                               app,"_read_m09_observed_book",side_effect=book):
+                r=app.run_m09_original_paper_cycle_offline_once(
+                    action="AUTO_STEP",details={**cfg,"now_epoch":t,
+                                                "m04_shadow_decision":decision})
+                self.check_isolation(r)
+                self.assertFalse(r["paper"]["paper_ai_review_verified"])
+                return r["paper"]
+        self.assertEqual(step(start)["status"],"M09_PAPER_AUTO_M04_RESCAN_REQUIRED")
+        decision=selection(start+1)
+        pending=step(start+1,decision)
+        self.assertEqual(pending["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        self.assertEqual(pending["paper_pending_order"]["pair"],"xrp_idr")
+        self.assertEqual(pending["paper_pending_order"]["m04_synthetic_selection_reference"]
+                         ["evidence_digest_sha256"],decision["selected_evidence_digest_sha256"])
+        bought=step(start+2)
+        self.assertIn(bought["status"],("M09_PAPER_AUTO_BUY_FILLED",
+                                       "M09_PAPER_AUTO_BUY_PARTIAL_REMAINDER_CANCELLED"))
+        self.assertIsNotNone(bought["paper_position_id"])
+        closed=step(start+3,selection(start+3))
+        self.assertEqual(closed["status"],"M09_PAPER_AUTO_SELL_CLOSED")
+        self.assertIsNone(closed["paper_position_id"])
+        self.assertEqual(step(start+4,decision)["status"],"M09_PAPER_AUTO_M04_RESCAN_REQUIRED")
+        self.assertEqual(step(start+5,selection(start+5))["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        self.assertEqual(self.summary()["paper"]["paper_buy_count"],1)
+        with self.assertRaisesRegex(DecisionConflictError,"M09_PAPER_AUTO_CONFIG_CHANGED"):
+            self.app.step_m09_managed_paper_cycle_once(
+                **{**cfg,"require_m04_review":False},now_epoch=start+6)
+
     def test_managed_paper_pending_expiry_no_fill(self):
         cfg=dict(seed_idr=D("500000"),buy_fee_pct=D("0.2"),
                  maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
