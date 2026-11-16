@@ -628,6 +628,27 @@ class M05OriginalFastLongpollTests(unittest.TestCase):
         self.assertFalse(result["order_sent"])
         self.assertNotIn(TOKEN, json.dumps(events))
 
+    def test_premium_six_green_not_met_is_zero_send_not_uncertain(self):
+        events = []
+
+        def radar(**_):
+            return {"status": "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET",
+                    "messages_sent": 0}
+
+        result = dedicated_owner_fast_loop_nonlive(
+            api=self.bot_api, ledger=self.owner,
+            expected_bot_id=BOT, lock_path=self.lock,
+            max_batches=10, heartbeat=events.append, auto_radar_alert=radar,
+        )
+        self.assertGreater(result["radar_invocations"], 0)
+        self.assertEqual(result["radar_send_acks"], 0)
+        self.assertEqual(result["radar_delivery_uncertain"], 0)
+        self.assertEqual(result["radar_last_status"],
+                         "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET")
+        self.assertEqual(events[-1]["radar_last_status"],
+                         "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET")
+        self.assertFalse(result["order_sent"])
+
     def test_optional_radar_failure_does_not_terminate_original_receiver(self):
         events = []
 
