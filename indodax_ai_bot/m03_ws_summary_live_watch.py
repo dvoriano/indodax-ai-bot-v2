@@ -7,6 +7,7 @@ NOT a REST ticker_all substitute, bid/ask quote, G1/AI receipt or trade signal.
 from __future__ import annotations
 
 from collections import deque
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
 import json
@@ -26,6 +27,8 @@ from .trade_stream import PUBLIC_TOKEN, WS_URL, PublicTradeStreamJournal, Stream
 
 _CHANNEL = "market:summary-24h"
 _MIN_TURNOVER_IDR = Decimal("150000000")
+_TRADE_CHANNEL_CAP = 40
+_DENSE_RETENTION_SECONDS = 8*3600
 
 
 class M03WSWatchError(ValueError):
@@ -215,6 +218,13 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         failed_trade_channels = set()
         last_ping_clock=clock() if checkpoint is not None else None
         last_summary_clock=None
+        dense_prices={}
+        liquid_latest={}
+        liquid_baseline={}
+        pending_unsubscribe={}
+        next_rebalance_clock=0
+        subscribe_started={}
+        permanently_rejected=set()
 
         def subscribe_micro(pair, kind, channel, request_id):
             params={"channel":channel}
@@ -224,7 +234,26 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 recovery_requests[request_id]=(
                     "recover" in params,trade_journal.status(pair).get("stream_status")=="GAP")
                 indexed_pairs.add(pair)
+                subscribe_started[channel]=clock()
             sock.send(json.dumps({"method":1,"params":params,"id":request_id}))
+
+        def add_trade(pair):
+            nonlocal next_micro_subscribe_id
+            channel=trade_channel(pair)
+            next_micro_subscribe_id+=1
+            micro_ids[next_micro_subscribe_id]=(pair,"trade",channel)
+            micro_channels[channel]=(pair,"trade")
+            subscribe_micro(pair,"trade",channel,next_micro_subscribe_id)
+
+        def rank_liquid(now_epoch):
+            eligible=[]
+            for pair,(stamp,price,turnover) in liquid_latest.items():
+                if not 0<=now_epoch-stamp<=150 or pair in permanently_rejected:
+                    continue
+                old=liquid_baseline.get(pair)
+                move=(price/old[1]-1)*100 if old and 0<stamp-old[0]<=300 else Decimal(0)
+                eligible.append((-max(Decimal(0),move),-turnover,pair))
+            return [p for _,_,p in sorted(eligible)]
 
         def snapshot():
             if phase != "OBSERVE":
@@ -253,7 +282,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     len(in_session_liquid_pairs)
                 )
                 report["microstructure_selected_pairs"] = list(micro)
-                report["microstructure_channels_requested"] = sum(v[0] in micro for v in micro_ids.values())
+                report["microstructure_channels_requested"] = sum(v[0] in micro for v in micro_channels.values())
                 report["microstructure_channels_acknowledged"] = sum(micro_channels[ch][0] in micro for ch in micro_active)
                 report["microstructure_trade_frames_received"] = sum(
                     state["trade_frames"] for state in micro.values()
@@ -290,6 +319,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 } for pair, state in micro.items()]
             if trade_journal is not None:
                 report["indexed_trade_pairs"] = sorted(indexed_pairs)
+                report["dense_price_rows"] = list(dense_prices.values())
                 report["indexed_trade_channels_failed"] = len(failed_trade_channels)
                 report["indexed_trade_channels_acknowledged"] = sum(
                     ch in micro_active and ch not in failed_trade_channels
@@ -314,6 +344,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 if failed_trade_channels:
                     raise M03WSWatchError("M03_WS_INDEXED_TRADE_RECONNECT_REQUIRED")
                 observations.clear()
+                dense_prices.clear()
                 received_frames=0
                 micro_frame_count=0
                 coalesced_frames=0
@@ -391,11 +422,23 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         subscribe_micro(pair,kind,channel,next_micro_subscribe_id)
             else:
                 request_id = msg.get("id")
+                if type(request_id) is int and request_id in pending_unsubscribe:
+                    old,new,channel=pending_unsubscribe.pop(request_id)
+                    if msg.get("result")!={}:
+                        raise M03WSWatchError("M03_WS_UNSUBSCRIBE_NOT_ACKNOWLEDGED")
+                    indexed_pairs.discard(old)
+                    micro_active.discard(channel)
+                    micro_channels.pop(channel,None)
+                    micro_offsets.pop(channel,None)
+                    subscribe_started.pop(channel,None)
+                    add_trade(new)
+                    continue
                 if type(request_id) is int and request_id in micro_ids:
-                    pair, kind, channel = micro_ids[request_id]
+                    pair, kind, channel = micro_ids.pop(request_id)
+                    subscribe_started.pop(channel,None)
                     ack = msg.get("result")
                     if request_id in recovery_requests:
-                        recovering,fresh_segment=recovery_requests[request_id]
+                        recovering,fresh_segment=recovery_requests.pop(request_id)
                         try:
                             state=trade_journal.acknowledge(pair,{"id":2,"result":ack},
                                                            fresh_segment=fresh_segment)
@@ -565,30 +608,57 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     pair, kind, micro_channel)
                                 micro_channels[micro_channel] = (pair, kind)
                                 subscribe_micro(pair,kind,micro_channel,next_micro_subscribe_id)
-                if checkpoint is not None and len(indexed_pairs)<8:
-                    # Same authenticated summary socket. Keep the original
-                    # two book+trade scouts; add up to eight total trade
-                    # channels from fresh liquid WS3 summaries.
-                    liquid=[]
+                if checkpoint is not None:
                     observed_local_epoch=int(source_epoch())
                     for sample in parsed["samples"]:
                         pair=sample["pair"]
-                        if pair in indexed_pairs or pair in MAIN_EXCLUDED_PAIRS:
+                        if pair in MAIN_EXCLUDED_PAIRS:
                             continue
                         try:
                             trade_channel(pair)
                             turnover=Decimal(sample["volume_24h_idr"])
+                            price=Decimal(sample["last_idr"])
                             stamp=sample["observed_exchange_epoch"]
-                            if turnover.is_finite() and turnover>=Decimal("400000000") and 0<=observed_local_epoch-stamp<=90:
-                                liquid.append((-turnover,pair))
+                            if (not turnover.is_finite() or turnover<_MIN_TURNOVER_IDR
+                                    or not price.is_finite() or price<=0
+                                    or not 0<=observed_local_epoch-stamp<=90):
+                                continue
                         except (ValueError,ArithmeticError,TypeError,KeyError):
                             continue
-                    for _,pair in sorted(set(liquid))[:8-len(indexed_pairs)]:
-                        channel=trade_channel(pair)
-                        next_micro_subscribe_id+=1
-                        micro_ids[next_micro_subscribe_id]=(pair,"trade",channel)
-                        micro_channels[channel]=(pair,"trade")
-                        subscribe_micro(pair,"trade",channel,next_micro_subscribe_id)
+                        bucket=stamp//5*5
+                        if len(dense_prices)<50000 or (pair,bucket) in dense_prices:
+                            previous=dense_prices.get((pair,bucket))
+                            if previous is None or (stamp,offset)>(previous[2],previous[4]):
+                                dense_prices[pair,bucket]=(pair,bucket,stamp,str(price),offset,observed_local_epoch)
+                        if turnover<Decimal("400000000"):
+                            liquid_latest.pop(pair,None)
+                            liquid_baseline.pop(pair,None)
+                            continue
+                        old=liquid_latest.get(pair)
+                        if old is not None and stamp<old[0]:
+                            continue
+                        if pair not in liquid_baseline or stamp-liquid_baseline[pair][0]>120:
+                            liquid_baseline[pair]=old[:2] if old is not None else (stamp,price)
+                        liquid_latest[pair]=(stamp,price,turnover)
+                    ranked=rank_liquid(observed_local_epoch)
+                    for pair in [p for p in ranked if p not in indexed_pairs
+                                 and p not in {v[1] for v in pending_unsubscribe.values()}][:_TRADE_CHANNEL_CAP-len(indexed_pairs)]:
+                        add_trade(pair)
+                    # Retain the original two book scouts. At full capacity,
+                    # replace at most one lower-priority trade-only channel
+                    # per minute, only after a documented unsubscribe ACK.
+                    if (len(indexed_pairs)>=_TRADE_CHANNEL_CAP and not pending_unsubscribe
+                            and not subscribe_started and clock()>=next_rebalance_clock):
+                        desired=set(ranked[:_TRADE_CHANNEL_CAP-len(micro)])|set(micro)
+                        incoming=next((p for p in ranked if p in desired and p not in indexed_pairs),None)
+                        outgoing=next((p for p in sorted(indexed_pairs-set(micro)-desired)
+                                       if trade_channel(p) in micro_active),None)
+                        if incoming and outgoing:
+                            channel=trade_channel(outgoing)
+                            next_micro_subscribe_id+=1
+                            pending_unsubscribe[next_micro_subscribe_id]=(outgoing,incoming,channel)
+                            sock.send(json.dumps({"method":2,"params":{"channel":channel},"id":next_micro_subscribe_id}))
+                            next_rebalance_clock=clock()+60
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
                     # Multiple publications can share an exchange second.
@@ -861,6 +931,25 @@ def _persist_m03_micro_watch_rows(journal: DecisionJournal, snapshot: dict,
     return saved
 
 
+def persist_dense_ws3_prices(db_path, rows, *, now_epoch):
+    """Five-second buckets from actual summary frames; original minute rows unchanged."""
+    if not rows:
+        return
+    with sqlite3.connect(db_path,timeout=2) as db:
+        db.execute("""CREATE TABLE IF NOT EXISTS m03_ws3_price_samples_5s(
+            pair TEXT NOT NULL,bucket_epoch INTEGER NOT NULL,exchange_epoch INTEGER NOT NULL,
+            last_idr TEXT NOT NULL,public_offset INTEGER NOT NULL,recorded_epoch INTEGER NOT NULL,
+            PRIMARY KEY(pair,bucket_epoch))""")
+        db.execute("CREATE INDEX IF NOT EXISTS m03_ws3_price_5s_expiry ON m03_ws3_price_samples_5s(bucket_epoch)")
+        db.executemany("""INSERT INTO m03_ws3_price_samples_5s VALUES(?,?,?,?,?,?)
+            ON CONFLICT(pair,bucket_epoch) DO UPDATE SET exchange_epoch=excluded.exchange_epoch,
+            last_idr=excluded.last_idr,public_offset=excluded.public_offset,recorded_epoch=excluded.recorded_epoch
+            WHERE excluded.exchange_epoch>m03_ws3_price_samples_5s.exchange_epoch
+            OR (excluded.exchange_epoch=m03_ws3_price_samples_5s.exchange_epoch
+                AND excluded.recorded_epoch>=m03_ws3_price_samples_5s.recorded_epoch
+                AND excluded.public_offset>m03_ws3_price_samples_5s.public_offset)""",rows)
+        db.execute("DELETE FROM m03_ws3_price_samples_5s WHERE bucket_epoch<?",(now_epoch-_DENSE_RETENTION_SECONDS,))
+
 def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
                                    monotonic=None, now_fn=None,
                                    observe_seconds: int = 12,
@@ -897,6 +986,8 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
             DecisionJournal(db_path), source, now_epoch=now,
         )
         if trade_journal is not None:
+            if continuous:
+                persist_dense_ws3_prices(db_path,source.get("dense_price_rows",[]),now_epoch=now)
             trade_journal.prune_m03_samples(now)
         # Optional separate research DB, using the SAME already-received WS3
         # snapshot. Never change original WATCH candidates, trading, or the
