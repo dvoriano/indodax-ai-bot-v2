@@ -21,7 +21,7 @@ from .m04_public_watch_research_readonly import (
     prepare_public_watch_research_readonly,
 )
 from .m04_radar_three_role_handoff_readonly import (
-    _MISSING_FACTS, inspect_original_radar_three_role_handoff_readonly,
+    _MISSING_FACTS, _ROLE_DISPATCH, inspect_original_radar_three_role_handoff_readonly,
 )
 from .m05_radar_momentum_nonlive import DEFAULT_DB
 from .sumopod_provider import MODEL_RE, _strict_json, SumopodProviderError
