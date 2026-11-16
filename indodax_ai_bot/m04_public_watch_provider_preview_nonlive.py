@@ -199,6 +199,107 @@ def prepare_public_watch_provider_request_preview_offline(
     return result
 
 
+def prepare_ws3_micro_provider_request_preview_offline(
+    *, handoff: dict, now_epoch: int,
+    models_by_role: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Actual original WS3 input contract, still explicitly PUBLIC WATCH.
+
+    The digest binds the partial observations, not the exchange or G1.
+    This is a one-shot diagnostic request shape, not the qualified role
+    contract or a permission to spend tokens.
+    """
+    from .scanner import MAIN_EXCLUDED_PAIRS
+    fail = _blocked("M04_WS3_PROVIDER_PREVIEW_SOURCE_UNVERIFIED")
+    if type(now_epoch) is not int or now_epoch <= 0:
+        return fail
+    try:
+        models = _models(models_by_role)
+        if (not isinstance(handoff, dict)
+                or handoff.get("status") != "M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED"
+                or handoff.get("source") != "EXISTING_ORIGINAL_M03_WS3_DB_ONLY"
+                or handoff.get("micro_prealert_source_review") is not True
+                or handoff.get("actual_three_role_ai_calls") != 0
+                or handoff.get("provider_http_calls") != 0
+                or handoff.get("g1_independent_issuer_verified") is not False
+                or handoff.get("execution_allowed") is not False):
+            return fail
+        rows = handoff["candidates"]
+        if (type(rows) is not list or not 1 <= len(rows) <= 2
+                or handoff.get("candidate_count") != len(rows)
+                or handoff.get("three_role_input_slots_prepared") != 3*len(rows)):
+            return fail
+        previews, seen = [], set()
+        for row in rows:
+            pair, packet, digest = (row["pair"], row["public_evidence"],
+                                    row["evidence_digest_sha256"])
+            observed = packet["observed_epoch"]
+            micro = packet["microstructure_source_evidence"]
+            if (type(pair) is not str or not re.fullmatch(r"[a-z0-9]+_idr",pair)
+                    or pair in MAIN_EXCLUDED_PAIRS or pair in seen
+                    or row.get("execution_allowed") is not False
+                    or packet["pair"] != pair
+                    or packet["source_kind"] != "ORIGINAL_V2_WS3_MICRO_PREALERT_SOURCE_UNATTESTED"
+                    or packet["execution_allowed"] is not False
+                    or packet["complete_trade_tape_verified"] is not False
+                    or packet["independent_g1_issuer_verified"] is not False
+                    or packet["trade_side_aggressor_qualified"] is not False
+                    or packet["closed_candles"] != "UNVERIFIED"
+                    or type(observed) is not int or not 0 <= now_epoch-observed <= 90
+                    or type(micro) is not dict
+                    or micro.get("execution_allowed") is not False
+                    or micro.get("source_malformed") is not False
+                    or micro.get("trade_source_gap_or_truncation") is not False
+                    or not (micro.get("trade_activity_observed") is True
+                            or micro.get("orderbook_snapshot_observed") is True)
+                    or Decimal(packet["rolling_24h_turnover_idr"]) < 400000000
+                    or not isinstance(digest,str) or not _HEX.fullmatch(digest)
+                    or sha256(json.dumps(packet,sort_keys=True,separators=(",",":"),
+                              ensure_ascii=True,allow_nan=False).encode("ascii")).hexdigest()!=digest
+                    or row["role_slots"] != [
+                        {"role":role,"evidence_digest_sha256":digest,
+                         "dispatch":_ROLE_DISPATCH,"model_output":None} for role in ROLES]):
+                return fail
+            seen.add(pair)
+            # Keep the same missing-evidence contract: a partial book or
+            # trade sample is NOT a verified full-depth or aggressor source.
+            extra = {
+                "MARKET":"Assess early versus extended momentum using observed price and partial trade/book evidence. Explain which available observations support or contradict WATCH, without claiming breakout confirmation, full buyer flow or future returns.",
+                "RISK":"Assess observed spread, sample depth, gaps and liquidity limitations. Do not infer full order-book stability or authenticated account costs. Explain why NO_TRADE is binding.",
+                "STRATEGY":"Use prior MARKET and RISK responses to explain WAIT, what fresh evidence would be needed for entry/exit and why time to profit is unknown. No price target or invented profit.",
+            }
+            for index,role in enumerate(ROLES):
+                context={
+                    "contract":"M04_WS3_MICRO_PUBLIC_WATCH_NOT_G1",
+                    "role":role,"pair":pair,"evidence_digest_sha256":digest,
+                    "public_market_evidence":packet,"source_missing":list(_MISSING_FACTS),
+                    "required_prior_roles":list(ROLES[:index]),
+                    "actual_prior_role_responses":None,
+                    "independent_g1_issuer_verified":False,
+                    "qualified_trade_proposal_authorized":False,
+                    "owner_paid_ai_go_authorized":False,"execution_allowed":False,
+                }
+                system=(extra[role]+" Choose stance "+"/".join(sorted(_ROLE_STANCES[role]))+
+                    ". Return exactly JSON keys: role, pair, evidence_digest_sha256, stance, reason, "
+                    "missing_evidence_acknowledged, g1_verified, execution_allowed. Copy source_missing "
+                    "exactly, keep g1_verified=false and execution_allowed=false. Never return BUY, ALLOW or a price target.")
+                previews.append({"role":role,"pair":pair,"evidence_digest_sha256":digest,
+                    "model_id_from_caller":models[role] if models else None,
+                    "depends_on_roles":list(ROLES[:index]),
+                    "request_body_preview":{"model":models[role] if models else None,
+                        "messages":[{"role":"system","content":system},
+                                    {"role":"user","content":json.dumps(context,sort_keys=True,
+                                          separators=(",",":"),allow_nan=False,ensure_ascii=True)}],
+                        "stream":False},
+                    "owner_paid_ai_go_authorized":False,"send_allowed":False,
+                    "response_observed":False})
+        return dict(_blocked(_OFFLINE),candidate_count=len(rows),
+                    request_preview_count=len(previews),request_previews=previews,
+                    source_contract="WS3_MICRO_PUBLIC_WATCH_NOT_G1")
+    except (ValueError,TypeError,KeyError,ArithmeticError,UnicodeError):
+        return fail
+
+
 def validate_public_watch_provider_response_shape_offline(
     *, raw_response_json: str,
     request_preview: dict[str, Any],
