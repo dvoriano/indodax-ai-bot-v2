@@ -2246,7 +2246,9 @@ class DailyScalpingOrchestrator:
         }
 
     def discover_m09_paper_entry_reference_once(self, *,
-            now_epoch: int | None = None, source_db=None) -> dict:
+            now_epoch: int | None = None, source_db=None,
+            require_m04_review: bool = False,
+            m04_shadow_decision: dict | None = None) -> dict:
         """Reuse the original early WS3 radar, never a second scanner.
 
         This is a maker entry reference, not a simulated fill. Existing
@@ -2268,13 +2270,59 @@ class DailyScalpingOrchestrator:
         if self.journal.review_m09_paper_pnl_offline()[
                 "paper_open_or_partial_positions"]!=0:
             return {**base,"status":"M09_PAPER_MONITOR_EXISTING_POSITION"}
+        if type(require_m04_review) is not bool or (
+                not require_m04_review and m04_shadow_decision is not None):
+            raise ValueError("M09_PAPER_M04_MODE_INVALID")
+        selection = None
+        if require_m04_review:
+            x = m04_shadow_decision
+            if (not isinstance(x, dict)
+                    or x.get("stage") != "M04_CANDIDATE_DECISION_LOOP_SHADOW"
+                    or x.get("status") != "SELECTED_SYNTHETIC_REVIEW_ONLY"
+                    or x.get("final_decision") is not None
+                    or x.get("execution_allowed") is not False
+                    or x.get("paper_fill_authorized") is not False):
+                return {**base, "status":"M09_PAPER_M04_RESCAN_REQUIRED"}
+            pair = x.get("selected_pair")
+            digest = x.get("selected_evidence_digest_sha256")
+            source_epoch = x.get("source_observed_epoch")
+            decision_epoch = x.get("decision_observed_epoch")
+            if (type(pair) is not str or not re.fullmatch(r"[a-z0-9]{2,20}_idr", pair)
+                    or pair in ("floki_idr", "pepe_idr")
+                    or type(digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    or type(source_epoch) is not int or type(decision_epoch) is not int
+                    or not 0 < source_epoch <= decision_epoch <= now
+                    or now-source_epoch > 60):
+                return {**base, "status":"M09_PAPER_M04_STALE_OR_INVALID_SELECTION"}
+            rows = x.get("candidates")
+            if (not isinstance(rows, list) or not 1 <= len(rows) <= 2
+                    or any(not isinstance(row, dict) for row in rows)
+                    or sum(row.get("pair") == pair for row in rows) != 1
+                    or not any(row.get("pair") == pair
+                               and row.get("evidence_digest_sha256") == digest
+                               and row.get("disposition") == "QUALIFIED_SYNTHETIC_SCENARIO"
+                               for row in rows)):
+                return {**base, "status":"M09_PAPER_M04_INVALID_SELECTION"}
+            # Explicitly synthetic caller-supplied reference, NOT verification
+            # of real AI, signed provenance or account/order authority.
+            selection = {"pair":pair, "evidence_digest_sha256":digest,
+                         "source_observed_epoch":source_epoch,
+                         "decision_observed_epoch":decision_epoch}
         path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
         if path.resolve()==Path(self.journal._db_path).resolve():
             return base
         report=inspect_original_m03_ws3_watch_readonly(
             db_path=path,now_epoch=now)
         for candidate in report.get("micro_prealert_candidates_top40",[]):
+            if selection is not None and candidate.get("pair") != selection["pair"]:
+                continue
             micro=candidate.get("microstructure_observation",{})
+            if selection is not None and (
+                    type(candidate.get("observed_epoch")) is not int
+                    or candidate["observed_epoch"] < selection["source_observed_epoch"]
+                    or type(micro.get("orderbook_locally_observed_epoch")) is not int
+                    or micro["orderbook_locally_observed_epoch"] < selection["decision_observed_epoch"]):
+                continue
             if (micro.get("orderbook_snapshot_observed") is not True
                     or micro.get("source_malformed") is not False
                     or micro.get("trade_activity_observed") is not True
@@ -2297,7 +2345,9 @@ class DailyScalpingOrchestrator:
                         "rolling_24h_idr":candidate["volume_24h_idr"],
                         "observed_rise_pct":candidate["observed_rise_pct"],
                         "maker_fill_verified":False,
-                        "entry_policy":assessment}}
+                        "entry_policy":assessment,
+                        **({"m04_synthetic_selection_reference":selection}
+                           if selection is not None else {})}}
         return base
 
     def _read_m09_observed_book(self, *, pair: str, now: int,
@@ -2422,7 +2472,9 @@ class DailyScalpingOrchestrator:
             buy_fee_pct: Decimal, maker_sell_fee_pct: Decimal,
             taker_sell_fee_pct: Decimal, slippage_pct: Decimal,
             depth_fraction_pct: Decimal, trailing_pct: Decimal,
-            now_epoch: int | None = None, source_db=None) -> dict:
+            now_epoch: int | None = None, source_db=None,
+            require_m04_review: bool = False,
+            m04_shadow_decision: dict | None = None) -> dict:
         """One atomic virtual order/position step on the existing PAPER journal.
 
         Explicit quote-cross + aggregate-depth haircut MODEL, not a fill
@@ -2447,7 +2499,14 @@ class DailyScalpingOrchestrator:
                 or any(not 0<=v<5 for v in amounts[1:5])
                 or not 0<depth_fraction_pct<=10 or not 0<trailing_pct<=10):
             raise ValueError("M09_PAPER_AUTO_CONFIG_INVALID")
+        if type(require_m04_review) is not bool or (
+                not require_m04_review and m04_shadow_decision is not None):
+            raise ValueError("M09_PAPER_M04_MODE_INVALID")
         config=[str(v.normalize()) for v in amounts]+[str(source.absolute())]
+        # Preserve default legacy PAPER config identity. Opt-in AI-shadow mode
+        # cannot be toggled to radar-only after wallet creation.
+        if require_m04_review:
+            config.append("M04_SYNTHETIC_SELECTION_REQUIRED")
         quantum=Decimal("0.00000001")
         def size_at_most(amount,price):
             return (amount/price).quantize(quantum,rounding=ROUND_DOWN)
@@ -2534,16 +2593,27 @@ class DailyScalpingOrchestrator:
                         if receipt is None:
                             status="M09_PAPER_AUTO_BUY_PENDING"
                 elif cash>0:
+                    opts = ({"require_m04_review": True,
+                             "m04_shadow_decision": m04_shadow_decision}
+                            if require_m04_review else {})
                     found=self.discover_m09_paper_entry_reference_once(
-                        now_epoch=now,source_db=source)
+                        now_epoch=now,source_db=source,**opts)
                     entry=found.get("paper_entry_reference")
-                    if entry and entry["observed_epoch"]>state["last_book"]:
+                    selection=entry.get("m04_synthetic_selection_reference") if entry else None
+                    new_selection = (not require_m04_review or (
+                        isinstance(selection, dict)
+                        and selection["source_observed_epoch"]>state.get("last_m04_source_epoch",0)))
+                    if entry and entry["observed_epoch"]>state["last_book"] and new_selection:
                         state["pending"]=dict(side="BUY",pair=entry["pair"],
                                               limit=entry["maker_limit_price_idr"],
                                               created=now)
+                        if require_m04_review:
+                            state["last_m04_source_epoch"]=selection["source_observed_epoch"]
+                            state["pending"]["m04_synthetic_selection_reference"]=selection
                         status="M09_PAPER_AUTO_BUY_PENDING"
                     else:
-                        status="M09_PAPER_AUTO_DISCOVER_WAIT"
+                        status=("M09_PAPER_AUTO_M04_RESCAN_REQUIRED" if require_m04_review
+                                else "M09_PAPER_AUTO_DISCOVER_WAIT")
             else:
                 # Existing read helper uses a separate committed snapshot;
                 # this transaction serializes writes before policy review.
@@ -2634,6 +2704,7 @@ class DailyScalpingOrchestrator:
                 "paper_fill_model":"QUOTE_CROSS_AND_AGGREGATE_DEPTH_HAIRCUT",
                 "paper_fill_depth_verified":False,
                 "paper_ai_review_verified":False,"paper_source_g1_verified":False,
+                "paper_m04_synthetic_selection_required":require_m04_review,
                 "paper_quantity_precision_is_modeled":True,
             }
 
