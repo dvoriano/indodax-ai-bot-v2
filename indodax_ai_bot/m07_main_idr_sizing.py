@@ -15,6 +15,18 @@ from .m07_limit_preflight import (
 from .m07_order_adapter import M07OrderDraft
 
 
+CURRENT_MAIN_FUNDING_KEYS = frozenset(("commitments_not_locked_idr", "max_spread_bps"))
+LEGACY_MAIN_FUNDING_KEYS = CURRENT_MAIN_FUNDING_KEYS | frozenset((
+    "requested_ticket_ceiling_idr", "new_floki_sell_rebuy_hold_idr",
+    "new_pepe_sell_rebuy_hold_idr",
+))
+
+
+def valid_main_funding_schema(value):
+    return type(value) is dict and frozenset(value) in (
+        CURRENT_MAIN_FUNDING_KEYS, LEGACY_MAIN_FUNDING_KEYS)
+
+
 def _money(value: Any, field: str, *, allow_zero: bool = True) -> Decimal:
     if type(value) not in (str, int, Decimal):
         raise M07PreflightBlocked("M07_MAIN_SIZING_" + field + "_INVALID")
@@ -33,9 +45,9 @@ def assess_m07_owner_main_idr_sizing_offline(*,
         public_candidate: dict[str, Any],
         account_snapshot: dict[str, Any],
         owner_main_source_classified: bool,
-        requested_ticket_ceiling_idr: Decimal,
-        new_floki_sell_rebuy_hold_idr: Decimal,
-        new_pepe_sell_rebuy_hold_idr: Decimal,
+        requested_ticket_ceiling_idr: Decimal | None = None,
+        new_floki_sell_rebuy_hold_idr: Decimal | None = None,
+        new_pepe_sell_rebuy_hold_idr: Decimal | None = None,
         commitments_not_locked_idr: Decimal,
         max_spread_bps: Decimal,
         now_epoch: int) -> dict[str, Any]:
@@ -44,7 +56,7 @@ def assess_m07_owner_main_idr_sizing_offline(*,
     A caller-supplied classification is the owner's funding policy, NOT an
     API attestation or a Final PASS. The wallet and public summary are source
     observations used only for a short-lived non-executable calculation.
-    This requires explicit known new-sale holds, never imaginary old holds.
+    Current MAIN-only uses free IDR minus explicit commitments. Legacy scenarios retain explicit old inputs.
     """
     blocked = {
         "stage": "M07_OWNER_MAIN_IDR_SIZING_OFFLINE",
@@ -106,18 +118,29 @@ def assess_m07_owner_main_idr_sizing_offline(*,
         return dict(blocked, status="M07_MAIN_SIZING_ACCOUNT_STALE_OR_OPEN_ORDER")
     if owner_main_source_classified is not True:
         return dict(blocked, status="M07_MAIN_SIZING_OWNER_SOURCE_CLASSIFICATION_REQUIRED")
-    cap = _money(requested_ticket_ceiling_idr, "TICKET", allow_zero=False)
-    floki = _money(new_floki_sell_rebuy_hold_idr, "NEW_FLOKI_HOLD")
-    pepe = _money(new_pepe_sell_rebuy_hold_idr, "NEW_PEPE_HOLD")
+    legacy = (requested_ticket_ceiling_idr, new_floki_sell_rebuy_hold_idr,
+              new_pepe_sell_rebuy_hold_idr)
+    current_policy = all(v is None for v in legacy)
+    if not current_policy and any(v is None for v in legacy):
+        raise M07PreflightBlocked("M07_MAIN_SIZING_MIXED_FUNDING_SCHEMA")
     commitments = _money(commitments_not_locked_idr, "COMMITMENTS")
     spread_cap = _money(max_spread_bps, "SPREAD")
     free = _money(a.get("exchange_idr_free_observed"), "FREE")
+    # Current MAIN-only policy: no asset rebuy allocation and no fixed cap.
+    # Old explicit scenarios are kept only as historical compatibility.
+    cap = free if current_policy else _money(
+        requested_ticket_ceiling_idr, "TICKET", allow_zero=False)
+    floki = Decimal(0) if current_policy else _money(
+        new_floki_sell_rebuy_hold_idr, "NEW_FLOKI_HOLD")
+    pepe = Decimal(0) if current_policy else _money(
+        new_pepe_sell_rebuy_hold_idr, "NEW_PEPE_HOLD")
     locked = _money(a.get("exchange_idr_locked_observed"), "LOCKED")
     budget = max(Decimal(0), free - floki - pepe - commitments)
     base = dict(blocked,
         owner_main_source_classification_accepted_for_preview=True,
         main_idr_pool_scenario=format(budget, "f"),
-        requested_ticket_ceiling_idr=format(cap, "f"),
+        requested_ticket_ceiling_idr=None if current_policy else format(cap, "f"),
+        funding_policy="MAIN_IDR_ONLY" if current_policy else "LEGACY_EXPLICIT_SCENARIO",
     )
     if budget <= 0:
         return dict(base, status="M07_MAIN_SIZING_NO_UNCOMMITTED_IDR")

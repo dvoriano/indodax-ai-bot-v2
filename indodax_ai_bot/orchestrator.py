@@ -34,7 +34,9 @@ from .m06_account_coverage import M06CoverageApproval, M06CoverageResult, run_co
 from .m07_order_adapter import OfficialV2OrderAdapter, M07OrderDraft, M07OfflineStatusObservation
 from .m07_limit_preflight import assess_m07_limit_buy_preflight_offline, M07LimitBuyPreflightPreview, M07PreflightBlocked
 from .m07_same_candidate_public import assess_m07_same_candidate_public_boundary
-from .m07_main_idr_sizing import assess_m07_owner_main_idr_sizing_offline
+from .m07_main_idr_sizing import (
+    assess_m07_owner_main_idr_sizing_offline, valid_main_funding_schema,
+)
 from .m07_last_moment_sources import review_m07_last_moment_sources_offline
 from .m07_private_order_readonly import read_m07_order_status_once, read_m07_latest_order_status_once, read_m07_14day_order_status_once
 from .m06_account_coverage import M06AccountDiagnosticResult, run_account_diagnostic_readonly_once
@@ -548,9 +550,9 @@ class DailyScalpingOrchestrator:
     def review_m07_owner_main_idr_sizing_offline(
             self, *, public_candidate: dict, account_snapshot: dict,
             owner_main_source_classified: bool,
-            requested_ticket_ceiling_idr: Decimal,
-            new_floki_sell_rebuy_hold_idr: Decimal,
-            new_pepe_sell_rebuy_hold_idr: Decimal,
+            requested_ticket_ceiling_idr: Decimal | None = None,
+            new_floki_sell_rebuy_hold_idr: Decimal | None = None,
+            new_pepe_sell_rebuy_hold_idr: Decimal | None = None,
             commitments_not_locked_idr: Decimal,
             max_spread_bps: Decimal, now_epoch: int) -> dict:
         """One original orchestrator: M03 quote + M06 View Only + M07 math.
@@ -702,14 +704,7 @@ class DailyScalpingOrchestrator:
             if (state.get("accepted") is not True
                     or state.get("owner_mode") != "MANUAL"):
                 raise ValueError("M07_RUNTIME_M05_MANUAL_MODE_REQUIRED")
-        required = {
-            "requested_ticket_ceiling_idr",
-            "new_floki_sell_rebuy_hold_idr",
-            "new_pepe_sell_rebuy_hold_idr",
-            "commitments_not_locked_idr",
-            "max_spread_bps",
-        }
-        if type(funding) is not dict or set(funding) != required:
+        if not valid_main_funding_schema(funding):
             raise ValueError("M07_RUNTIME_FUNDING_SCHEMA_INVALID")
         if type(trace_id) is not str or not trace_id:
             raise ValueError("M07_RUNTIME_TRACE_INVALID")
@@ -1051,14 +1046,7 @@ class DailyScalpingOrchestrator:
         self.settings.require_m01_safety()
         if (self._owner_control is None
                 or type(now_epoch) is not int or now_epoch <= 0
-                or type(funding) is not dict
-                or set(funding) != {
-                    "requested_ticket_ceiling_idr",
-                    "new_floki_sell_rebuy_hold_idr",
-                    "new_pepe_sell_rebuy_hold_idr",
-                    "commitments_not_locked_idr",
-                    "max_spread_bps",
-                }):
+                or not valid_main_funding_schema(funding)):
             raise ValueError("M07_MAIN_M05_REFERENCE_SCOPE_INVALID")
         # Every monetary input must be explicit and typed. The original
         # sizing function evaluates source freshness, account View Only
@@ -1119,7 +1107,7 @@ class DailyScalpingOrchestrator:
             precision = Decimal(public_candidate["public_pair_rules_reference"]["price_precision"])
             increment = Decimal(public_candidate["public_pair_rules_reference"]["quantity_increment"])
             gross = price * qty
-            ticket_cap = funding["requested_ticket_ceiling_idr"]
+            ticket_cap = funding.get("requested_ticket_ceiling_idr", available)
             if (not all(v.is_finite() for v in (
                     price, qty, quoted_cost, available, precision, increment,
                     gross, ticket_cap))
@@ -1298,14 +1286,7 @@ class DailyScalpingOrchestrator:
                 or owner_main_source_classified is not True
                 or type(public_candidate) is not dict
                 or type(account_snapshot) is not dict
-                or type(funding) is not dict
-                or set(funding) != {
-                    "requested_ticket_ceiling_idr",
-                    "new_floki_sell_rebuy_hold_idr",
-                    "new_pepe_sell_rebuy_hold_idr",
-                    "commitments_not_locked_idr",
-                    "max_spread_bps",
-                }
+                or not valid_main_funding_schema(funding)
                 or any(type(v) is not Decimal for v in funding.values())):
             return dict(blocked, status="M07_MANUAL_LASTMOMENT_INPUT_DENIED")
         press = self._owner_control.inspect_manual_trade_press_for_sender_nonlive(
@@ -1371,7 +1352,9 @@ class DailyScalpingOrchestrator:
                     expected_price, expected_qty, expected_cost))
                     or draft.price != expected_price
                     or draft.quantity != expected_qty
-                    or expected_cost > funding["requested_ticket_ceiling_idr"]
+                    or expected_cost > Decimal(sized["main_idr_pool_scenario"])
+                    or expected_cost > funding.get("requested_ticket_ceiling_idr",
+                                                   expected_cost)
                     or draft.price * draft.quantity > expected_cost):
                 raise ValueError("M07_MANUAL_LASTMOMENT_CHANGED_ORDER")
         except (KeyError, ValueError, TypeError, ArithmeticError,
