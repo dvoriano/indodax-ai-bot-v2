@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from scripts.m05_pitiden_readiness_readonly import inspect_readiness
+from scripts.m05_pitiden_readiness_readonly import inspect_readiness, inspect_named_pairs
 
 NOW=1794800005
 MINUTE=NOW//60*60-60
@@ -47,3 +47,34 @@ class PitidenReadinessTests(unittest.TestCase):
             result=inspect_readiness(now=NOW,db_path=p)
             self.assertEqual(result["status"],"ORIGINAL_DB_UNTRUSTED")
             self.assertFalse(p.exists())
+
+    def test_named_pair_gate_reconstruction_price_volume_missing_and_readonly(self):
+        with tempfile.TemporaryDirectory() as root:
+            p=Path(root)/"original.db"
+            archive=Path(root)/"absent.db"
+            with sqlite3.connect(p) as db:
+                db.execute("""CREATE TABLE m03_ws_summary_watch_minute(
+                    pair TEXT,minute_epoch INTEGER,exchange_epoch INTEGER,
+                    last_idr TEXT,rolling_24h_idr TEXT,public_offset INTEGER,
+                    PRIMARY KEY(pair,minute_epoch))""")
+                db.executemany("INSERT INTO m03_ws_summary_watch_minute VALUES (?,?,?,?,?,?)",[
+                    ("btc_idr",MINUTE-60,MINUTE-11,"100","500000000",1),
+                    ("btc_idr",MINUTE,MINUTE+49,"103","500000000",2),
+                    ("thin_idr",MINUTE,MINUTE+49,"100","399999999",3),
+                ])
+            p.chmod(0o600)
+            before=p.read_bytes()
+            out=inspect_named_pairs(pairs=("btc_idr","thin_idr","rare_idr"),
+                                    now=NOW,db_path=p,evidence_path=archive)
+            rows={r["pair"]:r for r in out["pairs"]}
+            btc=rows["btc_idr"]
+            self.assertEqual(btc["last_idr"],"103")
+            self.assertEqual(btc["rolling_24h_idr"],"500000000")
+            self.assertEqual(btc["reason"],"BELOW_FOUR_GREEN")
+            self.assertEqual(rows["thin_idr"]["reason"],"BELOW_PREMIUM_VOLUME_FLOOR")
+            self.assertEqual(rows["rare_idr"]["reason"],"NO_RETAINED_WATCH_SAMPLE")
+            self.assertEqual(len(btc["timeframes"]),8)
+            self.assertIsNone(btc["timeframes"][0]["volume_idr"])
+            self.assertFalse(out["execution_allowed"])
+            self.assertEqual(before,p.read_bytes())
+            self.assertFalse(archive.exists())

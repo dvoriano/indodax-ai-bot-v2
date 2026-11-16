@@ -419,6 +419,76 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertIn("24h",payload["text"])
         self.assertNotIn("reply_markup",payload)
 
+    def test_premium_checks_rank_beyond_top5_before_claim(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
+        for i in range(6):
+            pair=f"aaa{i}_idr"
+            self.add(pair,-2,100,500000000,i*2+1)
+            self.add(pair,-1,102,500030000,i*2+2)
+        self.add("zqualified_idr",-2,100,500000000,90)
+        self.add("zqualified_idr",-1,102,500030000,91)
+        snap=self.inspect()
+        self.assertNotIn("zqualified_idr",[r["pair"] for r in snap["candidates"]])
+        def candles(c,**kw):
+            if c["pair"]!="zqualified_idr":
+                return {}
+            return {t:(Decimal("100"),Decimal("102"))
+                    for label,a,b in interval_windows(c["observed_epoch"])
+                    if label!="24h" for t in range(a,b,60)}
+        api=FakeTelegram()
+        with patch.dict("os.environ",{"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            side_effect=candles):
+            out=send_one_owner_radar_momentum_nonlive(
+                api=api,ledger=self.ledger,db_path=self.db_path,now_epoch=NOW,
+                ws3_enabled=True,priority_alert_enabled=True)
+        self.assertEqual(out["messages_sent"],1)
+        self.assertIn("ZQUALIFIED/IDR",api.calls[0][1]["text"])
+        self.assertNotIn("<pre>",api.calls[0][1]["text"])
+
+    def test_premium_ws3_not_masked_by_existing_rest_candidate(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
+        self.seed()
+        candidate=self.inspect()["candidates"][0]
+        rest=dict(candidate,pair="rest_idr")
+        api=FakeTelegram()
+        good={t:(Decimal("100"),Decimal("101"))
+              for label,a,b in interval_windows(candidate["observed_epoch"])
+              if label!="24h" for t in range(a,b,60)}
+        with patch.dict("os.environ",{"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_radar_momentum_nonlive.inspect_original_m03_radar_readonly",
+            return_value={"status":"M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
+                          "candidates":[rest]}), patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            side_effect=lambda c,**kw: good if c["pair"]=="uai_idr" else {}):
+            out=self.send(api)
+        self.assertEqual(out["messages_sent"],1)
+        self.assertIn("UAI/IDR",api.calls[0][1]["text"])
+
+    def test_premium_spacing_15_seconds_between_pairs_not_same_evidence(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
+        self.seed()
+        self.add("other_idr",-2,100,500000000,60)
+        self.add("other_idr",-1,102,500030000,61)
+        api=FakeTelegram()
+        def candles(c,**kw):
+            return {t:(Decimal("100"),Decimal("101"))
+                    for label,a,b in interval_windows(c["observed_epoch"])
+                    if label!="24h" for t in range(a,b,60)}
+        with patch.dict("os.environ",{"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            side_effect=candles):
+            self.assertEqual(self.send(api)["messages_sent"],1)
+            self.assertEqual(self.send(api,now=NOW+14)["messages_sent"],0)
+            self.assertEqual(self.send(api,now=NOW+15)["messages_sent"],1)
+            self.assertEqual(self.send(api,now=NOW+30)["messages_sent"],0)
+        self.assertEqual(len(api.calls),2)
+        self.assertIn("OTHER/IDR",api.calls[0][1]["text"])
+        self.assertIn("UAI/IDR",api.calls[1][1]["text"])
+
     def test_premium_sparse_data_or_render_failure_never_claim_or_send(self):
         self.seed()
         api=FakeTelegram()

@@ -23,7 +23,7 @@ from .m03_ws3_evidence_archive_nonlive import (
 FRAMES = (("1m", 60), ("5m", 300), ("10m", 600), ("15m", 900),
           ("30m", 1800), ("1h", 3600), ("4h", 14400), ("24h", 86400))
 WIB = ZoneInfo("Asia/Jakarta")
-_LAYOUT = "PITIDEN_PREMIUM_WATCH_V4_4_GREEN"
+_LAYOUT = "PITIDEN_PREMIUM_WATCH_V5_MOBILE_4_GREEN"
 MIN_GREEN = 4
 MIN_TURNOVER_24H = Decimal("400000000")
 
@@ -53,7 +53,7 @@ def _number(n):
 def _volume(n):
     if n is None:
         return "N/A"
-    for unit, suffix in ((10**12, "T"), (10**9, "M"), (10**6, "jt"),
+    for unit, suffix in ((10**12, "T"), (10**9, " miliar"), (10**6, "jt"),
                          (1000, "rb")):
         if n >= unit:
             return _number((n/Decimal(unit)).quantize(
@@ -353,7 +353,7 @@ def _momentum(rows):
 
 def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
                            candles=None, previous_24h=None, rows=None):
-    """Telegram HTML: only heading bold; preformatted compact columns.
+    """Mobile Telegram HTML, ordinary text rows, no code-block chrome.
 
     Watch score and volume acceleration remain unavailable until real
     transaction-window evidence and a validated score definition exist.
@@ -364,14 +364,17 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     pair = candidate["pair"].upper().replace("_IDR", "/IDR")
     current = _number(_decimal(candidate["latest_price_idr"], positive=True))
     time = datetime.fromtimestamp(candidate["observed_epoch"], WIB).strftime("%H:%M:%S")
-    table = ["TF    CHANGE      CLOSE      VOL"]
+    # Telegram HTML has no table or arbitrary text color support.
+    # One regular-text row per timeframe, no pre/code or width assumptions.
+    table = ["<b>TF · CHANGE · CLOSE · VOL</b>"]
     for row in rows:
-        change = _percent(row["change"])
+        change = _percent(row["change"]) if row["change"] is not None else "—"
+        close = _number(row["close_price"]) if row["close_price"] is not None else "—"
+        volume = _volume(row["volume"]) if row["volume"] is not None else "—"
         label = row["tf"] + ("~" if row["approx"] else "")
         table.append(
-            f"{_direction(row['change'])} {label:<4}{change:>9} "
-            f"{_number(row['close_price']):>10} "
-            f"{_volume(row['volume']):>8}"
+            f"<b>{escape(_direction(row['change']) + ' ' + label)}</b>  "
+            f"{escape(change)} · {escape(close)} · {escape(volume)}"
         )
     spread = None
     if source_kind == "REST":
@@ -392,13 +395,37 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     trigger = Decimal(candidate["observed_rise_pct"])
     elapsed = candidate["observed_epoch"] - ref
     context = f"Trigger {_percent(trigger)} / {elapsed//60}m{elapsed%60:02d}s"
+    green = count_green(rows)
+    rolling = _decimal(candidate.get("volume_24h_idr"))
+    total = ("Rp" + _number(rolling)) if rolling is not None else "—"
+    daily = _percent(rows[-1]["change"]) if rows[-1]["change"] is not None else "—"
+    known = sum(r["change"] is not None for r in rows)
+    bar = "🟩"*green+"⬜"*(8-green)
+    sample_text = None
+    micro = candidate.get("microstructure_observation")
+    if (source_kind == "WS3" and isinstance(micro, dict)
+            and micro.get("status") == "PARTIAL_SOURCE_OBSERVATION"
+            and micro.get("source_malformed") is False
+            and micro.get("trade_activity_observed") is True
+            and type(micro.get("source_capture_epoch")) is int
+            and 0 <= now_epoch-micro["source_capture_epoch"] <= 90):
+        buy = _decimal(micro.get("source_reported_buy_idr"))
+        sell = _decimal(micro.get("source_reported_sell_idr"))
+        if buy is not None and sell is not None:
+            sample_text = "Trade sample · Rp" + _number(buy+sell) + " (partial)"
     lines = [
-        f"📡 <b>{escape(pair)} · Rp{escape(current)}</b>",
-        "<pre>" + escape("\n".join(table)) + "</pre>",
-        escape(f"📈 {_momentum(rows)} · Vol accel N/A · Spread {spread_text}"),
-        f"👀 WATCH · Green {count_green(rows)}/8 · Score N/A",
-        escape(f"{context} · {time} WIB"),
-        "<i>~ sampled · Vol 24h rolling Rp</i>",
-        "<i>AI/G1 unverified · Watch only · Not BUY</i>",
+        f"📡 <b>PITIDEN RADAR</b> · {escape(time)} WIB",
+        f"<b>{escape(pair)} · Rp{escape(current)}</b>  <b>{escape(daily)}</b> (24h)",
+        f"<b>24h Volume</b> · {escape(total)}",
+        "",
+        *table,
+        "",
+        f"{bar} <b>Green {green}/8</b>",
+        escape(f"Momentum {_momentum(rows)} · Spread {spread_text}"),
+        escape(context),
+        *([escape(sample_text)] if sample_text is not None else []),
+        f"<i>{known}/8 returns observed · ~ sampled · — unavailable</i>",
+        "<i>Close/Vol in IDR · 24h rolling · WATCH · Not BUY</i>",
+        "<i>AI/G1 unverified</i>",
     ]
     return "\n".join(lines)

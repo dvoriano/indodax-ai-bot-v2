@@ -42,6 +42,7 @@ MAX_AGE_SECONDS = 90
 LOOKBACK_SECONDS = 300
 PAIR_COOLDOWN_SECONDS = 900
 GLOBAL_SPACING_SECONDS = 60
+PREMIUM_GLOBAL_SPACING_SECONDS = 15
 PAIR_ID = re.compile(r"^[a-z0-9]+_idr$")
 
 
@@ -364,6 +365,7 @@ def inspect_original_m03_radar_readonly(
     result = {
         "status": "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
         "candidates": candidates[:5],
+        "ranked_review_shortlist_top40": candidates[:40],
         "source_authenticated_for_g1": False,
         "three_ai_role_responses_observed": False,
         "owner_order_specific_final_verified": False,
@@ -916,14 +918,16 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
 
 
 def _claim_once(ledger, pair: str, observed_epoch: int,
-                now_epoch: int, *, source_kind: str) -> bool:
+                now_epoch: int, *, source_kind: str,
+                global_spacing_seconds: int = GLOBAL_SPACING_SECONDS) -> bool:
     """Durable at-most-once claim, plus bounded per-pair delivery audit.
 
     The ORIGINAL one-row-per-pair cooldown table is untouched. An additive
     private append-only event row is committed in the SAME transaction, before
     a Bot API send. An ACK is never inferred just from this claim.
     """
-    if source_kind not in ("WS3", "REST"):
+    if (source_kind not in ("WS3", "REST") or global_spacing_seconds not in
+            (GLOBAL_SPACING_SECONDS, PREMIUM_GLOBAL_SPACING_SECONDS)):
         return False
     dbpath = Path(ledger.db_path)
     if not _owned_private_regular(dbpath):
@@ -969,7 +973,7 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
             if db.execute(
                 "SELECT 1 FROM m05_radar_momentum_attempts "
                 "WHERE claimed_epoch > ? LIMIT 1",
-                (now_epoch - GLOBAL_SPACING_SECONDS,),
+                (now_epoch - global_spacing_seconds,),
             ).fetchone():
                 return False
             row = db.execute(
@@ -1162,10 +1166,14 @@ def send_one_owner_radar_momentum_nonlive(
         db_path=db_path, now_epoch=now,
     )
 
+    premium = os.environ.get("M05_RADAR_PREMIUM_LAYOUT_GO") == "YES"
+
     def priority_only(snapshot: dict) -> dict:
         # Optional opt-in. Keep original 0.35% early scout / 150m discovery
         # intact in M03 and M04; filter ONLY the M05 owner alert publication.
         if not priority_alert_enabled or not snapshot.get("candidates"):
+            if premium and isinstance(snapshot.get("ranked_review_shortlist_top40"), list):
+                return dict(snapshot, candidates=snapshot["ranked_review_shortlist_top40"][:40])
             return snapshot
         from .m08_strategy_a_nonlive import assess_ws3_priority_alert_offline
         eligible = []
@@ -1186,30 +1194,35 @@ def send_one_owner_radar_momentum_nonlive(
             except (KeyError, InvalidOperation, TypeError, ValueError):
                 # No fabricated positive eligibility for malformed sources.
                 continue
-        return dict(snapshot, candidates=eligible[:5])
+        return dict(snapshot, candidates=eligible[:40 if premium else 5])
 
     snap = priority_only(snap)
-    # Explicit opt-in ONLY: use WS3 when original REST has no CURRENT
-    # priority-qualified WATCH, never claim REST/G1 recovery or merge schemas.
-    if ws3_enabled and not snap.get("candidates"):
+    # Premium checks both original cached source families, even when REST
+    # has candidates that fail the display gate or the durable claim.
+    # WS3 first in the WS3-enabled premium runtime; each card uses its own
+    # source and never combines REST price history with WS3 ticker history.
+    snapshots = [snap]
+    if ws3_enabled and (premium or not snap.get("candidates")):
         ws3 = inspect_original_m03_ws3_watch_readonly(
             db_path=db_path, now_epoch=now,
         )
         if ws3["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED":
-            snap = priority_only(ws3)
-    if snap["status"] not in (
-            "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
-            "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"):
+            filtered = priority_only(ws3)
+            snapshots = [filtered, snap] if premium else [filtered]
+    valid = [x for x in snapshots if x["status"] in (
+        "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
+        "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED")]
+    if not valid:
         return {"status": "M05_RADAR_ORIGINAL_SOURCE_UNAVAILABLE",
                 "messages_sent": 0}
-    if not snap["candidates"]:
+    pool = [(c, "WS3" if x["status"] ==
+             "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
+            for x in valid for c in x["candidates"]]
+    if not pool:
         return {"status": "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
                 "messages_sent": 0}
-    premium = os.environ.get("M05_RADAR_PREMIUM_LAYOUT_GO") == "YES"
     eligible_count = 0
-    source_kind = ("WS3" if snap["status"] ==
-                   "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
-    for candidate in snap["candidates"]:
+    for candidate, source_kind in pool:
         parse_mode = None
         if premium:
             # New owner publication gate BEFORE durable claim. No legacy
@@ -1218,10 +1231,13 @@ def send_one_owner_radar_momentum_nonlive(
                 DEFAULT_EVIDENCE_DB, format_pitiden_premium,
                 read_price_references, read_closed_candles,
                 read_native_previous_24h, build_timeframes,
-                eligible_premium_watch,
+                eligible_premium_watch, MIN_TURNOVER_24H,
             )
             evidence_path = DEFAULT_EVIDENCE_DB if Path(db_path) == DEFAULT_DB else None
             try:
+                turnover = _finite_number(candidate.get("volume_24h_idr"))
+                if turnover is None or turnover < MIN_TURNOVER_24H:
+                    continue
                 refs = read_price_references(
                     candidate, db_path=db_path, now_epoch=now,
                     source_kind=source_kind, evidence_path=evidence_path,
@@ -1252,6 +1268,8 @@ def send_one_owner_radar_momentum_nonlive(
         if not _claim_once(
             ledger, candidate["pair"], candidate["observed_epoch"], now,
             source_kind=source_kind,
+            global_spacing_seconds=(PREMIUM_GLOBAL_SPACING_SECONDS if premium
+                                    else GLOBAL_SPACING_SECONDS),
         ):
             continue
         # Claim is durable BEFORE send; uncertainty must never replay it.

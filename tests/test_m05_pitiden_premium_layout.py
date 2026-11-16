@@ -82,9 +82,13 @@ class PremiumWatchTests(unittest.TestCase):
         self.assertEqual(rows[-1]["volume"],Decimal("461460000"))
         msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=end,rows=rows)
         for phrase in ("🟢 1m","🔴 10m","🟢 4h","24h","461,46jt",
-                       "Green 6/8","Vol 24h rolling Rp","Not BUY"):
+                       "Green 6/8","24h rolling","Not BUY","Rp461.460.000","TF · CHANGE · CLOSE · VOL"):
             self.assertIn(phrase,msg)
-        self.assertLessEqual(len(msg.splitlines()),15)
+        self.assertLessEqual(len(msg.splitlines()),21)
+        self.assertNotIn("<pre>",msg)
+        self.assertNotIn("<code>",msg)
+        self.assertNotIn("Score N/A",msg)
+        self.assertIn("5m</b>  ",msg)
 
     def test_four_green_gate_boundary_unknown_flat_volume_and_duplicates(self):
         def rows(values):
@@ -228,6 +232,18 @@ class PremiumWatchTests(unittest.TestCase):
                 c["microstructure_observation"], **change)
             self.assertIn("Spread N/A", format_pitiden_premium(
                 bad, [], source_kind="WS3", now_epoch=END))
+
+    def test_partial_trade_value_separate_from_intraday_volume(self):
+        c=candidate(microstructure_observation={
+            "status":"PARTIAL_SOURCE_OBSERVATION","source_malformed":False,
+            "trade_activity_observed":True,"source_capture_epoch":END-1,
+            "source_reported_buy_idr":"500000","source_reported_sell_idr":"100000"})
+        rows=build_timeframes(c,[])
+        msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=END,rows=rows)
+        self.assertIn("Trade sample · Rp600.000 (partial)",msg)
+        self.assertTrue(all(r["volume"] is None for r in rows[:-1]))
+        self.assertNotIn("Trade sample",format_pitiden_premium(
+            c,[],source_kind="WS3",now_epoch=END+91,rows=rows))
 
     def test_archive_queries_have_asof_cutoffs_source_isolation_and_conflict(self):
         with TemporaryDirectory() as td:
