@@ -18,6 +18,7 @@ from typing import Any
 from .ai_budget import AiBudgetError, PersistentAiBudget
 from .m04_public_watch_provider_preview_nonlive import (
     prepare_public_watch_provider_request_preview_offline,
+    prepare_ws3_micro_provider_request_preview_offline,
     validate_public_watch_provider_response_shape_offline,
 )
 from .sumopod_provider import (
@@ -100,9 +101,10 @@ def run_public_watch_paid_once(
         return _status("M04_PUBLIC_WATCH_NO_CURRENT_CANDIDATE")
 
     # Validate the ENTIRE original cohort first, before slicing to one.
-    original = prepare_public_watch_provider_request_preview_offline(
-        handoff=handoff, now_epoch=now, models_by_role=owner_models,
-    )
+    ws3_micro = handoff.get("status") == "M04_WS3_MICRO_PREALERT_ROLE_INPUTS_PREPARED"
+    prepare = (prepare_ws3_micro_provider_request_preview_offline if ws3_micro
+               else prepare_public_watch_provider_request_preview_offline)
+    original = prepare(handoff=handoff,now_epoch=now,models_by_role=owner_models)
     if (original.get("status") != "M04_PUBLIC_WATCH_PROVIDER_CONTRACT_OFFLINE"
             or original.get("candidate_count") != len(handoff["candidates"])
             or original.get("request_preview_count") != len(handoff["candidates"]) * 3
@@ -126,6 +128,10 @@ def run_public_watch_paid_once(
     first_snapshot = handoff["candidates"][0]["public_evidence"]
     epoch = first_snapshot["observed_epoch"]
     result = _status("M04_PUBLIC_WATCH_PAID_READY_NO_CALL_YET")
+    result["source_contract"] = ("WS3_MICRO_PUBLIC_WATCH_NOT_G1" if ws3_micro
+                                 else "LEGACY_TICKER_PUBLIC_WATCH_NOT_G1")
+    result["source_observed_epoch"] = epoch
+    result["source_age_seconds_at_start"] = now-epoch
     result["pair"] = pair
     result["evidence_digest_sha256"] = digest
     result["owner_paid_test_approved"] = True
@@ -187,6 +193,7 @@ def run_public_watch_paid_once(
             return result
 
         result["provider_http_attempts"] += 1
+        started = time.monotonic()
         try:
             envelope = (transport or _post)(
                 request, header, HTTP_TIMEOUT_SECONDS,
@@ -233,6 +240,7 @@ def run_public_watch_paid_once(
             "stance": parsed["stance"],
             "reason": parsed["reason"],
             "source_digest_sha256": digest,
+            "response_latency_ms": max(0,int((time.monotonic()-started)*1000)),
             "prompt_tokens_reported": usage["prompt_tokens"],
             "completion_tokens_reported": usage["completion_tokens"],
             # Vendor-reported token counts do not prove actual charged cost.
