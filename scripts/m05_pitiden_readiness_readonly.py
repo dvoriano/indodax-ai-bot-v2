@@ -16,6 +16,9 @@ from indodax_ai_bot.m05_pitiden_premium_layout import (
     eligible_premium_watch, read_closed_candles, read_native_previous_24h,
     read_price_references,
 )
+from indodax_ai_bot.m03_ws3_local_observations_nonlive import (
+    read_observed_minute_trade_ohlc,
+)
 from indodax_ai_bot.scanner import MAIN_EXCLUDED_PAIRS
 from indodax_ai_bot.m03_ws3_evidence_archive_nonlive import _private_owned_regular
 
@@ -92,10 +95,14 @@ def inspect_readiness(*, now=None, db_path=DEFAULT_DB,
             rows=build_timeframes(c,refs,candles=candles,previous_24h=prev)
             for row in rows:
                 coverage[row["tf"]]+=int(row["change"] is not None)
+            trade_minute=c["observed_epoch"]//60*60-60
+            partial_trade=read_observed_minute_trade_ohlc(
+                evidence_path,c["pair"],trade_minute,now_epoch=now)
             fresh=0<=now-c["observed_epoch"]<=150 and 0<=now-minute<=150
             cards.append({"pair":c["pair"],"age_sec":now-c["observed_epoch"],
               "fresh_for_radar":fresh,"history_samples":len(refs),
               "cached_candles":len(candles),"native_24h":prev is not None,
+              "partial_trade_ohlc":partial_trade,
               "green":count_green(rows),"premium_gate_only":eligible_premium_watch(c,rows),
               "returns":{r["tf"]:{"pct":str(r["change"]) if r["change"] is not None else None,
                          "approx":r["approx"]} for r in rows}})
