@@ -131,6 +131,7 @@ def queue_scanner_owner_advisory(
     if any(p not in selected for p in preview):
         return {"status": "INCOMPLETE_PUBLIC_CANDIDATE", "queued": 0}
     queued = 0
+    selected_reference = None
     reasons = []
     for pair in preview:
         row = selected[pair]
@@ -236,6 +237,14 @@ def queue_scanner_owner_advisory(
         )
         if proposal.get("accepted") is True:
             queued += 1
+            if ai_selected:
+                # Exactly the public advisory identity used by ORIGINAL M07
+                # last-moment gate; not the signed G1 digest or an order.
+                selected_reference = {
+                    "owner_advisory_proposal_id":proposal["proposal_id"],
+                    "source_digest":digest,
+                    "closed_1m_epoch":closed_epoch,
+                }
         else:
             reasons.append(proposal.get("reason", "PROPOSAL_NOT_QUEUED"))
     return {
@@ -246,6 +255,7 @@ def queue_scanner_owner_advisory(
         "execution_allowed": False,
         "public_source_not_authenticated": True,
         "paid_ai_not_inferred": True,
-        **({"selected_pair":preview[0], "m04_synthetic_review_only":True}
+        **({"selected_pair":preview[0], "m04_synthetic_review_only":True,
+            "m07_advisory_reference":selected_reference}
            if ai_selected else {}),
     }
