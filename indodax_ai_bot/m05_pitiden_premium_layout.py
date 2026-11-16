@@ -23,7 +23,7 @@ from .m03_ws3_evidence_archive_nonlive import (
 FRAMES = (("1m", 60), ("5m", 300), ("10m", 600), ("15m", 900),
           ("30m", 1800), ("1h", 3600), ("4h", 14400), ("24h", 86400))
 WIB = ZoneInfo("Asia/Jakarta")
-_LAYOUT = "PITIDEN_PREMIUM_WATCH_V5_MOBILE_4_GREEN"
+_LAYOUT = "PITIDEN_PREMIUM_WATCH_V6_ALIGNED_4_GREEN"
 MIN_GREEN = 4
 MIN_TURNOVER_24H = Decimal("400000000")
 
@@ -353,7 +353,7 @@ def _momentum(rows):
 
 def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
                            candles=None, previous_24h=None, rows=None):
-    """Mobile Telegram HTML, ordinary text rows, no code-block chrome.
+    """Mobile Telegram HTML, aligned inline text, no code-block chrome.
 
     Watch score and volume acceleration remain unavailable until real
     transaction-window evidence and a validated score definition exist.
@@ -364,18 +364,35 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     pair = candidate["pair"].upper().replace("_IDR", "/IDR")
     current = _number(_decimal(candidate["latest_price_idr"], positive=True))
     time = datetime.fromtimestamp(candidate["observed_epoch"], WIB).strftime("%H:%M:%S")
-    # Telegram HTML has no table or arbitrary text color support.
-    # One regular-text row per timeframe, no pre/code or width assumptions.
-    table = ["<b>TF · CHANGE · CLOSE · VOL</b>"]
+    # Telegram has no HTML tables. Individual inline code entities retain
+    # fixed-width character cells without the preformatted Copy Code panel.
+    # Put status emoji AFTER the cells so variable emoji fonts cannot shift
+    # the numeric column starts. Never round/truncate exact close prices to fit.
+    cells = []
     for row in rows:
-        change = _percent(row["change"]) if row["change"] is not None else "—"
-        close = _number(row["close_price"]) if row["close_price"] is not None else "—"
-        volume = _volume(row["volume"]) if row["volume"] is not None else "—"
+        change = _percent(row["change"]) if row["change"] is not None else "-"
+        close = _number(row["close_price"]) if row["close_price"] is not None else "-"
+        volume = (_volume(row["volume"]).replace(" miliar", "M")
+                  if row["volume"] is not None else "-")
         label = row["tf"] + ("~" if row["approx"] else "")
-        table.append(
-            f"<b>{escape(_direction(row['change']) + ' ' + label)}</b>  "
-            f"{escape(change)} · {escape(close)} · {escape(volume)}"
-        )
+        cells.append((label, change, close, volume, _direction(row["change"])))
+    headers = ("TF", "CHG", "CLOSE", "VOL")
+    widths = tuple(max(len(h), *(len(r[i]) for r in cells))
+                   for i,h in enumerate(headers))
+    def aligned(values):
+        return " ".join((values[0].ljust(widths[0]), *(
+            values[i].rjust(widths[i]) for i in range(1,4))))
+    if sum(widths)+3 <= 30:
+        table = ["<code>"+escape(aligned(headers))+"</code>"]
+        table += ["<code>"+escape(aligned(r[:4]))+"</code> "+r[4]
+                  for r in cells]
+    else:
+        # Exceptional very long returns/prices: labeled two-line fallback
+        # instead of wrapping an ambiguous table or sacrificing precision.
+        table = ["<b>TF / CHANGE / CLOSE / VOL</b>"]
+        for label, change, close, volume, direction in cells:
+            table.append(f"{direction} <b>{escape(label)} · {escape(change)}</b>")
+            table.append(escape(f"Close {close} · Vol {volume}"))
     spread = None
     if source_kind == "REST":
         spread = _decimal(candidate.get("spread_bps"))
@@ -415,7 +432,8 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
             sample_text = "Trade sample · Rp" + _number(buy+sell) + " (partial)"
     lines = [
         f"📡 <b>PITIDEN RADAR</b> · {escape(time)} WIB",
-        f"<b>{escape(pair)} · Rp{escape(current)}</b>  <b>{escape(daily)}</b> (24h)",
+        f"<b>{escape(pair)} · Rp{escape(current)}</b>",
+        f"24h Change · <b>{escape(daily)}</b>",
         f"<b>24h Volume</b> · {escape(total)}",
         "",
         *table,
@@ -424,8 +442,8 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         escape(f"Momentum {_momentum(rows)} · Spread {spread_text}"),
         escape(context),
         *([escape(sample_text)] if sample_text is not None else []),
-        f"<i>{known}/8 returns observed · ~ sampled · — unavailable</i>",
-        "<i>Close/Vol in IDR · 24h rolling · WATCH · Not BUY</i>",
-        "<i>AI/G1 unverified</i>",
+        f"<i>{known}/8 data · ~ sampled · - unavailable</i>",
+        "<i>IDR · M=miliar · jt=juta · rb=ribu · T=triliun</i>",
+        "<i>24h rolling · WATCH · Not BUY · AI/G1 unverified</i>",
     ]
     return "\n".join(lines)

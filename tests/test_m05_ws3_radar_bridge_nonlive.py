@@ -414,7 +414,7 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertEqual(method,"sendMessage")
         self.assertEqual(payload["parse_mode"],"HTML")
         self.assertIn("<b>UAI/IDR · Rp101</b>",payload["text"])
-        self.assertIn("🟢 4h",payload["text"])
+        self.assertRegex(payload["text"],r"<code>4h +[^<]+</code> 🟢")
         self.assertIn("Green 7/8",payload["text"])
         self.assertIn("24h",payload["text"])
         self.assertNotIn("reply_markup",payload)

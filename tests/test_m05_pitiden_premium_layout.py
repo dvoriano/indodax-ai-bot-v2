@@ -5,6 +5,8 @@ from hashlib import sha256
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import sqlite3
+import re
+from html import unescape
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -81,14 +83,46 @@ class PremiumWatchTests(unittest.TestCase):
         self.assertTrue(all(r["volume"] is None for r in rows[:-1]))
         self.assertEqual(rows[-1]["volume"],Decimal("461460000"))
         msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=end,rows=rows)
-        for phrase in ("🟢 1m","🔴 10m","🟢 4h","24h","461,46jt",
-                       "Green 6/8","24h rolling","Not BUY","Rp461.460.000","TF · CHANGE · CLOSE · VOL"):
+        for phrase in ("24h","461,46jt",
+                       "Green 6/8","24h rolling","Not BUY","Rp461.460.000","CHG","CLOSE","VOL"):
             self.assertIn(phrase,msg)
         self.assertLessEqual(len(msg.splitlines()),21)
         self.assertNotIn("<pre>",msg)
-        self.assertNotIn("<code>",msg)
         self.assertNotIn("Score N/A",msg)
-        self.assertIn("5m</b>  ",msg)
+        self.assertRegex(msg,r"<code>1m +[^<]+</code> 🟢")
+        self.assertRegex(msg,r"<code>10m +[^<]+</code> 🔴")
+        self.assertRegex(msg,r"<code>4h +[^<]+</code> 🟢")
+        self.assertEqual(msg.count("<code>"),9)
+
+    def test_aligned_vine_screenshot_columns_and_exact_close_overflow(self):
+        c=candidate(pair="vine_idr",latest_price_idr="199",
+                    volume_24h_idr="1334151044")
+        values=[(None,None),(Decimal(".50"),Decimal("203")),
+                (Decimal("0"),Decimal("203")),(Decimal("0"),Decimal("203")),
+                (Decimal("4.10"),Decimal("203")),(Decimal("7.41"),Decimal("203")),
+                (Decimal("1.02"),Decimal("199")),(Decimal("145.68"),Decimal("199"))]
+        rows=[{"tf":tf,"change":change,"close_price":close,
+               "approx":1<=i<=6,"volume":Decimal("1334151044") if i==7 else None}
+              for i,((tf,_),(change,close)) in enumerate(zip(FRAMES,values))]
+        msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=END,rows=rows)
+        lines=[unescape(x) for x in re.findall(r"<code>(.*?)</code>",msg)]
+        self.assertEqual(len(lines),9)
+        self.assertEqual(len({len(x) for x in lines}),1)
+        self.assertLessEqual(len(lines[0]),30)
+        # Same right edge for every numeric cell (as well as the headers).
+        import re as regex
+        edges=lambda x:[m.end() for m in regex.finditer(r"\\S+",x)][1:]
+        self.assertTrue(all(edges(x)==edges(lines[0]) for x in lines[1:]))
+        self.assertEqual(lines[-1].split(),["24h","+145,68%","199","1,33M"])
+        self.assertEqual(lines[1].split(),["1m","-","-","-"])
+        self.assertIn("Rp1.334.151.044",msg)
+        self.assertIn("Green 5/8",msg)
+        self.assertNotIn("<pre>",msg)
+        rows[0]["close_price"]=Decimal("0.00000000000000000123")
+        long=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=END,rows=rows)
+        self.assertNotIn("<code>",long)
+        self.assertIn("Close 0,00000000000000000123 · Vol -",long)
+        self.assertIn("Green 5/8",long)
 
     def test_four_green_gate_boundary_unknown_flat_volume_and_duplicates(self):
         def rows(values):
@@ -178,11 +212,11 @@ class PremiumWatchTests(unittest.TestCase):
         msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=END,
                     candles={a:(Decimal("0.00000012"),Decimal("0.00000014"))})
         self.assertIn("Rp0,00000014",msg)
-        self.assertIn("🟢 1m",msg)
+        self.assertRegex(msg,r"(?:🟢 <b>1m|<code>1m +[^<]+</code> 🟢)")
         msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=END,
                     candles={a:(Decimal("0.00000014"),Decimal("0.00000014"))})
-        self.assertIn("⚪ 1m",msg)
-        self.assertIn("⚫ 5m",msg)
+        self.assertRegex(msg,r"(?:⚪ <b>1m|<code>1m +[^<]+</code> ⚪)")
+        self.assertRegex(msg,r"(?:⚫ <b>5m|<code>5m +[^<]+</code> ⚫)")
 
     def test_existing_ohlc_archive_batch_and_row_integrity(self):
         with TemporaryDirectory() as td:
