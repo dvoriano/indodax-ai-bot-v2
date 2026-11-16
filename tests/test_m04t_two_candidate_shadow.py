@@ -324,5 +324,76 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         self.assertFalse(result["execution_allowed"])
 
 
+
+    def test_historical_review_reuses_archive_and_never_invents_missing_outcome(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        import sqlite3
+        import json
+        from decimal import Decimal
+        from indodax_ai_bot.journal import DecisionJournal
+        from indodax_ai_bot.calibration_replay import evaluate_m04_review_history_once
+        with TemporaryDirectory() as tmp:
+            journal = DecisionJournal(Path(tmp)/"original.sqlite3")
+            archive=Path(tmp)/"observations.sqlite3"
+            bulk, verifier=signed_two_pair_source()
+            caller=RoleCaller(risk="NO_TRADE")
+            result=ThreeRoleShadow(caller=caller,clock=lambda:CLOCK,
+                source_verifier=verifier,
+                review_claim=journal.claim_m04_candidate_evidence_once).run("trace",bulk)
+            source_epoch=bulk["screening_observed_epoch"]
+            instant=CLOCK
+            self.assertEqual(journal.record_m04_history_reviews(ai_shadow=result,
+                source_epoch=source_epoch,decision_epoch=instant),2)
+            self.assertEqual(journal.record_m04_history_reviews(ai_shadow=result,
+                source_epoch=source_epoch,decision_epoch=instant),0)
+            self.assertEqual(evaluate_m04_review_history_once(journal,
+                now_epoch=instant+3660,evidence_db=archive)["status"],
+                "M04_HISTORY_SOURCE_UNAVAILABLE")
+            with sqlite3.connect(archive) as db:
+                db.execute("CREATE TABLE ws3_source_evidence(pair TEXT,minute_epoch INTEGER,"
+                    "source_exchange_epoch INTEGER,last_idr TEXT,public_offset INTEGER,source_status TEXT)")
+                db.execute("CREATE TABLE ws3_source_cycles(minute_epoch INTEGER PRIMARY KEY,"
+                           "recorded_local_epoch INTEGER)")
+                def sample(t,price,local=None):
+                    local=t if local is None else local
+                    minute=local-local%60
+                    db.execute("INSERT OR IGNORE INTO ws3_source_cycles VALUES(?,?)",(minute,local))
+                    db.execute("INSERT INTO ws3_source_evidence VALUES(?,?,?,?,?,?)",
+                               (PAIRS[0],minute,t,price,1,"ELIGIBLE_SOURCE_OBSERVATION"))
+                sample(instant-60,"1")  # pre-decision: never anchor
+                sample(instant,"100")
+                sample(instant+300,"103")
+                sample(instant+900,"110",instant+1020)  # too late for 15m
+                sample(instant+1800,"99")
+                sample(instant+3600,"104")
+            archive.chmod(0o600)
+            before=evaluate_m04_review_history_once(journal,now_epoch=instant+359,
+                                                     evidence_db=archive)
+            self.assertEqual(before["outcomes_recorded"],0)
+            first=evaluate_m04_review_history_once(journal,now_epoch=instant+360,
+                                                   evidence_db=archive)
+            self.assertEqual(first["outcomes_recorded"],2)
+            self.assertEqual(first["cohorts"]["RISK_REJECT:5"],
+                {"observed":1,"unknown":1,"net_proxy_50bps_ge_2pct":1})
+            done=evaluate_m04_review_history_once(journal,now_epoch=instant+3660,
+                                                   evidence_db=archive)
+            self.assertEqual(done["outcomes_recorded"],6)
+            self.assertEqual(done["cohorts"]["RISK_REJECT:15"]["unknown"],2)
+            self.assertEqual(done["cohorts"]["RISK_REJECT:60"]["observed"],1)
+            self.assertFalse(done["strategy_auto_updated"])
+            with journal._connect() as db:
+                raw=db.execute("SELECT outcome_json FROM m04_history_outcomes "
+                               "WHERE pair=? AND horizon_minutes=5",(PAIRS[0],)).fetchone()[0]
+                item=json.loads(raw)
+                self.assertEqual(Decimal(item["gross_move_bps"]),Decimal("300"))
+                self.assertEqual(Decimal(item["net_proxy_bps"]["50"]),Decimal("250"))
+                self.assertFalse(item["actual_fill_or_profit"])
+            replay=evaluate_m04_review_history_once(journal,now_epoch=instant+3661,
+                                                     evidence_db=archive)
+            self.assertEqual(replay["outcomes_recorded"],0)
+            self.assertEqual(replay["cohorts"],done["cohorts"])
+
+
 if __name__ == "__main__":
     unittest.main()
