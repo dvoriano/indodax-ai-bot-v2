@@ -2199,6 +2199,52 @@ class DailyScalpingOrchestrator:
             "execution_allowed": False,
         }
 
+    def review_m09_paper_position_policy_offline(self, *, paper_id: str,
+            observed_epoch: int, book_observed_epoch: int,
+            tier_sell_qty: Decimal, bid_levels: tuple,
+            best_ask: Decimal, taker_sell_fee_pct: Decimal,
+            maker_sell_fee_pct: Decimal, taker_slippage_pct: Decimal) -> dict:
+        """Original PAPER lot -> existing M08 Strategy A and holding clock.
+
+        Review only: the supplied book and fee values are hypothetical,
+        including maker prices. Never claim a resting maker order filled
+        or publish a real BUY/SELL. Record a PAPER fill via existing SELL
+        only when simulated fill evidence is supplied separately.
+        """
+        self.settings.require_m01_safety()
+        position=self.journal.read_m09_open_paper_position_offline(
+            paper_id=paper_id,observed_epoch=observed_epoch)
+        if (type(book_observed_epoch) is not int
+                or not position["buy_epoch"]<=book_observed_epoch<=observed_epoch):
+            raise ValueError("M09_PAPER_BOOK_TIME_INVALID")
+        result=self.review_strategy_a_nonlive_once(
+            review_type="POSITION_EXIT",
+            remaining_bot_qty_reference=position["remaining_qty"],
+            remaining_cost_including_buy_fee_idr=position["remaining_cost_idr"],
+            tier_sell_qty_reference=tier_sell_qty,
+            bid_levels=bid_levels,best_ask=best_ask,
+            taker_sell_fee_pct=taker_sell_fee_pct,
+            maker_sell_fee_pct=maker_sell_fee_pct,
+            taker_slippage_pct=taker_slippage_pct,
+            book_age_seconds=observed_epoch-book_observed_epoch)
+        time_review=ScalpingPolicy().assess_position_holding_time(
+            actual_buy_fill_epoch=position["buy_epoch"],
+            observed_epoch=observed_epoch,
+            market_source_fresh=False)
+        return {
+            **self.journal._m09_paper_source_only(),
+            "status":"M09_PAPER_POSITION_POLICY_REVIEW_ONLY",
+            "paper_id":paper_id,"paper_symbol":position["symbol"],
+            "paper_remaining_qty":format(position["remaining_qty"],"f"),
+            "paper_remaining_cost_idr":format(position["remaining_cost_idr"],"f"),
+            "paper_holding_seconds":time_review.elapsed_seconds,
+            "paper_holding_phase":time_review.phase,
+            "paper_time_review_urgency":time_review.risk_review_priority,
+            "paper_strategy_a_reference":result,
+            "paper_book_is_hypothetical":True,
+            "paper_sell_fill_recorded":False,
+        }
+
     def run_m09_original_paper_cycle_offline_once(self, *,
             action: str, details: dict,
             include_m11_risk_halt_readonly_reference: bool = False) -> dict:
@@ -2236,6 +2282,8 @@ class DailyScalpingOrchestrator:
             result=self.journal.record_m09_paper_buy_offline(**details)
         elif action == "SELL":
             result=self.journal.record_m09_paper_sell_offline(**details)
+        elif action == "REVIEW":
+            result=self.review_m09_paper_position_policy_offline(**details)
         elif action == "SUMMARY":
             result=self.journal.review_m09_paper_pnl_offline(**details)
         else:
