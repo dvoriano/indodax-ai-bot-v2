@@ -117,6 +117,21 @@ class OriginalM05PriorityAckResearchTests(unittest.TestCase):
         self.assertEqual(r["telegram_messages_sent_by_audit"], 0)
         self.assertEqual(r["orders_sent"], 0)
 
+    def test_independent_claim_not_misclassified_as_momentum_mismatch(self):
+        def reader(*args):
+            raise AssertionError("independent route must not apply legacy threshold")
+        r=summarize_priority_receipts_offline(pid_start=CLAIM-100,
+            now_epoch=CLAIM+100,events=[event()+("INDEPENDENT_FOUR_GREEN",4)],
+            source_reader=reader)
+        self.assertEqual(r["independent_four_green_acked"],1)
+        self.assertEqual(r["archive_mismatch_needs_review"],0)
+        self.assertEqual(r["events"][0]["green_at_claim"],4)
+        self.assertTrue(r["events"][0]["local_green_claim_not_independent_attestation"])
+        with self.assertRaises(ValueError):
+            summarize_priority_receipts_offline(pid_start=CLAIM-100,
+                now_epoch=CLAIM+100,events=[event()+("INDEPENDENT_FOUR_GREEN",3)],
+                source_reader=reader)
+
     def test_source_missing_and_no_alert_are_inconclusive_not_zero_profit(self):
         missing = summarize_priority_receipts_offline(
             pid_start=CLAIM-100, now_epoch=CLAIM+100,
