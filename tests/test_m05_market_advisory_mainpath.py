@@ -161,12 +161,12 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         from indodax_ai_bot.three_role_ai import _candidate_decision_loop
         from copy import deepcopy
         bulk = public_cohort()
-        peer = public_cohort(pair="eth_idr")
+        peer = public_cohort(pair="btc_idr")
         for name in ("provisional_watchlist_preview","provisional_quality_reviews"):
             bulk["eligible_cohort"][name].extend(peer["eligible_cohort"][name])
         bulk["provisional_market_evidence"].extend(peer["provisional_market_evidence"])
         digest = "f"*64
-        report={"pair":"eth_idr","evidence_digest_sha256":digest,
+        report={"pair":"btc_idr","evidence_digest_sha256":digest,
                 "reason":"STRATEGY_BUY_PREFLIGHT_UNVERIFIED",
                 "completed_roles":["MARKET","RISK","STRATEGY"],
                 "role_results":[
@@ -175,7 +175,7 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
                     {"role":"RISK","decision":"ALLOW","risk_source_report":{"blockers":[]}},
                     {"role":"STRATEGY","action":"BUY","projected_net_profit_idr":"15000",
                      "projected_net_roi_percent":"2.5","strategy_source_plan":{
-                         "pair":"eth_idr","status":"SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED",
+                         "pair":"btc_idr","status":"SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED",
                          "allocated_cost_idr":"600000","entry_price_idr":"1000",
                          "stop_loss_price_idr":"980","estimated_net_profit_idr":"30000",
                          "estimated_net_roi_percent":"5"}}]}
@@ -202,15 +202,40 @@ class OriginalV2MarketAdvisoryMainpathTests(unittest.TestCase):
         self.assertFalse(auto["execution_allowed"])
         self.assertIsNone(self.ledger.claim_market_advisory_delivery(now_epoch=NOW))
         self.ledger.switch_mode(user_id=OWNER,chat_id=OWNER,mode="MANUAL",now_epoch=NOW)
-        manual=queue(good)
+        manual=queue(good,NOW+1)
         self.assertEqual(manual["queued"],1)
-        self.assertEqual(manual["selected_pair"],"eth_idr")
-        out=self.ledger.claim_market_advisory_delivery(now_epoch=NOW)
-        self.assertIn("Pair: ETH_IDR",out["message_text"])
+        self.assertEqual(manual["selected_pair"],"btc_idr")
+        out=self.ledger.claim_market_advisory_delivery(now_epoch=NOW+1)
+        self.assertIn("Pair: BTC_IDR",out["message_text"])
         self.assertIn("SYNTHETIC_AI_SELECTED_REVIEW_ONLY",out["message_text"])
         self.assertIn("NOT A BUY ORDER",out["message_text"])
-        self.assertEqual(queue(good)["queued"],0)
+        self.assertEqual(queue(good,NOW+1)["queued"],0)
         self.assertIsNone(self.ledger.claim_manual_trade_preview_delivery(now_epoch=NOW))
+        # The existing M07 gate reads the actual owner ledger, not the AI
+        # proposal's claims. Test callback delivery, same-source binding,
+        # stale/forged reference and MANUAL->AUTO invalidation.
+        from tests.test_m07_m06_m05_last_moment_mainpath import preview, public, account
+        ref=manual["m07_advisory_reference"]
+        market=dict(public(),closed_1m_epoch=CLOSED,observed_epoch=NOW+1)
+        def gate(now, **changes):
+            return self.app.review_m07_last_moment_gate_offline(
+                limit_preview=preview(),public_candidate=market,account_snapshot=account(),
+                now_epoch=now,**{**ref,**changes})
+        self.assertFalse(gate(NOW+1)["m05_same_source_advisory_review_pass"])
+        self.ledger.confirm_market_advisory_delivery(
+            proposal_id=out["proposal_id"],message_id=55)
+        press=self.ledger.apply_callback(user_id=OWNER,chat_id=OWNER,
+            callback_data=out["pass_callback"],now_epoch=NOW+2,telegram_message_id=55)
+        self.assertTrue(press["accepted"])
+        checked=gate(NOW+3)
+        self.assertTrue(checked["m05_same_source_advisory_review_pass"])
+        self.assertFalse(checked["m05_order_specific_final_verified"])
+        self.assertFalse(checked["execution_allowed"])
+        self.assertFalse(checked["order_sent"])
+        self.assertFalse(gate(NOW+3,source_digest="0"*64)["m05_same_source_advisory_review_pass"])
+        self.assertFalse(gate(NOW+61)["m05_same_source_advisory_review_pass"])
+        self.ledger.switch_mode(user_id=OWNER,chat_id=OWNER,mode="AUTO",now_epoch=NOW+4)
+        self.assertFalse(gate(NOW+5)["m05_same_source_advisory_review_pass"])
         self.assertEqual(self.journal.count(),0)
 
     def test_original_bulk_to_owner_queue_without_final_or_order(self):
