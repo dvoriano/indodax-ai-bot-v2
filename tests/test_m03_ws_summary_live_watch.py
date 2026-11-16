@@ -306,6 +306,52 @@ class M03WSLiveWatchTests(unittest.TestCase):
                 self.assertNotIn("SECRET", str(raised.exception))
                 self.assertTrue(provider.sock.closed)
 
+    def test_coalesced_complete_observe_publications_same_socket(self):
+        import json
+        first = frames(NOW, 100)
+        second = frames(NOW + 1, 110, offset=125)[2]
+        frame = RawWSFrame(json.dumps(first[2]) + "\n" + json.dumps(second))
+        provider = FakeWS(first[:2] + [frame])
+        out = collect_ws3_market_summary_once(
+            ws_module=provider, monotonic=Clock(), observe_seconds=3,
+        )
+        self.assertEqual(out["frames_observed"], 2)
+        self.assertEqual(out["last_public_offset"], 125)
+        self.assertEqual(out["coalesced_publication_frames"], 1)
+        self.assertEqual(next(r for r in out["pairs"] if r["pair"] == "uai_idr")
+                         ["last_idr"], "110")
+        self.assertEqual(len(provider.sock.sent), 2)
+
+    def test_coalesced_prefix_never_salvaged_from_invalid_suffix(self):
+        import json
+        first = frames(NOW, 100)
+        valid = json.dumps(first[2])
+        bad = frames(NOW+1, 110, offset=125)[2]
+        bad["result"]["data"]["data"][0][2] = "SECRET_INVALID_PRICE"
+        for suffix in ("trailing SECRET", "{}", json.dumps(bad),
+                       valid * 8, '{"result":'):
+            with self.subTest(suffix_type=len(suffix)):
+                provider = FakeWS(first[:2] + [RawWSFrame(valid + suffix)])
+                with self.assertRaisesRegex(
+                    M03WSWatchError,
+                    "^M03_WS_WATCH_JSON_INVALID:OBSERVE:STRUCTURED_EXTRA_DATA$",
+                ):
+                    collect_ws3_market_summary_once(
+                        ws_module=provider, monotonic=Clock(), observe_seconds=3,
+                    )
+                self.assertTrue(provider.sock.closed)
+
+    def test_coalesced_auth_ack_is_not_accepted(self):
+        import json
+        first = frames(NOW, 100)
+        provider = FakeWS([RawWSFrame(json.dumps(first[0]) + json.dumps(first[1]))])
+        with self.assertRaisesRegex(
+            M03WSWatchError, "^M03_WS_WATCH_JSON_INVALID:AUTH:STRUCTURED_EXTRA_DATA$"
+        ):
+            collect_ws3_market_summary_once(
+                ws_module=provider, monotonic=Clock(), observe_seconds=3,
+            )
+
     def test_unknown_json_decoder_reason_is_always_redacted(self):
         import json
         from indodax_ai_bot.m03_ws_summary_live_watch import (
