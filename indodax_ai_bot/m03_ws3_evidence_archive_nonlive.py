@@ -126,7 +126,21 @@ def archive_ws3_evidence_nonlive(
             continue
         status, stamp, price, volume, offset = _classify(row, now_epoch)
         counts[status] += 1
-        accepted.append((pair, minute, stamp, price, volume, offset, status))
+        # Retain already received official WS3 prev24h, not a new request.
+        # Never retrospectively attach a later duplicate publication.
+        previous = None
+        raw_previous = row.get("previous_24h_idr")
+        if (status in ("ELIGIBLE_SOURCE_OBSERVATION", "BELOW_150M_VOLUME_FLOOR")
+                and type(raw_previous) in (str, int, Decimal)
+                and len(str(raw_previous)) <= 72):
+            try:
+                p = Decimal(raw_previous)
+                if p.is_finite() and p > 0 and -20 <= p.adjusted() <= 20:
+                    previous = str(p)
+            except (InvalidOperation, ValueError):
+                pass
+        accepted.append((pair, minute, stamp, price, volume, offset, status,
+                         previous))
     accepted.sort(key=lambda x: x[0])
     dropped = max(0, len(accepted) - MAX_SOURCE_PAIRS_PER_CYCLE)
     accepted = accepted[:MAX_SOURCE_PAIRS_PER_CYCLE]
@@ -139,9 +153,17 @@ def archive_ws3_evidence_nonlive(
                 source_exchange_epoch INTEGER, last_idr TEXT,
                 rolling_24h_idr TEXT, public_offset INTEGER,
                 source_status TEXT NOT NULL,
+                previous_24h_idr TEXT,
                 PRIMARY KEY(pair,minute_epoch)
             )
         """)
+        # Additive migration; old rows remain NULL, never guessed.
+        columns = {row[1] for row in db.execute(
+            "PRAGMA table_info(ws3_source_evidence)"
+        )}
+        if "previous_24h_idr" not in columns:
+            db.execute("ALTER TABLE ws3_source_evidence "
+                       "ADD COLUMN previous_24h_idr TEXT")
         db.execute("""
             CREATE INDEX IF NOT EXISTS ws3_source_evidence_minute_idx
             ON ws3_source_evidence(minute_epoch)
@@ -169,8 +191,8 @@ def archive_ws3_evidence_nonlive(
         db.executemany("""
             INSERT OR IGNORE INTO ws3_source_evidence
             (pair,minute_epoch,source_exchange_epoch,last_idr,
-             rolling_24h_idr,public_offset,source_status)
-            VALUES (?,?,?,?,?,?,?)
+             rolling_24h_idr,public_offset,source_status,previous_24h_idr)
+            VALUES (?,?,?,?,?,?,?,?)
         """, accepted)
         # Hard cap in addition to 72h, to avoid unlimited research disk use
         # on a busy market. This can shorten effective retention.

@@ -1,6 +1,6 @@
 """Compact PITIDEN WATCH card, from existing original ticker evidence only.
 
-No network, new collector, order, provider, or G1. Completed WIB intervals prefer existing locally validated public OHLC.
+No network, new collector, order, provider, or G1. Completed UTC-aligned intervals prefer existing locally validated public OHLC.
 Ticker-only endpoint observations are explicitly approximate, never candles.
 Rolling 24h turnover is NOT intraday executed IDR volume.
 """
@@ -21,9 +21,11 @@ from .m03_ws3_evidence_archive_nonlive import (
 )
 
 FRAMES = (("1m", 60), ("5m", 300), ("10m", 600), ("15m", 900),
-          ("30m", 1800), ("1h", 3600), ("1D", 86400))
+          ("30m", 1800), ("1h", 3600), ("4h", 14400), ("24h", 86400))
 WIB = ZoneInfo("Asia/Jakarta")
-_LAYOUT = "PITIDEN_PREMIUM_WATCH_V2_WIB"
+_LAYOUT = "PITIDEN_PREMIUM_WATCH_V3_6_GREEN"
+MIN_GREEN = 6
+MIN_TURNOVER_24H = Decimal("400000000")
 
 
 def _decimal(raw, *, positive=False):
@@ -138,21 +140,48 @@ def read_price_references(candidate, *, db_path, now_epoch,
                   if stamp not in conflicts)
 
 
-def _midnight_wib(epoch):
-    local = datetime.fromtimestamp(epoch, WIB)
-    return int(local.replace(hour=0, minute=0, second=0,
-                             microsecond=0).timestamp())
-
-
 def interval_windows(end):
-    """Six last completed WIB-aligned buckets, then current local day."""
-    midnight = _midnight_wib(end)
+    """UTC-aligned completed buckets, then rolling 24h to source time."""
     for label, seconds in FRAMES:
-        if label == "1D":
-            yield label, midnight, end
+        if label == "24h":
+            yield label, end-seconds, end
         else:
-            closed_end = midnight + ((end-midnight)//seconds)*seconds
+            closed_end = end//seconds*seconds
             yield label, closed_end-seconds, closed_end
+
+
+def read_native_previous_24h(candidate, *, evidence_path, now_epoch):
+    """Match stored official WS3 prev24h to the current market observation."""
+    if evidence_path is None:
+        return None
+    path = Path(evidence_path)
+    try:
+        if not _private_owned_regular(path):
+            return None
+    except OSError:
+        return None
+    end = candidate["observed_epoch"]
+    current = _decimal(candidate["latest_price_idr"], positive=True)
+    volume = _decimal(candidate.get("volume_24h_idr"))
+    if current is None or volume is None:
+        return None
+    rows = _read_rows(path,
+        "SELECT p.last_idr,p.rolling_24h_idr,p.previous_24h_idr "
+        "FROM ws3_source_evidence p JOIN ws3_source_cycles c USING(minute_epoch) "
+        "WHERE p.pair=? AND p.source_exchange_epoch=? "
+        "AND p.minute_epoch BETWEEN ? AND ? "
+        "AND p.public_offset>=0 AND c.recorded_local_epoch<=? "
+        "AND c.recorded_local_epoch>=p.source_exchange_epoch "
+        "AND p.source_status='ELIGIBLE_SOURCE_OBSERVATION' LIMIT 8",
+        (candidate["pair"],end,end-60,end+90,now_epoch))
+    values = set()
+    for price,turnover,previous in rows:
+        if (_decimal(price,positive=True)==current
+                and _decimal(turnover)==volume):
+            p = _decimal(previous,positive=True)
+            if p is not None:
+                values.add(p)
+    return next(iter(values)) if len(values)==1 else None
 
 
 def read_closed_candles(candidate, *, db_path, now_epoch):
@@ -168,7 +197,8 @@ def read_closed_candles(candidate, *, db_path, now_epoch):
             or type(end) is not int or not 0 < end <= now_epoch
             or not _owned_private_regular(Path(db_path))):
         return {}
-    first = min(start for _, start, _ in interval_windows(end))
+    first = min(start for label, start, _ in interval_windows(end)
+                if label != "24h")
     rows = _read_rows(
         db_path,
         "SELECT c.start_epoch,c.open,c.high,c.low,c.close,c.volume,c.row_digest "
@@ -209,8 +239,8 @@ def read_closed_candles(candidate, *, db_path, now_epoch):
     return candles
 
 
-def build_timeframes(candidate, references, *, candles=None):
-    """Completed interval Open -> Close; 1D Open -> latest ticker.
+def build_timeframes(candidate, references, *, candles=None, previous_24h=None):
+    """Completed interval Open -> Close; rolling 24h -> latest ticker.
 
     Prefer complete cached minute candles. Otherwise use distinct near-edge
     samples inside the interval only, always marked approximate. No nearest
@@ -221,20 +251,20 @@ def build_timeframes(candidate, references, *, candles=None):
     candles = candles or {}
     rows = []
     for label, start, stop in interval_windows(end):
-        daily = label == "1D"
+        daily = label == "24h"
         first = candles.get(start)
         last = candles.get(stop-60) if not daily else None
         opening = closing_price = None
         approx = False
         if daily:
             closing_price = current
-            if first is not None:
-                opening = first[0]
-            elif end > start:
+            opening = _decimal(previous_24h,positive=True)
+            if opening is None:
+                # Same-source historic sample, not native market statistics.
                 samples = [(t,p) for t,p in references
-                           if start <= t <= min(start+30,end-1)]
+                           if start-30 <= t <= start]
                 if samples:
-                    opening = min(samples, key=lambda x:x[0])[1]
+                    opening = max(samples,key=lambda x:x[0])[1]
                     approx = True
         elif first is not None and last is not None and all(
             t in candles for t in range(start,stop,60)
@@ -264,11 +294,24 @@ def build_timeframes(candidate, references, *, candles=None):
             "tf":label, "start_epoch":start, "end_epoch":stop,
             "opening_price":opening, "close_price":closing_price,
             "change":change, "approx":approx,
-            # Archived OHLC volume's IDR denomination is not established;
-            # rolling-24h ticker turnover cannot be substituted for 1D.
-            "volume":None,
+            # Short candle volume denomination remains unverified.
+            "volume":_decimal(candidate.get("volume_24h_idr")) if daily else None,
         })
     return rows
+
+
+def count_green(rows):
+    """Count only eight distinct finite, strictly positive displayed returns."""
+    if [row.get("tf") for row in rows] != [label for label,_ in FRAMES]:
+        return 0
+    return sum(isinstance(row.get("change"),Decimal)
+               and row["change"].is_finite() and row["change"]>0
+               for row in rows)
+
+
+def eligible_premium_watch(candidate, rows):
+    volume = _decimal(candidate.get("volume_24h_idr"))
+    return volume is not None and volume>=MIN_TURNOVER_24H and count_green(rows)>=MIN_GREEN
 
 
 def _direction(change):
@@ -300,13 +343,15 @@ def _momentum(rows):
 
 
 def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
-                           candles=None):
+                           candles=None, previous_24h=None, rows=None):
     """Telegram HTML: only heading bold; preformatted compact columns.
 
     Watch score and volume acceleration remain unavailable until real
     transaction-window evidence and a validated score definition exist.
     """
-    rows = build_timeframes(candidate, references, candles=candles)
+    if rows is None:
+        rows = build_timeframes(candidate,references,candles=candles,
+                                previous_24h=previous_24h)
     pair = candidate["pair"].upper().replace("_IDR", "/IDR")
     current = _number(_decimal(candidate["latest_price_idr"], positive=True))
     time = datetime.fromtimestamp(candidate["observed_epoch"], WIB).strftime("%H:%M:%S")
@@ -342,9 +387,9 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         f"📡 <b>{escape(pair)} · Rp{escape(current)}</b>",
         "<pre>" + escape("\n".join(table)) + "</pre>",
         escape(f"📈 {_momentum(rows)} · Vol accel N/A · Spread {spread_text}"),
-        "👀 WATCH · Score N/A",
+        f"👀 WATCH · Green {count_green(rows)}/8 · Score N/A",
         escape(f"{context} · {time} WIB"),
-        "<i>~ sampled · 1D since 00:00 WIB · Vol Rp</i>",
+        "<i>~ sampled · Vol 24h rolling Rp</i>",
         "<i>AI/G1 unverified · Watch only · Not BUY</i>",
     ]
     return "\n".join(lines)

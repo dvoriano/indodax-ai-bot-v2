@@ -94,6 +94,29 @@ class EvidenceArchiveTests(unittest.TestCase):
         self.assertEqual(price, "102")
         self.assertEqual(count, 1)
 
+    def test_additive_native_prev24h_archive_immutable_and_no_backfill(self):
+        self.run_archive()
+        # Simulate prior deployed schema, then migrate on next real cycle.
+        with sqlite3.connect(self.db) as db:
+            db.execute("ALTER TABLE ws3_source_evidence DROP COLUMN previous_24h_idr")
+        snap=source()
+        snap["pairs"][0]["previous_24h_idr"]="98"
+        self.run_archive(snap)
+        with sqlite3.connect(self.db) as db:
+            self.assertIsNone(db.execute(
+                "SELECT previous_24h_idr FROM ws3_source_evidence "
+                "WHERE pair='uai_idr'").fetchone()[0])
+        future=NOW+60
+        snap["pairs"][0]["observed_exchange_epoch"]=future-15
+        self.run_archive(snap,now=future)
+        snap["pairs"][0]["previous_24h_idr"]="99"
+        self.run_archive(snap,now=future)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute(
+                "SELECT previous_24h_idr FROM ws3_source_evidence "
+                "WHERE pair='uai_idr' ORDER BY minute_epoch").fetchall(),
+                [(None,),("98",)])
+
     def test_retention_is_72h_for_new_shadow_only(self):
         self.run_archive()
         future = NOW + RETENTION_SECONDS + 120

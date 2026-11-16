@@ -1205,47 +1205,55 @@ def send_one_owner_radar_momentum_nonlive(
     if not snap["candidates"]:
         return {"status": "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
                 "messages_sent": 0}
+    premium = os.environ.get("M05_RADAR_PREMIUM_LAYOUT_GO") == "YES"
+    eligible_count = 0
+    source_kind = ("WS3" if snap["status"] ==
+                   "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
     for candidate in snap["candidates"]:
-        if not _claim_once(
-            ledger, candidate["pair"], candidate["observed_epoch"], now,
-            source_kind=("WS3" if snap["status"] ==
-                         "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST"),
-        ):
-            continue
-        message = (
-            format_owner_ws3_radar_compact(candidate)
-            if snap["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED"
-            else format_owner_radar_compact(candidate)
-        )
-        # Explicit owner rollout: presentation only, after original eligibility
-        # and durable claim. Missing optional history never blocks the WATCH.
         parse_mode = None
-        if os.environ.get("M05_RADAR_PREMIUM_LAYOUT_GO") == "YES":
+        if premium:
+            # New owner publication gate BEFORE durable claim. No legacy
+            # fallback may bypass the six-green rule on data/render failure.
             from .m05_pitiden_premium_layout import (
                 DEFAULT_EVIDENCE_DB, format_pitiden_premium,
                 read_price_references, read_closed_candles,
+                read_native_previous_24h, build_timeframes,
+                eligible_premium_watch,
             )
-            source_kind = ("WS3" if snap["status"] ==
-                           "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
+            evidence_path = DEFAULT_EVIDENCE_DB if Path(db_path) == DEFAULT_DB else None
             try:
                 refs = read_price_references(
                     candidate, db_path=db_path, now_epoch=now,
-                    source_kind=source_kind,
-                    evidence_path=(DEFAULT_EVIDENCE_DB
-                                   if Path(db_path) == DEFAULT_DB else None),
+                    source_kind=source_kind, evidence_path=evidence_path,
                 )
                 candles = read_closed_candles(
                     candidate, db_path=db_path, now_epoch=now,
                 )
+                previous = (read_native_previous_24h(
+                    candidate, evidence_path=evidence_path, now_epoch=now,
+                ) if source_kind == "WS3" else None)
+                rows = build_timeframes(candidate, refs, candles=candles,
+                                        previous_24h=previous)
+                if not eligible_premium_watch(candidate, rows):
+                    continue
                 message = format_pitiden_premium(
-                    candidate, refs, source_kind=source_kind, now_epoch=now,
-                    candles=candles,
+                    candidate, refs, source_kind=source_kind,
+                    now_epoch=now, rows=rows,
                 )
                 parse_mode = "HTML"
             except (OSError, sqlite3.Error, ValueError, TypeError,
                     ArithmeticError, KeyError):
-                # Original text fallback; never create a second claim/send.
-                pass
+                continue
+        else:
+            message = (format_owner_ws3_radar_compact(candidate)
+                       if source_kind == "WS3"
+                       else format_owner_radar_compact(candidate))
+        eligible_count += 1
+        if not _claim_once(
+            ledger, candidate["pair"], candidate["observed_epoch"], now,
+            source_kind=source_kind,
+        ):
+            continue
         # Claim is durable BEFORE send; uncertainty must never replay it.
         # The added audit row is informational, never an order authorization.
         try:
@@ -1293,5 +1301,8 @@ def send_one_owner_radar_momentum_nonlive(
             "owner_final_decision": None,
             "pair_delivery_audit_persisted": recorded,
         }
+    if premium and not eligible_count:
+        return {"status": "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET",
+                "messages_sent": 0}
     return {"status": "M05_RADAR_THROTTLED",
             "messages_sent": 0}
