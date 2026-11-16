@@ -3001,6 +3001,38 @@ class DecisionJournal:
             if row != (FinalDecision.REJECT.value, reason):
                 raise DecisionConflictError("conflicting replay for trace_id")
 
+    def claim_m04_candidate_evidence_once(self, *, pair: str,
+                                          evidence_key: str,
+                                          signed_digest: str,
+                                          observed_epoch: int) -> bool:
+        """At most one review attempt per source identity across restarts.
+
+        Called ONLY after M04 receipt and coverage validation. A crash or
+        timeout is ambiguous, so a claim is never released for retry.
+        No AI request, credentials, final decision or order is stored here.
+        """
+        if (type(pair) is not str
+                or re.fullmatch(r"[a-z0-9]{2,20}_idr", pair) is None
+                or pair in ("floki_idr", "pepe_idr")
+                or any(type(v) is not str or re.fullmatch(r"[0-9a-f]{64}", v) is None
+                       for v in (evidence_key, signed_digest))
+                or type(observed_epoch) is not int or observed_epoch <= 0):
+            raise ValueError("M04_REVIEW_CLAIM_INVALID")
+        if self._m11_readonly_fixture:
+            raise ValueError("M04_REVIEW_CLAIM_READONLY")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("""CREATE TABLE IF NOT EXISTS m04_candidate_review_claim (
+                pair TEXT NOT NULL, evidence_key TEXT NOT NULL,
+                signed_digest TEXT NOT NULL, observed_epoch INTEGER NOT NULL,
+                PRIMARY KEY(pair,evidence_key)
+            )""")
+            cur = con.execute(
+                "INSERT OR IGNORE INTO m04_candidate_review_claim "
+                "(pair,evidence_key,signed_digest,observed_epoch) VALUES (?,?,?,?)",
+                (pair,evidence_key,signed_digest,observed_epoch))
+            return cur.rowcount == 1
+
     def record_stage_observation(self, trace_id: str, stage: str,
                                  reason: str) -> None:
         """Record a pre-final observation without inventing an owner decision.
