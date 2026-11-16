@@ -6,7 +6,7 @@ Only supported 1m and 15m OHLC endpoints requested; 5m is aggregated from 1m.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 import json
 import os
 import re
@@ -516,6 +516,15 @@ class IndodaxPublicV2RecentTradesResearch(IndodaxPublicMarket):
     """
     ROOT = "https://api.indodax.com"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Real diagnostic transport must honor the existing owner egress
+        # admission, even when the interactive shell lacks M03 flags.
+        if kwargs.get("fetch") is None:
+            if self._m03_admission is None:
+                self._m03_admission = M03SharedEgressAdmission()
+            self._m03_light_only_public_watch = False
+
     def recent_trades_sample(self, pair: str) -> Any:
         if type(pair) is not str or not _PAIR_RE.fullmatch(pair) or len(pair)>40:
             raise PublicDataError("INVALID_IDR_PAIR")
@@ -573,7 +582,9 @@ def summarize_v2_trade_page_research(payload: Any, *, requested_epoch: int,
         a,b=start*1000,end*1000
         selected=[x for x in trades if a<=x[0]<b]
         bracketed=bool(trades and oldest<a and newest>=b)
-        amount=sum((x[3] for x in selected),Decimal(0))
+        with localcontext() as ctx:
+            ctx.prec=100
+            amount=sum((x[3] for x in selected),Decimal(0))
         windows.append({
             "tf":label,"start_epoch":start,"end_epoch":end,
             "trade_count_observed":len(selected),
