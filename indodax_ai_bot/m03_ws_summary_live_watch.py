@@ -223,6 +223,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         liquid_baseline={}
         pending_unsubscribe={}
         next_rebalance_clock=0
+        unsubscribe_started=None
         subscribe_started={}
         permanently_rejected=set()
 
@@ -321,6 +322,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 report["indexed_trade_pairs"] = sorted(indexed_pairs)
                 report["dense_price_rows"] = list(dense_prices.values())
                 report["indexed_trade_channels_failed"] = len(failed_trade_channels)
+                report["indexed_trade_channels_rejected"] = len(permanently_rejected)
                 report["indexed_trade_channels_acknowledged"] = sum(
                     ch in micro_active and ch not in failed_trade_channels
                     for ch,(pair,kind) in micro_channels.items() if kind=="trade")
@@ -328,6 +330,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
 
         while True:
             now = clock()
+            if checkpoint is not None and phase=="OBSERVE" and (any(now-t>25 for t in subscribe_started.values()) or (unsubscribe_started is not None and now-unsubscribe_started>25)):
+                raise M03WSWatchError("M03_WS_CHANNEL_ACK_TIMEOUT")
             if checkpoint is not None and phase=="OBSERVE" and now-last_ping_clock>=30:
                 sock.send(json.dumps({"method":7,"id":999999}))
                 last_ping_clock=now
@@ -424,6 +428,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 request_id = msg.get("id")
                 if type(request_id) is int and request_id in pending_unsubscribe:
                     old,new,channel=pending_unsubscribe.pop(request_id)
+                    unsubscribe_started=None
                     if msg.get("result")!={}:
                         raise M03WSWatchError("M03_WS_UNSUBSCRIBE_NOT_ACKNOWLEDGED")
                     indexed_pairs.discard(old)
@@ -437,6 +442,15 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     pair, kind, channel = micro_ids.pop(request_id)
                     subscribe_started.pop(channel,None)
                     ack = msg.get("result")
+                    if (checkpoint is not None and kind=="trade"
+                            and "error" in msg and not isinstance(ack,dict)):
+                        recovery_requests.pop(request_id,None)
+                        permanently_rejected.add(pair)
+                        indexed_pairs.discard(pair)
+                        micro_channels.pop(channel,None)
+                        if pair in micro:
+                            micro[pair]["source_malformed"]=True
+                        continue
                     if request_id in recovery_requests:
                         recovering,fresh_segment=recovery_requests.pop(request_id)
                         try:
@@ -649,7 +663,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     # per minute, only after a documented unsubscribe ACK.
                     if (len(indexed_pairs)>=_TRADE_CHANNEL_CAP and not pending_unsubscribe
                             and not subscribe_started and clock()>=next_rebalance_clock):
-                        desired=set(ranked[:_TRADE_CHANNEL_CAP-len(micro)])|set(micro)
+                        desired=set([p for p in ranked if p not in micro][:_TRADE_CHANNEL_CAP-len(micro)])|set(micro)
                         incoming=next((p for p in ranked if p in desired and p not in indexed_pairs),None)
                         outgoing=next((p for p in sorted(indexed_pairs-set(micro)-desired)
                                        if trade_channel(p) in micro_active),None)
@@ -658,7 +672,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             next_micro_subscribe_id+=1
                             pending_unsubscribe[next_micro_subscribe_id]=(outgoing,incoming,channel)
                             sock.send(json.dumps({"method":2,"params":{"channel":channel},"id":next_micro_subscribe_id}))
-                            next_rebalance_clock=clock()+60
+                            unsubscribe_started=clock()
+                            next_rebalance_clock=unsubscribe_started+60
                 for row in parsed["samples"]:
                     old = observations.get(row["pair"])
                     # Multiple publications can share an exchange second.
@@ -1060,6 +1075,8 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
         if trade_journal is not None:
             report["indexed_trade_pairs"]=source.get("indexed_trade_pairs",[])
             report["indexed_trade_channels_failed"]=source.get("indexed_trade_channels_failed",0)
+            report["indexed_trade_channels_rejected"]=source.get("indexed_trade_channels_rejected",0)
+            report["dense_price_rows_saved"]=len(source.get("dense_price_rows",[]))
             report["indexed_trade_channels_acknowledged"]=source.get("indexed_trade_channels_acknowledged",0)
         return report
 
@@ -1070,6 +1087,8 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
                           "fresh_liquid_pairs":report["fresh_liquid_main_idr_pairs"],
                           "indexed_trade_pairs":report.get("indexed_trade_pairs",[]),
                           "indexed_trade_channels_failed":report.get("indexed_trade_channels_failed",0),
+                          "indexed_trade_channels_rejected":report.get("indexed_trade_channels_rejected",0),
+                          "dense_price_rows_saved":report.get("dense_price_rows_saved",0),
                           "indexed_trade_channels_acknowledged":report.get("indexed_trade_channels_acknowledged",0),
                           "execution_allowed":False},sort_keys=True),flush=True)
 
