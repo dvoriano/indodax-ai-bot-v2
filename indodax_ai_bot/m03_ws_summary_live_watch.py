@@ -141,7 +141,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     micro_pairs: tuple[str, ...] = (),
                                     epoch_fn=None,
                                     micro_autoselect_from_stream: bool = False,
-                                    trade_journal=None, checkpoint=None) -> dict:
+                                    trade_journal=None) -> dict:
     """Authenticate to OFFICIAL public WS3 and collect documented summary frames.
 
     Socket lifetime is bounded. Source frames/contents are never logged.
@@ -218,7 +218,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 subscription=trade_journal.subscription(pair)
                 params=subscription["params"]
                 recovery_requests[request_id]=(
-                    "recover" in params,trade_journal.status(pair).get("status")=="GAP")
+                    "recover" in params,trade_journal.status(pair).get("stream_status")=="GAP")
                 indexed_pairs.add(pair)
             sock.send(json.dumps({"method":1,"params":params,"id":request_id}))
 
@@ -297,7 +297,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         try:
                             state=trade_journal.acknowledge(pair,{"id":2,"result":ack},
                                                            fresh_segment=fresh_segment)
-                            if state.get("status")=="GAP":
+                            if state.get("stream_status")=="GAP":
                                 failed_trade_channels.add(channel)
                         except (StreamEvidenceError,ValueError):
                             failed_trade_channels.add(channel)
@@ -337,7 +337,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     if kind=="trade" and trade_journal is not None and channel not in failed_trade_channels:
                         try:
                             state=trade_journal.ingest(pair,msg)
-                            if state.get("status")=="GAP":
+                            if state.get("stream_status")=="GAP":
                                 failed_trade_channels.add(channel)
                         except (StreamEvidenceError,ValueError):
                             failed_trade_channels.add(channel)
