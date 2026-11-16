@@ -7,6 +7,8 @@ from contextlib import closing
 from decimal import Decimal
 from pathlib import Path
 import json
+import os
+import re
 import sqlite3
 import time
 
@@ -217,11 +219,71 @@ def inspect_named_pairs(*, pairs, now=None, db_path=DEFAULT_DB,
     return result
 
 
+def probe_recent_trade_coverage(*, pairs, client=None, clock=time.time):
+    """Explicit public-only one-shot diagnostic; no market persistence.
+
+    At most four GET attempts; on any failed admission/transport/contract,
+    stop, including 403/429. Do not retry or fall back to another endpoint.
+    """
+    from indodax_ai_bot.public_market import (
+        IndodaxPublicV2RecentTradesResearch,PublicDataError,
+        summarize_v2_trade_page_research,
+    )
+    result={"status":"PITIDEN_PUBLIC_V2_TRADE_PROBE_DEFAULT_BLOCKED",
+            "pairs":[],"public_get_invocations":0,"provider_calls":0,
+            "execution_allowed":False,"orders_sent":0,"telegram_messages_sent":0,
+            "runtime_market_data_written":False,"service_changes":0,
+            "complete_trade_tape_verified":False}
+    if (type(pairs) is not tuple or not 1<=len(pairs)<=4
+            or any(type(p) is not str or len(p)>40 or not PAIR_ID.fullmatch(p)
+                   or p in MAIN_EXCLUDED_PAIRS for p in pairs)
+            or len(set(pairs))!=len(pairs)):
+        return dict(result,reason="INVALID_PAIR_SCOPE")
+    if any(os.environ.get(k)!=v for k,v in {
+        "INDODAX_TRADING_ENABLED":"NO","INDODAX_ALLOW_LIVE_EXECUTION":"NO",
+        "INDODAX_EXECUTION_MODE":"DRY_RUN"}.items()):
+        return dict(result,reason="EXPLICIT_NONLIVE_FLAGS_REQUIRED")
+    try:
+        if client is None:
+            client=IndodaxPublicV2RecentTradesResearch(timeout=5.0)
+    except (ValueError,OSError):
+        return dict(result,reason="PUBLIC_PROBE_CLIENT_UNAVAILABLE")
+    if not isinstance(client,IndodaxPublicV2RecentTradesResearch):
+        return dict(result,reason="PUBLIC_PROBE_CLIENT_INVALID")
+    result["status"]="PITIDEN_PUBLIC_V2_TRADE_COVERAGE_PROBE"
+    for pair in pairs:
+        before=int(clock())
+        result["public_get_invocations"]+=1
+        try:
+            payload=client.recent_trades_sample(pair)
+            after=int(clock())
+            out=summarize_v2_trade_page_research(
+                payload,requested_epoch=before,received_epoch=after)
+            result["pairs"].append({"pair":pair,"status":"PAGE_OBSERVED",
+                "requested_epoch":before,"received_epoch":after,**out})
+        except (PublicDataError,OSError,ArithmeticError,ValueError,TypeError) as exc:
+            code=str(exc)
+            if not isinstance(exc,PublicDataError) or not re.fullmatch(r"[A-Z0-9_]{1,100}",code):
+                code="PUBLIC_PROBE_SOURCE_UNAVAILABLE"
+            result["pairs"].append({"pair":pair,"status":"PROBE_STOPPED","reason":code})
+            result["status"]="PITIDEN_PUBLIC_V2_TRADE_PROBE_STOPPED"
+            break
+    result["unattempted_pairs"]=list(pairs[len(result["pairs"]):])
+    result["invocations_include_local_admission_denials"]=True
+    return result
+
+
 if __name__=="__main__":
     ap=argparse.ArgumentParser()
     ap.add_argument("--pairs",nargs="+")
+    ap.add_argument("--probe-trades",action="store_true",help="One bounded public v2 GET per explicit pair; no runtime data writes")
     ap.add_argument("--at-wib",help="ISO date/time e.g. 2026-11-16T16:31:59")
     args=ap.parse_args()
+    if args.probe_trades:
+        if not args.pairs or args.at_wib:
+            ap.error("--probe-trades requires --pairs and no historical as-of")
+        print(json.dumps(probe_recent_trade_coverage(pairs=tuple(args.pairs)),sort_keys=True,indent=2))
+        raise SystemExit(0)
     if args.at_wib and not args.pairs:
         ap.error("--at-wib requires --pairs")
     now=None

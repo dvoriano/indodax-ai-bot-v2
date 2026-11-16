@@ -6,7 +6,7 @@ Only supported 1m and 15m OHLC endpoints requested; 5m is aggregated from 1m.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 import json
 import os
 import re
@@ -506,3 +506,101 @@ class IndodaxPublicMarket:
             exchange_epoch=exchange_epoch, from_epoch=from_epoch,
             to_epoch=to_epoch, candles=tuple(rows),
         )
+
+
+class IndodaxPublicV2RecentTradesResearch(IndodaxPublicMarket):
+    """Owner-invoked diagnostic only; shares the original REST quota.
+
+    Official TAPI v2 public recent trades endpoint, not a fallback for
+    blocked legacy requests. No authentication, retries, paging or orders.
+    """
+    ROOT = "https://api.indodax.com"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Real diagnostic transport must honor the existing owner egress
+        # admission, even when the interactive shell lacks M03 flags.
+        if kwargs.get("fetch") is None:
+            if self._m03_admission is None:
+                self._m03_admission = M03SharedEgressAdmission()
+            self._m03_light_only_public_watch = False
+
+    def recent_trades_sample(self, pair: str) -> Any:
+        if type(pair) is not str or not _PAIR_RE.fullmatch(pair) or len(pair)>40:
+            raise PublicDataError("INVALID_IDR_PAIR")
+        from .scanner import MAIN_EXCLUDED_PAIRS
+        if pair in MAIN_EXCLUDED_PAIRS:
+            raise PublicDataError("EXCLUDED_IDR_PAIR")
+        return self._get("/api/v2/trades?" + urlencode({
+            "symbol":pair.replace("_","").upper(),"limit":500,
+        }))
+
+
+def summarize_v2_trade_page_research(payload: Any, *, requested_epoch: int,
+                                     received_epoch: int) -> dict:
+    """Closed PITIDEN intervals, measured from exactly one public page.
+
+    quoteQty is IDR for IDR symbols. Bracketing with earlier and later
+    trades establishes temporal reach, not independently complete tape.
+    Do not fill unknown intervals with zero or derive signed order flow.
+    """
+    from .m05_pitiden_premium_layout import interval_windows
+    if (type(requested_epoch) is not int or type(received_epoch) is not int
+            or not 86400 < requested_epoch <= received_epoch
+            or received_epoch-requested_epoch>30
+            or type(payload) is not list or len(payload)>500):
+        raise PublicDataError("V2_TRADE_PAGE_SCOPE_INVALID")
+    trades = []
+    seen = set()
+    for item in payload:
+        if type(item) is not dict:
+            raise PublicDataError("V2_TRADE_ROW_INVALID")
+        tid, stamp = item.get("id"),item.get("time")
+        if (type(tid) is not int or not 0<tid<2**64 or tid in seen
+                or type(stamp) is not int or not 100_000_000_000<=stamp<=received_epoch*1000+999
+                or type(item.get("isBestMatch")) is not bool):
+            raise PublicDataError("V2_TRADE_ID_OR_TIME_INVALID")
+        raw_price,raw_qty,raw_quote=(item.get(key) for key in ("price","qty","quoteQty"))
+        if any(type(v) is not str or len(v)>72 for v in (raw_price,raw_qty,raw_quote)):
+            raise PublicDataError("V2_TRADE_AMOUNT_FORMAT_INVALID")
+        price=_number(raw_price,"V2_PRICE")
+        qty=_number(raw_qty,"V2_QTY")
+        quote=_number(raw_quote,"V2_QUOTE",zero=True)
+        if any(abs(v.adjusted())>20 for v in (price,qty,quote)):
+            raise PublicDataError("V2_TRADE_AMOUNT_RANGE_INVALID")
+        seen.add(tid)
+        trades.append((stamp,tid,price,quote))
+    # The endpoint returns recent trades, but ID consecutiveness or
+    # exchange completeness is not documented as guaranteed.
+    trades.sort()
+    oldest = trades[0][0] if trades else None
+    newest = trades[-1][0] if trades else None
+    windows=[]
+    for label,start,end in interval_windows(requested_epoch):
+        if label=="24h":
+            continue  # Existing rolling summary already contains this.
+        a,b=start*1000,end*1000
+        selected=[x for x in trades if a<=x[0]<b]
+        bracketed=bool(trades and oldest<a and newest>=b)
+        with localcontext() as ctx:
+            ctx.prec=100
+            amount=sum((x[3] for x in selected),Decimal(0))
+        windows.append({
+            "tf":label,"start_epoch":start,"end_epoch":end,
+            "trade_count_observed":len(selected),
+            "sample_quote_idr":format(amount,"f") if selected else None,
+            "page_bracketed":bracketed,
+            "coverage":"PAGE_BRACKETED_UNATTESTED" if bracketed else
+                       "PARTIAL_PAGE" if selected else "NO_TRADES_OBSERVED_UNVERIFIED",
+            "first_observed_price_idr":format(selected[0][2],"f") if selected else None,
+            "last_observed_price_idr":format(selected[-1][2],"f") if selected else None,
+            "boundary_price_order_unverified":bool(selected and
+                (sum(x[0]==selected[0][0] for x in selected)>1 or
+                 sum(x[0]==selected[-1][0] for x in selected)>1)),
+            "full_volume_verified":False,
+        })
+    return {"page_trade_count":len(trades),"page_at_limit":len(trades)==500,
+            "oldest_trade_ms":oldest,"newest_trade_ms":newest,
+            "page_span_seconds":(newest-oldest)//1000 if trades else None,
+            "timeframes":windows,"complete_trade_tape_verified":False,
+            "g1_verified":False,"execution_allowed":False}
