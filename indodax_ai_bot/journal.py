@@ -3001,6 +3001,129 @@ class DecisionJournal:
             if row != (FinalDecision.REJECT.value, reason):
                 raise DecisionConflictError("conflicting replay for trace_id")
 
+    def claim_m04_candidate_evidence_once(self, *, pair: str,
+                                          evidence_key: str,
+                                          signed_digest: str,
+                                          observed_epoch: int) -> bool:
+        """At most one review attempt per source identity across restarts.
+
+        Called ONLY after M04 receipt and coverage validation. A crash or
+        timeout is ambiguous, so a claim is never released for retry.
+        No AI request, credentials, final decision or order is stored here.
+        """
+        if (type(pair) is not str
+                or re.fullmatch(r"[a-z0-9]{2,20}_idr", pair) is None
+                or pair in ("floki_idr", "pepe_idr")
+                or any(type(v) is not str or re.fullmatch(r"[0-9a-f]{64}", v) is None
+                       for v in (evidence_key, signed_digest))
+                or type(observed_epoch) is not int or observed_epoch <= 0):
+            raise ValueError("M04_REVIEW_CLAIM_INVALID")
+        if self._m11_readonly_fixture:
+            raise ValueError("M04_REVIEW_CLAIM_READONLY")
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("""CREATE TABLE IF NOT EXISTS m04_candidate_review_claim (
+                pair TEXT NOT NULL, evidence_key TEXT NOT NULL,
+                signed_digest TEXT NOT NULL, observed_epoch INTEGER NOT NULL,
+                PRIMARY KEY(pair,evidence_key)
+            )""")
+            cur = con.execute(
+                "INSERT OR IGNORE INTO m04_candidate_review_claim "
+                "(pair,evidence_key,signed_digest,observed_epoch) VALUES (?,?,?,?)",
+                (pair,evidence_key,signed_digest,observed_epoch))
+            return cur.rowcount == 1
+
+    @staticmethod
+    def _m04_history_tables(con):
+        # Additive tables in the original journal, never a new database.
+        con.execute("""CREATE TABLE IF NOT EXISTS m04_history_reviews (
+            pair TEXT NOT NULL, digest TEXT NOT NULL, source_epoch INTEGER NOT NULL,
+            decision_epoch INTEGER NOT NULL, review_json TEXT NOT NULL,
+            PRIMARY KEY(pair,digest))""")
+        con.execute("""CREATE TABLE IF NOT EXISTS m04_history_outcomes (
+            pair TEXT NOT NULL, digest TEXT NOT NULL, horizon_minutes INTEGER NOT NULL,
+            outcome_json TEXT NOT NULL, PRIMARY KEY(pair,digest,horizon_minutes))""")
+
+    def record_m04_history_reviews(self, *, ai_shadow: dict,
+                                   source_epoch: int, decision_epoch: int) -> int:
+        """Record only durable-claimed role attempts, not public WATCH rejects.
+
+        Store bounded categorical results, not model prompt/reason prose or
+        account data. A replay or missing G1 is never labelled an AI decision.
+        """
+        if (type(source_epoch) is not int or type(decision_epoch) is not int
+                or not 0 < source_epoch <= decision_epoch
+                or not isinstance(ai_shadow, dict)
+                or ai_shadow.get("execution_allowed") is not False
+                or ai_shadow.get("final_decision") is not None):
+            return 0
+        reports = ai_shadow.get("candidate_reports")
+        if reports is None:
+            reports = [{"pair": ai_shadow.get("candidate_pair"),
+                        "evidence_digest_sha256": ai_shadow.get("source_digest_sha256"),
+                        "reason": ai_shadow.get("reason"),
+                        "completed_roles": ai_shadow.get("completed_roles"),
+                        "role_results": ai_shadow.get("role_results")}]
+        if not isinstance(reports, list) or len(reports) > 2:
+            return 0
+        decision = ai_shadow.get("candidate_decision_loop")
+        decision = decision if isinstance(decision, dict) else {}
+        selected = decision.get("selected_pair")
+        selected_digest = decision.get("selected_evidence_digest_sha256")
+        if self._m11_readonly_fixture:
+            raise ValueError("M04_HISTORY_READONLY")
+        count = 0
+        with self._connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            # No G1 claim table yet: the public path never reviewed a model.
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                           "AND name='m04_candidate_review_claim'").fetchone() is None:
+                return 0
+            self._m04_history_tables(con)
+            for r in reports:
+                if not isinstance(r, dict):
+                    continue
+                pair, digest, reason = (r.get("pair"),r.get("evidence_digest_sha256"),
+                                        r.get("reason"))
+                roles = r.get("completed_roles")
+                if (type(pair) is not str or re.fullmatch(r"[a-z0-9]{2,20}_idr",pair) is None
+                        or type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}",digest) is None
+                        or type(reason) is not str or re.fullmatch(r"[A-Z0-9_]{1,100}",reason) is None
+                        or not isinstance(roles,list)
+                        or roles != ["MARKET","RISK","STRATEGY"][:len(roles)]
+                        or reason in ("M04_REVIEW_EVIDENCE_ALREADY_CLAIMED",
+                                      "M04_REVIEW_CLAIM_UNAVAILABLE")
+                        or not (roles or reason == "M04_ROLE_INVALID_OR_UNAVAILABLE")):
+                    continue
+                if con.execute("SELECT 1 FROM m04_candidate_review_claim "
+                               "WHERE pair=? AND signed_digest=? AND observed_epoch=?",
+                               (pair,digest,source_epoch)).fetchone() is None:
+                    continue
+                role_fields = {}
+                for row in r.get("role_results") or []:
+                    if not isinstance(row,dict):
+                        continue
+                    for role,field,allowed in (
+                        ("MARKET","bias",("BULLISH","BEARISH","MIXED")),
+                        ("RISK","decision",("ALLOW","NO_TRADE","EXIT_REVIEW")),
+                        ("STRATEGY","action",("BUY","WAIT","EXIT_REVIEW"))):
+                        if row.get("role")==role and row.get(field) in allowed:
+                            role_fields[role]=row[field]
+                disposition = next((x.get("disposition") for x in
+                    decision.get("candidates",[]) if isinstance(x,dict)
+                    and x.get("pair")==pair and x.get("evidence_digest_sha256")==digest),
+                    None)
+                if type(disposition) is not str or re.fullmatch(r"[A-Z0-9_]{1,100}",disposition) is None:
+                    disposition = "ADVISORY_UNAVAILABLE"
+                item = {"reason":reason,"completed_roles":roles,"role_findings":role_fields,
+                        "disposition":disposition,
+                        "selected_synthetic_review":selected==pair and selected_digest==digest,
+                        "actual_provider_verified":False,"execution_allowed":False}
+                cur=con.execute("INSERT OR IGNORE INTO m04_history_reviews VALUES(?,?,?,?,?)",
+                    (pair,digest,source_epoch,decision_epoch,json.dumps(item,sort_keys=True)))
+                count+=cur.rowcount
+        return count
+
     def record_stage_observation(self, trace_id: str, stage: str,
                                  reason: str) -> None:
         """Record a pre-final observation without inventing an owner decision.

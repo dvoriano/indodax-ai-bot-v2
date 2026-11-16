@@ -499,6 +499,48 @@ class M04WS3QualityHandoffTests(unittest.TestCase):
         self.row("uai_idr", -1, "100.2", 700050000)
         self.insert_micro_for_pair("uai_idr")
 
+    def test_ws3_micro_to_existing_paid_runner_fixture_no_live_authority(self):
+        from indodax_ai_bot.m04_public_watch_paid_once import (
+            run_public_watch_paid_once,OWNER_PAID_ONCE_CONFIRMATION)
+        from indodax_ai_bot.m04_public_watch_provider_preview_nonlive import (
+            prepare_ws3_micro_provider_request_preview_offline)
+        from indodax_ai_bot.ai_budget import PersistentAiBudget
+        from tests.test_m04_public_watch_paid_once import fixture_transport,MODELS
+        self._micro_readiness_seed()
+        h=inspect_original_ws3_micro_prealert_three_role_handoff_readonly(
+            db_path=self.path,now_epoch=NOW)
+        preview=prepare_ws3_micro_provider_request_preview_offline(
+            handoff=h,now_epoch=NOW,models_by_role=MODELS)
+        self.assertEqual(preview["request_preview_count"],3)
+        context=json.loads(preview["request_previews"][0]["request_body_preview"]["messages"][1]["content"])
+        self.assertEqual(context["public_market_evidence"],h["candidates"][0]["public_evidence"])
+        self.assertFalse(context["independent_g1_issuer_verified"])
+        self.assertFalse(context["public_market_evidence"]["m05_telegram_watch_threshold_met"])
+        seen=[]
+        budget=PersistentAiBudget(self.path.parent/"fixture-budget.sqlite3",
+                                  daily_limit_micro_usd=900000,
+                                  per_request_reservation_micro_usd=300000)
+        def run(handoff,confirm=OWNER_PAID_ONCE_CONFIRMATION):
+            return run_public_watch_paid_once(
+                handoff=handoff,now_fn=lambda:NOW,owner_models=MODELS,
+                api_key="FAKE_TEST_KEY_ONLY",budget=budget,
+                owner_confirmation=confirm,owner_pricing_reviewed=True,
+                transport=fixture_transport(seen))
+        self.assertEqual(run(h,None)["provider_http_attempts"],0)
+        for key,val in (("price_after_idr","777"),("independent_g1_issuer_verified",True)):
+            bad=deepcopy(h)
+            bad["candidates"][0]["public_evidence"][key]=val
+            self.assertEqual(run(bad)["provider_http_attempts"],0)
+        result=run(h)
+        self.assertEqual(result["status"],"M04_PUBLIC_WATCH_TEST_TRANSPORT_THREE_ROLES_ONLY")
+        self.assertEqual(result["source_contract"],"WS3_MICRO_PUBLIC_WATCH_NOT_G1")
+        self.assertEqual(result["roles_completed"],["MARKET","RISK","STRATEGY"])
+        self.assertEqual(result["genuine_provider_responses_verified"],0)
+        self.assertFalse(result["source_g1_verified"])
+        self.assertFalse(result["execution_allowed"])
+        self.assertEqual([len(x["prior"]) for x in seen],[0,1,2])
+        self.assertEqual(run(h)["provider_http_attempts"],0)
+
     def test_original_cli_micro_to_role_readiness_never_pays_or_writes(self):
         self._micro_readiness_seed()
         safe = {

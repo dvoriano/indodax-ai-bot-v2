@@ -287,3 +287,141 @@ def evaluate_public_ohlc_proxy_ablation(
         "execution_allowed": False,
         "final_decision": "REJECT",
     }
+
+def evaluate_m04_review_history_once(journal, *, now_epoch: int, evidence_db=None,
+                                     max_reviews: int = 100) -> dict:
+    """Persist mature 5/15/30/60m PUBLIC ticker-mark outcomes, not fills.
+
+    Anchor to the first eligible observation at/after decision, never its
+    pre-decision signal price. Endpoint is first eligible observation at/
+    after each target; both exchange and local timestamps must be in the
+    60s sampling window. Missing/expired coverage remains UNKNOWN forever
+    for this completed observation, not a fabricated flat return. No
+    network, AI calls, automatic learning or strategy changes.
+    """
+    import sqlite3
+    from pathlib import Path
+    from contextlib import closing
+    from .journal import DecisionJournal
+    from .m03_ws3_evidence_archive_nonlive import (
+        DEFAULT_EVIDENCE_DB, _private_owned_regular,
+    )
+    if (not isinstance(journal, DecisionJournal)
+            or getattr(journal, "_m11_readonly_fixture", False)
+            or type(now_epoch) is not int or now_epoch <= 0
+            or type(max_reviews) is not int or not 1 <= max_reviews <= 100):
+        raise ValueError("M04_HISTORY_SCOPE_INVALID")
+    path = Path(DEFAULT_EVIDENCE_DB if evidence_db is None else evidence_db).expanduser()
+    base = {"stage":"M04_HISTORICAL_EVALUATION_NONLIVE",
+            "status":"M04_HISTORY_SOURCE_UNAVAILABLE",
+            "reviews_evaluated":0,"outcomes_recorded":0,
+            "execution_allowed":False,"actual_provider_verified":False,
+            "realized_profit_verified":False,"strategy_auto_updated":False,
+            "horizons_minutes":[5,15,30,60],
+            "proxy_roundtrip_cost_bps":["20","50"]}
+    if (path.resolve()==journal._db_path.resolve()
+            or not _private_owned_regular(path)):
+        return base
+    horizons = (5,15,30,60)
+    def mark(con,pair,start):
+        rows=con.execute("""SELECT e.source_exchange_epoch,c.recorded_local_epoch,
+                       e.last_idr,e.public_offset
+                   FROM ws3_source_evidence e JOIN ws3_source_cycles c
+                   ON e.minute_epoch=c.minute_epoch
+                   WHERE e.pair=? AND e.minute_epoch BETWEEN ? AND ?
+                   AND e.source_status='ELIGIBLE_SOURCE_OBSERVATION'
+                   AND e.source_exchange_epoch BETWEEN ? AND ?
+                   AND c.recorded_local_epoch BETWEEN ? AND ?
+                   ORDER BY e.source_exchange_epoch,c.recorded_local_epoch
+                   LIMIT 8""",
+                   (pair,start-start%60,start+60,start,start+60,start,min(now_epoch,start+60))).fetchall()
+        for event,recorded,price,offset in rows:
+            try:
+                n=Decimal(price)
+                if (type(event) is int and type(recorded) is int
+                        and start<=event<=recorded<=min(now_epoch,start+60)
+                        and type(offset) is int and offset>=0 and n.is_finite()
+                        and n>0 and -20<=n.adjusted()<=20):
+                    return {"exchange_epoch":event,"recorded_epoch":recorded,
+                            "last_idr":str(n),"public_offset":offset}
+            except (TypeError,ValueError,ArithmeticError):
+                continue
+        return None
+    pending=[]
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=5)) as src:
+            src.execute("PRAGMA query_only=ON")
+            src.execute("BEGIN")
+            # Validate schema before creating any outcomes.
+            src.execute("SELECT source_exchange_epoch,last_idr,public_offset,source_status "
+                        "FROM ws3_source_evidence LIMIT 0")
+            src.execute("SELECT recorded_local_epoch FROM ws3_source_cycles LIMIT 0")
+            with journal._connect() as con:
+                # Serialize anchor and outcomes so simultaneous evaluators
+                # cannot persist differing anchors for the same review.
+                con.execute("BEGIN IMMEDIATE")
+                journal._m04_history_tables(con)
+                reviews=con.execute("""SELECT r.pair,r.digest,r.decision_epoch
+                    FROM m04_history_reviews r WHERE r.decision_epoch<=?
+                    AND (SELECT COUNT(*) FROM m04_history_outcomes o
+                        WHERE o.pair=r.pair AND o.digest=r.digest)
+                        < CASE WHEN r.decision_epoch<=? THEN 4
+                               WHEN r.decision_epoch<=? THEN 3
+                               WHEN r.decision_epoch<=? THEN 2 ELSE 1 END
+                    ORDER BY r.decision_epoch,r.pair LIMIT ?""",
+                    (now_epoch-360,now_epoch-3660,now_epoch-1860,
+                     now_epoch-960,max_reviews)).fetchall()
+                for pair,digest,decision in reviews:
+                    existing_rows=con.execute(
+                        "SELECT horizon_minutes,outcome_json FROM m04_history_outcomes "
+                        "WHERE pair=? AND digest=? ORDER BY horizon_minutes",
+                        (pair,digest)).fetchall()
+                    existing={x[0] for x in existing_rows}
+                    # Freeze the first evaluated anchor across horizons,
+                    # including UNKNOWN, even after archive retention expires.
+                    anchor=(json.loads(existing_rows[0][1])["anchor"]
+                            if existing_rows else mark(src,pair,decision))
+                    for h in horizons:
+                        target=decision+h*60
+                        if h in existing or now_epoch<target+60:
+                            continue
+                        end=mark(src,pair,target)
+                        item={"status":"UNKNOWN_MISSING_MARK","anchor":anchor,"endpoint":end,
+                              "target_epoch":target,"evaluation_epoch":now_epoch,
+                              "gross_move_bps":None,"net_proxy_bps":None,
+                              "actual_fill_or_profit":False}
+                        if anchor is not None and end is not None:
+                            gross=_bps(Decimal(anchor["last_idr"]),Decimal(end["last_idr"]))
+                            item.update(status="PUBLIC_MARK_MOVE_OBSERVED",
+                                        gross_move_bps=str(gross),
+                                        net_proxy_bps={str(cost):str(gross-cost)
+                                            for cost in (Decimal("20"),Decimal("50"))})
+                        pending.append((pair,digest,h,json.dumps(item,sort_keys=True)))
+                recorded=0
+                for row in pending:
+                    recorded+=con.execute("INSERT OR IGNORE INTO m04_history_outcomes VALUES(?,?,?,?)",row).rowcount
+    except (sqlite3.Error,OSError,ValueError,ArithmeticError):
+        return base
+    with journal._connect() as con:
+        # Group by decision disposition and horizon; UNKNOWN has its own
+        # denominator. A favorable mark on a rejected pair is a review lead,
+        # not proof that the veto was wrong or a trade would have filled.
+        cohorts={}
+        for review_json,h,outcome_json in con.execute(
+                "SELECT r.review_json,o.horizon_minutes,o.outcome_json "
+                "FROM m04_history_outcomes o JOIN m04_history_reviews r "
+                "ON r.pair=o.pair AND r.digest=o.digest"):
+            review=json.loads(review_json)
+            outcome=json.loads(outcome_json)
+            label=("SELECTED_SYNTHETIC" if review["selected_synthetic_review"]
+                   else review["disposition"])
+            row=cohorts.setdefault(label+":"+str(h),{"observed":0,"unknown":0,
+                                                    "net_proxy_50bps_ge_2pct":0})
+            if outcome["status"]!="PUBLIC_MARK_MOVE_OBSERVED":
+                row["unknown"]+=1
+            else:
+                row["observed"]+=1
+                row["net_proxy_50bps_ge_2pct"]+=int(
+                    Decimal(outcome["net_proxy_bps"]["50"])>=200)
+    return dict(base,status="M04_HISTORY_EVALUATED",reviews_evaluated=len(reviews),
+                outcomes_recorded=recorded,cohorts=cohorts)

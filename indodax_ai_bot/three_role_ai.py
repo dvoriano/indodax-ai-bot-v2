@@ -357,6 +357,129 @@ def _finite_decimal(value: Any, name: str) -> Decimal:
     return d
 
 
+
+def _candidate_decision_loop(*, reports: list[dict], source_epoch: int,
+                             now_epoch: int) -> dict:
+    """Compare validated SHADOW reports only; never issue Final PASS or BUY.
+
+    Only source-bound synthetic plans can be compared at present. A model
+    BUY with unknown account/quote/costs is not a qualified scenario.
+    Comparisons use a conservative dominance rule, not a forecast.
+    """
+    out = {
+        "stage": "M04_CANDIDATE_DECISION_LOOP_SHADOW",
+        "status": "RESCAN_FRESH_EVIDENCE",
+        "selected_pair": None,
+        "selected_evidence_digest_sha256": None,
+        "qualified_scenario_count": 0,
+        "candidates": [],
+        "time_to_profit": "UNKNOWN",
+        "source_observed_epoch": source_epoch if type(source_epoch) is int else None,
+        "decision_observed_epoch": now_epoch if type(now_epoch) is int else None,
+        "final_decision": None,
+        "execution_allowed": False,
+        "paper_fill_authorized": False,
+    }
+    if (type(source_epoch) is not int or type(now_epoch) is not int
+            or source_epoch <= 0
+            or not 0 <= now_epoch - source_epoch <= 60):
+        return dict(out, status="RESCAN_STALE_EVIDENCE")
+    if (not isinstance(reports, list) or len(reports) > 2
+            or any(not isinstance(r, dict) or not isinstance(r.get("pair"), str)
+                   for r in reports)
+            or len({r["pair"] for r in reports}) != len(reports)):
+        return dict(out, status="RESCAN_INVALID_COHORT")
+    qualified = []
+    for r in reports:
+        pair, digest = r["pair"], r.get("evidence_digest_sha256")
+        reason = r.get("reason")
+        item = {"pair": pair, "evidence_digest_sha256": digest,
+                "reason": reason, "disposition": "ADVISORY_UNAVAILABLE"}
+        out["candidates"].append(item)
+        roles = r.get("role_results")
+        if isinstance(reason, str) and reason.startswith("RISK_VETO_"):
+            item["disposition"] = "RISK_REJECT"
+            continue
+        if reason == "STRATEGY_BUY_NET_TARGET_UNMET":
+            item["disposition"] = "NET_REJECT"
+            continue
+        if (r.get("completed_roles") != list(ROLES)
+                or not isinstance(roles, list) or len(roles) != 3
+                or any(not isinstance(x, dict) for x in roles)
+                or [x.get("role") for x in roles] != list(ROLES)):
+            continue
+        market, risk, strategy = roles
+        if risk.get("decision") != "ALLOW":
+            item["disposition"] = "RISK_REJECT"
+            continue
+        if strategy.get("action") != "BUY":
+            item["disposition"] = "STRATEGY_WAIT"
+            continue
+        if market.get("bias") == "BEARISH":
+            item["disposition"] = "MARKET_CONFLICT_WAIT"
+            continue
+        plan = strategy.get("strategy_source_plan")
+        if (reason != "STRATEGY_BUY_PREFLIGHT_UNVERIFIED"
+                or not isinstance(plan, dict)
+                or plan.get("status") != "SYNTHETIC_SCENARIO_CALCULATED_UNATTESTED"
+                or plan.get("pair") != pair
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+                or not isinstance(risk.get("risk_source_report"), dict)
+                or risk["risk_source_report"].get("blockers") != []):
+            item["disposition"] = "WAIT_UNVERIFIED_QUOTE_OR_RISK"
+            continue
+        try:
+            net = _finite_decimal(strategy.get("projected_net_profit_idr"), "NET")
+            roi = _finite_decimal(strategy.get("projected_net_roi_percent"), "ROI")
+            cost = _finite_decimal(plan.get("allocated_cost_idr"), "COST")
+            entry = _finite_decimal(plan.get("entry_price_idr"), "ENTRY")
+            stop = _finite_decimal(plan.get("stop_loss_price_idr"), "STOP")
+            spread_row = market["evidence_status"]["spread_bps"]
+            if spread_row["status"] != "PUBLIC_DIAGNOSTIC":
+                raise ValueError("SPREAD_UNKNOWN")
+            spread = _finite_decimal(spread_row["value"], "SPREAD")
+            if (net < 10000 or roi < 2 or cost <= 0 or not 0 < stop < entry
+                    or spread > 80
+                    or net > _finite_decimal(plan.get("estimated_net_profit_idr"), "PLAN_NET")
+                    or roi > _finite_decimal(plan.get("estimated_net_roi_percent"), "PLAN_ROI")):
+                raise ValueError("SCENARIO_NOT_COMPARABLE")
+            stop_distance = (entry - stop) / entry * 100
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            item["disposition"] = "WAIT_INCOMPLETE_SCENARIO"
+            continue
+        item["disposition"] = "QUALIFIED_SYNTHETIC_SCENARIO"
+        item["scenario_metrics"] = {
+            "projected_net_profit_idr": str(net),
+            "projected_net_roi_percent": str(roi),
+            "allocated_cost_idr": str(cost),
+            "spread_bps": str(spread),
+            "stop_distance_percent_not_max_loss": str(stop_distance),
+        }
+        qualified.append((item, cost, (net, roi, -spread, -stop_distance)))
+    out["qualified_scenario_count"] = len(qualified)
+    if not qualified:
+        return out
+    winner = qualified[0]
+    if len(qualified) == 2:
+        a, b = qualified
+        # Same capital basis and strict dominance across all four dimensions.
+        # If tradeoffs conflict or tie, do not invent weights or confidence.
+        def dominates(x, y):
+            return (x[1] == y[1]
+                    and all(u >= v for u, v in zip(x[2], y[2]))
+                    and any(u > v for u, v in zip(x[2], y[2])))
+        if dominates(a, b):
+            winner = a
+        elif dominates(b, a):
+            winner = b
+        else:
+            return dict(out, status="RESCAN_INCOMPARABLE_SCENARIOS")
+    return dict(out, status="SELECTED_SYNTHETIC_REVIEW_ONLY",
+                selected_pair=winner[0]["pair"],
+                selected_evidence_digest_sha256=winner[0]["evidence_digest_sha256"])
+
+
 class ThreeRoleShadow:
     """One non-live AI boundary connected to the single bulk orchestrator.
 
@@ -366,19 +489,22 @@ class ThreeRoleShadow:
 
     def __init__(self, *, caller: Callable[[str, dict[str, Any]], Mapping[str, Any]] | None = None,
                  clock: Callable[[], float] = time,
-                 source_verifier: G1ReceiptVerifier | None = None) -> None:
+                 source_verifier: G1ReceiptVerifier | None = None,
+                 review_claim: Callable[..., bool] | None = None) -> None:
         self._caller = caller
         self._clock = clock
         # No verifier is wired from production public market or env flags.
         self._source_verifier = source_verifier
+        self._review_claim = review_claim
 
     def _run_two_candidates(self, trace_id: str, bulk: dict[str, Any],
                             preview: list[str]) -> dict[str, Any]:
-        """M04-T: two *independently* source-bound candidates, shadow only.
+        """Preflight both candidates before any caller; isolate valid receipts.
 
-        Preflight BOTH receipt+digest pairs before ANY injected model call, so
-        a valid first candidate cannot trigger billable work if the second
-        lacks a trustworthy issuer. Public G1 never passes this gate.
+        Shared cohort facts remain in BOTH signed digests. A shared fact
+        mutation can invalidate both; one bad individual receipt alone
+        cannot invalidate the other pair's independently verified digest.
+        No source/coverage/paid-provider check is bypassed.
         """
         if (len(preview) != 2 or any(not isinstance(p, str) for p in preview)
                 or len(set(preview)) != 2):
@@ -387,42 +513,47 @@ class ThreeRoleShadow:
                 "g1_verified", "source_trust_verified", "trade_history_complete")):
             return _reject("G1_PUBLIC_EVIDENCE_UNTRUSTED")
         receipts = bulk.get("g1_attestations")
-        if not isinstance(receipts, dict) or set(receipts) != set(preview):
+        if not isinstance(receipts, dict) or not set(receipts).issubset(preview):
             return _reject("G1_ISSUER_RECEIPT_UNVERIFIED")
         now = int(self._clock())
+        # Fail closed on malformed shared cohort; never rebuild signed facts.
         isolated = []
         for pair in preview:
             item = deepcopy(bulk)
             item["eligible_cohort"]["provisional_watchlist_preview"] = [pair]
-            item["g1_attestation"] = receipts[pair]
-            # Never forward another candidate's private issuer claim.
+            item["g1_attestation"] = receipts.get(pair)
             item.pop("g1_attestations", None)
             isolated.append(item)
         preflight = ThreeRoleShadow(
             caller=None, clock=lambda: now, source_verifier=self._source_verifier,
         )
-        verified = []
-        for pair, item in zip(preview, isolated):
-            result = preflight.run(trace_id, item)
-            if result["reason"] != "M04_PROVIDER_NOT_CONFIGURED":
-                return _reject(
-                    result["reason"], digest=result.get("source_digest_sha256"),
-                    candidate_pair=pair,
-                )
-            verified.append(result["source_digest_sha256"])
+        checked = [preflight.run(trace_id, item) for item in isolated]
+        verified = {
+            pair: result["source_digest_sha256"]
+            for pair, result in zip(preview, checked)
+            if result["reason"] == "M04_PROVIDER_NOT_CONFIGURED"
+        }
+        if not verified:
+            failure = checked[0]
+            return _reject(failure["reason"],
+                           digest=failure.get("source_digest_sha256"),
+                           candidate_pair=preview[0])
         if self._caller is None:
             return _reject("M04_PROVIDER_NOT_CONFIGURED")
         reports = []
-        for pair, item, digest in zip(preview, isolated, verified):
-            result = ThreeRoleShadow(
-                caller=self._caller, clock=lambda: now,
-                source_verifier=self._source_verifier,
-            ).run(trace_id, item)
-            # No receipt, digest, pair, or prior-role results may migrate
-            # between independently processed candidates.
+        for pair, item, admitted in zip(preview, isolated, checked):
+            result = admitted
+            if pair in verified:
+                # Recheck freshness and receipt at each actual candidate call,
+                # especially after a preceding slow provider response.
+                result = ThreeRoleShadow(
+                    caller=self._caller, clock=self._clock,
+                    source_verifier=self._source_verifier,
+                    review_claim=self._review_claim,
+                ).run(trace_id, item)
             reports.append({
                 "pair": pair,
-                "evidence_digest_sha256": digest,
+                "evidence_digest_sha256": result.get("source_digest_sha256"),
                 "reason": result["reason"],
                 "completed_roles": result["completed_roles"],
                 "role_results": result["role_results"],
@@ -430,15 +561,40 @@ class ThreeRoleShadow:
         result = _reject("M04_TWO_CANDIDATE_SHADOW_ONLY")
         result["candidate_reports"] = reports
         result["candidate_count"] = 2
-        result["source_digests_by_pair"] = dict(zip(preview, verified))
+        result["source_digests_by_pair"] = verified
         result["completed_role_calls"] = sum(
             len(x["completed_roles"]) for x in reports
         )
-        # Even synthetic signed receipts and six model-shaped responses
-        # cannot authorize Final PASS or execution in this milestone.
+        result["candidate_decision_loop"] = _candidate_decision_loop(
+            reports=reports,
+            source_epoch=bulk.get("screening_observed_epoch"),
+            now_epoch=int(self._clock()),
+        )
+        # Even synthetic signed receipts and role responses authorize no order.
         return result
 
     def run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
+        result = self._run(trace_id, bulk)
+        # Attach the same decision diagnostics to a single validated review.
+        # Early admission failures keep their original reason and cannot
+        # obtain a selection or cause a model call through this wrapper.
+        if ("candidate_decision_loop" not in result
+                and result.get("completed_roles") == list(ROLES)
+                and isinstance(bulk, dict)):
+            result["candidate_decision_loop"] = _candidate_decision_loop(
+                reports=[{
+                    "pair": result["candidate_pair"],
+                    "evidence_digest_sha256": result["source_digest_sha256"],
+                    "reason": result["reason"],
+                    "completed_roles": result["completed_roles"],
+                    "role_results": result["role_results"],
+                }],
+                source_epoch=bulk.get("screening_observed_epoch"),
+                now_epoch=int(self._clock()),
+            )
+        return result
+
+    def _run(self, trace_id: str, bulk: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(trace_id, str) or not trace_id.strip():
             return _reject("INVALID_TRACE_ID")
         if (isinstance(bulk, dict)
@@ -638,6 +794,25 @@ class ThreeRoleShadow:
         if self._caller is None:
             return _reject("M04_PROVIDER_NOT_CONFIGURED", digest=digest,
                            candidate_pair=source["pair"])
+
+        if self._review_claim is not None:
+            # Unlike the signed digest, this key ignores transport trace
+            # identity. A new trace cannot replay unchanged market evidence.
+            identity = json.loads(frozen.source_bytes)
+            identity.pop("trace_id", None)
+            key = sha256(json.dumps(identity, sort_keys=True,
+                                    separators=(",", ":"), allow_nan=False
+                                    ).encode("utf-8")).hexdigest()
+            try:
+                claimed = self._review_claim(
+                    pair=source["pair"], evidence_key=key,
+                    signed_digest=digest, observed_epoch=observed)
+            except Exception:
+                return _reject("M04_REVIEW_CLAIM_UNAVAILABLE", digest=digest,
+                               candidate_pair=source["pair"])
+            if claimed is not True:
+                return _reject("M04_REVIEW_EVIDENCE_ALREADY_CLAIMED", digest=digest,
+                               candidate_pair=source["pair"])
 
         roles: list[str] = []
         validated: list[dict[str, Any]] = []

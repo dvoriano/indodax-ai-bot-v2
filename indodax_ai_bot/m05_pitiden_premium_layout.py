@@ -23,8 +23,8 @@ from .m03_ws3_evidence_archive_nonlive import (
 FRAMES = (("1m", 60), ("5m", 300), ("10m", 600), ("15m", 900),
           ("30m", 1800), ("1h", 3600), ("4h", 14400), ("24h", 86400))
 WIB = ZoneInfo("Asia/Jakarta")
-_LAYOUT = "PITIDEN_PREMIUM_WATCH_V3_6_GREEN"
-MIN_GREEN = 6
+_LAYOUT = "PITIDEN_PREMIUM_WATCH_V4_4_GREEN"
+MIN_GREEN = 4
 MIN_TURNOVER_24H = Decimal("400000000")
 
 
