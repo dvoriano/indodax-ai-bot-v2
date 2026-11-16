@@ -1223,7 +1223,7 @@ def send_one_owner_radar_momentum_nonlive(
         if os.environ.get("M05_RADAR_PREMIUM_LAYOUT_GO") == "YES":
             from .m05_pitiden_premium_layout import (
                 DEFAULT_EVIDENCE_DB, format_pitiden_premium,
-                read_price_references,
+                read_price_references, read_closed_candles,
             )
             source_kind = ("WS3" if snap["status"] ==
                            "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
@@ -1234,8 +1234,12 @@ def send_one_owner_radar_momentum_nonlive(
                     evidence_path=(DEFAULT_EVIDENCE_DB
                                    if Path(db_path) == DEFAULT_DB else None),
                 )
+                candles = read_closed_candles(
+                    candidate, db_path=db_path, now_epoch=now,
+                )
                 message = format_pitiden_premium(
                     candidate, refs, source_kind=source_kind, now_epoch=now,
+                    candles=candles,
                 )
                 parse_mode = "HTML"
             except (OSError, sqlite3.Error, ValueError, TypeError,
