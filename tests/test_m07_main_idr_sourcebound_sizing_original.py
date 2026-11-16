@@ -100,6 +100,28 @@ class OwnerClassifiedMainSizingOriginalTests(unittest.TestCase):
         self.assertEqual(bot.journal.m07_offline_intent_summary()[
             "unresolved_simulated_intents"], 0)
 
+    def test_current_main_only_budget_and_manual_asset_exclusions(self):
+        bot, public = self.build()
+        v = dict(public_candidate=public, account_snapshot=account(),
+                 owner_main_source_classified=True,
+                 commitments_not_locked_idr=D("1000"),
+                 max_spread_bps=D("150"), now_epoch=NOW)
+        result = bot.review_m07_owner_main_idr_sizing_offline(**v)
+        self.assertEqual(result["funding_policy"], "MAIN_IDR_ONLY")
+        self.assertEqual(result["main_idr_pool_scenario"], "919147")
+        self.assertIsNone(result["requested_ticket_ceiling_idr"])
+        self.assertGreater(D(result["buy_max_cost_idr_reference"]), D("900000"))
+        self.assertFalse(result["execution_allowed"])
+        for pair in ("floki_idr", "pepe_idr"):
+            denied = bot.review_m07_owner_main_idr_sizing_offline(
+                **{**v, "public_candidate": dict(public, candidate_pair=pair,
+                                                 observed_pair=pair)})
+            self.assertIsNone(denied["sized_qty_base_reference"])
+            self.assertFalse(denied["execution_allowed"])
+        with self.assertRaises(ValueError):
+            bot.review_m07_owner_main_idr_sizing_offline(
+                **v, new_floki_sell_rebuy_hold_idr=D("0"))
+
     def test_no_initial_principal_cap_and_no_invented_historical_holds(self):
         bot, public = self.build()
         v = inputs(public)
