@@ -166,15 +166,10 @@ def _prepare_tick_runtime(
                 decisions, funding_file, key_file, token_path, state_db):
             raise ConfigurationError("M07_TICK_OWNERSHIP_FILE_COLLISION")
         raw = _owner_private_file(str(funding_file))
-        expected_keys = {
-            "requested_ticket_ceiling_idr",
-            "new_floki_sell_rebuy_hold_idr",
-            "new_pepe_sell_rebuy_hold_idr",
-            "commitments_not_locked_idr",
-            "max_spread_bps",
-        }
-        if type(raw) is not dict or set(raw) != expected_keys:
+        from .m07_main_idr_sizing import valid_main_funding_schema
+        if not valid_main_funding_schema(raw):
             raise ConfigurationError("M07_TICK_FUNDING_SCHEMA_INVALID")
+        expected_keys = set(raw)
         if any(type(raw[k]) is not str or not 1 <= len(raw[k]) <= 40
                or not raw[k].isascii() for k in expected_keys):
             raise ConfigurationError("M07_TICK_FUNDING_AMOUNT_INVALID")
@@ -183,7 +178,8 @@ def _prepare_tick_runtime(
         except (ValueError, InvalidOperation):
             raise ConfigurationError("M07_TICK_FUNDING_AMOUNT_INVALID") from None
         if (any(not v.is_finite() or v < 0 for v in funding.values())
-                or funding["requested_ticket_ceiling_idr"] <= 0
+                or ("requested_ticket_ceiling_idr" in funding
+                    and funding["requested_ticket_ceiling_idr"] <= 0)
                 or not 0 < funding["max_spread_bps"] <= 500):
             raise ConfigurationError("M07_TICK_FUNDING_AMOUNT_INVALID")
         # Instantiate the SAME original orchestrator only inside owner
