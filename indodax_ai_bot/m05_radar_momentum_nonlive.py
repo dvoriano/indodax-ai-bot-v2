@@ -1213,7 +1213,7 @@ def send_one_owner_radar_momentum_nonlive(
         parse_mode = None
         if premium:
             # New owner publication gate BEFORE durable claim. No legacy
-            # fallback may bypass the six-green rule on data/render failure.
+            # fallback may bypass the four-green rule on data/render failure.
             from .m05_pitiden_premium_layout import (
                 DEFAULT_EVIDENCE_DB, format_pitiden_premium,
                 read_price_references, read_closed_candles,
@@ -1302,7 +1302,7 @@ def send_one_owner_radar_momentum_nonlive(
             "pair_delivery_audit_persisted": recorded,
         }
     if premium and not eligible_count:
-        return {"status": "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET",
+        return {"status": "M05_RADAR_PREMIUM_FOUR_GREEN_NOT_MET",
                 "messages_sent": 0}
     return {"status": "M05_RADAR_THROTTLED",
             "messages_sent": 0}
