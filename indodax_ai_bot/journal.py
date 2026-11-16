@@ -2595,9 +2595,28 @@ class DecisionJournal:
             "execution_allowed": False,
         }
 
+    @contextmanager
+    def _m09_paper_write(self, con=None):
+        """Share the existing PAPER write transaction with automatic steps."""
+        if con is not None:
+            if not con.in_transaction:
+                raise DecisionConflictError("M09_PAPER_TRANSACTION_REQUIRED")
+            yield con
+        else:
+            with self._connect() as local:
+                local.execute("BEGIN IMMEDIATE")
+                # A configured auto wallet must not mix manual fixture fills.
+                exists=local.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='m09_paper_auto_state'").fetchone()
+                if exists and local.execute(
+                        "SELECT 1 FROM m09_paper_auto_state WHERE id=1").fetchone():
+                    raise DecisionConflictError("M09_PAPER_AUTO_WALLET_MANAGED")
+                yield local
+
     def record_m09_paper_buy_offline(self, *, paper_id: str,
             symbol: str, buy_qty: Decimal, buy_price_idr: Decimal,
-            buy_all_in_fee_idr: Decimal, buy_epoch: int) -> dict:
+            buy_all_in_fee_idr: Decimal, buy_epoch: int, _paper_con=None) -> dict:
         """Simulate an IDR BUY, NEVER create exchange order/bot-owned lot."""
         self._m09_paper_id(paper_id,"paper_")
         if (type(symbol) is not str
@@ -2613,8 +2632,7 @@ class DecisionJournal:
             raise DecisionConflictError("M09_PAPER_BUY_COST_INVALID")
         row=(paper_id,symbol,format(qty,"f"),format(price,"f"),
              format(fee,"f"),epoch,"M09_PAPER_SCENARIO_ONLY")
-        with self._connect() as con:
-            con.execute("BEGIN IMMEDIATE")
+        with self._m09_paper_write(_paper_con) as con:
             stored=con.execute(
                 "SELECT paper_id,symbol,buy_qty,buy_price_idr,"
                 "buy_all_in_fee_idr,buy_epoch,source "
@@ -2686,7 +2704,8 @@ class DecisionJournal:
     def record_m09_paper_sell_offline(self, *, paper_id: str,
             paper_exit_id: str, sell_qty: Decimal,
             sell_price_idr: Decimal, sell_all_in_fee_idr: Decimal,
-            incremental_slippage_idr: Decimal, sell_epoch: int) -> dict:
+            incremental_slippage_idr: Decimal, sell_epoch: int,
+            _paper_con=None) -> dict:
         """Simulate partial/final SELL with allocated BUY cost, PAPER ONLY.
 
         Explicit sell fee and incremental slippage are deducted just once.
@@ -2705,8 +2724,7 @@ class DecisionJournal:
         if (not gross.is_finite() or not 0 < gross < Decimal("1e25")
                 or fee+slip > gross):
             raise DecisionConflictError("M09_PAPER_SELL_NET_INVALID")
-        with self._connect() as con:
-            con.execute("BEGIN IMMEDIATE")
+        with self._m09_paper_write(_paper_con) as con:
             parent=con.execute(
                 "SELECT symbol,buy_qty,buy_price_idr,buy_all_in_fee_idr,"
                 "buy_epoch,source FROM m09_paper_simulated_buys "
