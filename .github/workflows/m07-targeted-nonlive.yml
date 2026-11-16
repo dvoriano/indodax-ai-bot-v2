@@ -24,6 +24,12 @@ on:
       - "tests/test_m05_strategy_a_asof_micro_risk_readonly.py"
       - "tests/test_m05_ws3_asof_quality_readonly.py"
       - "tests/test_m05_pitiden_premium_layout.py"
+      - "indodax_ai_bot/m03_ws_summary_live_watch.py"
+      - "tests/test_m10_btc_self_heal.py"
+      - "scripts/m10_btc_self_heal_owner.py"
+      - "indodax_ai_bot/m10_btc_self_heal.py"
+      - "scripts/m05_pitiden_readiness_readonly.py"
+      - "tests/test_m05_pitiden_readiness_readonly.py"
       - "tests/test_m03_ws3_evidence_archive_nonlive.py"
       - "indodax_ai_bot/m03_ws3_evidence_archive_nonlive.py"
       - "tests/test_m05_ws3_radar_bridge_nonlive.py"
@@ -74,6 +80,12 @@ on:
       - "tests/test_m05_strategy_a_asof_micro_risk_readonly.py"
       - "tests/test_m05_ws3_asof_quality_readonly.py"
       - "tests/test_m05_pitiden_premium_layout.py"
+      - "indodax_ai_bot/m03_ws_summary_live_watch.py"
+      - "tests/test_m10_btc_self_heal.py"
+      - "scripts/m10_btc_self_heal_owner.py"
+      - "indodax_ai_bot/m10_btc_self_heal.py"
+      - "scripts/m05_pitiden_readiness_readonly.py"
+      - "tests/test_m05_pitiden_readiness_readonly.py"
       - "tests/test_m03_ws3_evidence_archive_nonlive.py"
       - "indodax_ai_bot/m03_ws3_evidence_archive_nonlive.py"
       - "tests/test_m05_ws3_radar_bridge_nonlive.py"
@@ -147,6 +159,8 @@ jobs:
             tests.test_m05_strategy_a_asof_micro_risk_readonly \
             tests.test_m05_ws3_asof_quality_readonly \
             tests.test_m05_pitiden_premium_layout \
+            tests.test_m05_pitiden_readiness_readonly \
+            tests.test_m10_btc_self_heal \
             tests.test_m03_ws3_evidence_archive_nonlive \
             tests.test_m05_ws3_radar_bridge_nonlive \
             tests.test_m04_m05_ack_risk_handoff_nonlive \

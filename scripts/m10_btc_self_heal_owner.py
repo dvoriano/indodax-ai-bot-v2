@@ -192,8 +192,54 @@ def main() -> int:
     group.add_argument("--diagnose-readonly", action="store_true")
     group.add_argument("--owner-enable-standing-transient", action="store_true")
     group.add_argument("--owner-enable-continuous-reconnect", action="store_true")
+    group.add_argument("--preview-exact-duplicate-retry", action="store_true")
+    group.add_argument("--owner-retry-exact-duplicate", metavar="STATUS_SHA256")
     p.add_argument("--owner-confirm", type=str)
     args = p.parse_args()
+    if args.preview_exact_duplicate_retry or args.owner_retry_exact_duplicate:
+        from hashlib import sha256
+        from indodax_ai_bot.m10_btc_self_heal import (
+            STATUS, OWNER_DUPLICATE_FAILURE,
+            ready_for_transient_recovery, maybe_auto_heal_original_gate,
+        )
+        try:
+            body, raw = _private_json(STATUS, 32768)
+            digest = sha256(raw).hexdigest()
+            if body.get("collector_failure_code") != OWNER_DUPLICATE_FAILURE:
+                raise AutoHealDenied("AUTO_HEAL_EXACT_DUPLICATE_NOT_PRESENT")
+            now = int(time.time())
+            if args.preview_exact_duplicate_retry:
+                ready_for_transient_recovery(
+                    now=now, approved_duplicate_sha256=digest)
+                print(json.dumps({
+                    "status": "EXACT_DUPLICATE_RETRY_READY_OWNER_CONFIRM",
+                    "status_sha256": digest,
+                    "journal_preserved": True,
+                    "service_started_or_restarted": False,
+                    "hold_or_policy_modified": False,
+                }, sort_keys=True))
+                return 0
+            if (args.owner_confirm != "OWNER_RETRY_EXACT_REJECTED_PUBLIC_BTC_BATCH"
+                    or args.owner_retry_exact_duplicate != digest):
+                raise AutoHealDenied("AUTO_HEAL_EXACT_DUPLICATE_OWNER_ACK_MISMATCH")
+            if not maybe_auto_heal_original_gate(
+                    now=now, approved_duplicate_sha256=digest):
+                raise AutoHealDenied("AUTO_HEAL_EXACT_DUPLICATE_RETRY_DENIED")
+            print(json.dumps({
+                "status": "EXACT_DUPLICATE_RETRY_RECEIPT_STAGED",
+                "journal_preserved": True,
+                "standing_go_changed": False,
+                "service_started_or_restarted": False,
+                "automatic_duplicate_retry_enabled": False,
+                "execution_allowed": False,
+            }, sort_keys=True))
+            return 0
+        except (AutoHealDenied, AdmissionDenied, OSError, ValueError) as exc:
+            code = str(exc)
+            print(json.dumps({"status": "DENIED", "reason": code
+                if re.fullmatch(r"AUTO_HEAL_[A-Z0-9_]{1,90}", code)
+                else "AUTO_HEAL_EXACT_DUPLICATE_SOURCE_UNAVAILABLE"}))
+            return 2
     if args.diagnose_readonly:
         print(json.dumps(diagnose_self_heal_readonly(), sort_keys=True))
         return 0

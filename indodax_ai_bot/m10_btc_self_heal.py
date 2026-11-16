@@ -69,6 +69,7 @@ _TRANSIENT = frozenset((
     "WS_SESSION_REJECTED:PUBLIC_WS_AUTH_RECEIVE_TIMEOUT",
 ))
 _HEX = re.compile(r"[a-f0-9]{64}\Z")
+OWNER_DUPLICATE_FAILURE = "WS_SESSION_REJECTED:DUPLICATE_SEQUENCE_IN_PUBLICATION"
 
 
 class AutoHealDenied(Exception):
@@ -154,7 +155,8 @@ def _consent(now: int, path: Path = CONSENT) -> dict[str, Any]:
 
 
 def _source(now: int, *, go: Path, status: Path, hold: Path,
-            db: Path, max_reject_age: int | None = MAX_REJECT_AGE) -> dict[str, Any]:
+            db: Path, max_reject_age: int | None = MAX_REJECT_AGE,
+            approved_duplicate_sha256: str | None = None) -> dict[str, Any]:
     try:
         h, hbytes = _private_json(hold, 2048)
         g, gbytes = _private_json(go, 2048)
@@ -175,6 +177,12 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or type(g["max_gap_count"]) is not int
             or not 0 <= g["max_gap_count"] <= 100000):
         _deny("AUTO_HEAL_STANDING_PUBLIC_GO_UNVERIFIED")
+    duplicate_owner_ack = (isinstance(approved_duplicate_sha256, str)
+        and _HEX.fullmatch(approved_duplicate_sha256) is not None
+        and approved_duplicate_sha256 == _sha(sbytes)
+        and s.get("collector_failure_code") == OWNER_DUPLICATE_FAILURE)
+    if approved_duplicate_sha256 is not None and not duplicate_owner_ack:
+        _deny("AUTO_HEAL_EXACT_DUPLICATE_OWNER_ACK_MISMATCH")
     if (type(s.get("last_completed_batch_epoch")) is not int
             or not (g["issued_at_epoch"] <= s["last_completed_batch_epoch"] <= now
                     and (max_reject_age is None or
@@ -188,7 +196,8 @@ def _source(now: int, *, go: Path, status: Path, hold: Path,
             or type(s.get("completed_safe_sessions")) is not int
             or not 0 <= s["completed_safe_sessions"] < s["attempted_sessions"]
             or s.get("failed_session_number") != s["attempted_sessions"]
-            or s.get("collector_failure_code") not in _TRANSIENT
+            or (s.get("collector_failure_code") not in _TRANSIENT
+                and not duplicate_owner_ack)
             or s.get("stream_status") != "DISCONNECTED"
             or s.get("restart_only_after_clean_batch") is not False
             or s.get("g1_receipt_issuance_allowed") is not False
@@ -250,6 +259,7 @@ def ready_for_transient_recovery(
     *, now: int, consent: Path = CONSENT, go: Path = GO,
     status: Path = STATUS, hold: Path = HOLD, db: Path = WSDB,
     state: Path = STATE, lease: Path = LEASE,
+    approved_duplicate_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Pure inspection, no disk writes, no private content exposed."""
     if type(now) is not int or now <= 0:
@@ -258,7 +268,8 @@ def ready_for_transient_recovery(
     # Aged REJECT is never promoted to current market data. It is only
     # historic evidence for one bounded PUBLIC network reconnection attempt.
     src = _source(now, go=go, status=status, hold=hold, db=db,
-                  max_reject_age=None)
+                  max_reject_age=None,
+                  approved_duplicate_sha256=approved_duplicate_sha256)
     history = _state(state)
     _existing_lease(lease)
     recent = [a for a in history if now - 86400 < a["epoch"] <= now]
@@ -273,7 +284,9 @@ def ready_for_transient_recovery(
         _deny("AUTO_HEAL_SAME_FAILED_BATCH_ALREADY_RETRIED")
     return {
         **src, "history": history,
-        "status": "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE",
+        "status": ("AUTO_HEAL_EXACT_DUPLICATE_OWNER_RETRY_ELIGIBLE"
+                   if approved_duplicate_sha256 is not None else
+                   "AUTO_HEAL_TRANSIENT_PUBLIC_RECOVERY_ELIGIBLE"),
         "owner_continuous_transient_recovery": (
             approval["schema_version"] == CONTINUOUS_TRANSIENT_SCHEMA
         ),
@@ -324,6 +337,7 @@ def maybe_auto_heal_original_gate(
     *, now: int, go: Path = GO, status: Path = STATUS,
     hold: Path = HOLD, db: Path = WSDB, consent: Path = CONSENT,
     state: Path = STATE, lease: Path = LEASE,
+    approved_duplicate_sha256: str | None = None,
 ) -> bool:
     """Only the existing ExecCondition 'check' invokes this when opted in.
 
@@ -356,6 +370,7 @@ def maybe_auto_heal_original_gate(
         info = ready_for_transient_recovery(
             now=now, consent=consent, go=go, status=status,
             hold=hold, db=db, state=state, lease=lease,
+            approved_duplicate_sha256=approved_duplicate_sha256,
         )
         tag = str(now) + "." + str(os.getpid())
         archive = hold.with_name(hold.name + ".auto-recovered." + tag + ".bak")

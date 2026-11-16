@@ -244,6 +244,36 @@ class M10OriginalBtcTransientSelfHealTests(unittest.TestCase):
                 self.put(self.status, self.s)
                 self.assert_denied_untouched()
 
+    def test_duplicate_failure_requires_exact_explicit_digest(self):
+        from hashlib import sha256
+        self.s["collector_failure_code"] = h.OWNER_DUPLICATE_FAILURE
+        self.put(self.status, self.s)
+        self.assert_denied_untouched()
+        digest = sha256(self.status.read_bytes()).hexdigest()
+        with patch.object(h, "_journal_gap_count", return_value=5):
+            self.assertFalse(h.maybe_auto_heal_original_gate(
+                **self.args(), approved_duplicate_sha256="0"*64))
+            self.assertTrue(self.hold.exists())
+            ready = h.ready_for_transient_recovery(
+                **self.args(), approved_duplicate_sha256=digest)
+            self.assertEqual(ready["status"],
+                             "AUTO_HEAL_EXACT_DUPLICATE_OWNER_RETRY_ELIGIBLE")
+            self.assertTrue(h.maybe_auto_heal_original_gate(
+                **self.args(), approved_duplicate_sha256=digest))
+            self.assertFalse(self.hold.exists())
+            self.assertEqual(self.s, json.loads(self.status.read_text()))
+            self.assertEqual(self.g, json.loads(self.go.read_text()))
+            self.assertTrue(h.validated_standing_failure_lease(
+                now=NOW, policy_bytes=self.go.read_bytes(),
+                status_bytes=self.status.read_bytes(), lease=self.lease,
+                state=self.state, consent=self.consent))
+            self.put(self.hold,self.hold_val)
+            self.assertFalse(h.maybe_auto_heal_original_gate(
+                **self.args(now=NOW+1801)))
+            self.assertFalse(h.maybe_auto_heal_original_gate(
+                **self.args(now=NOW+1801),approved_duplicate_sha256=digest))
+            self.assertTrue(self.hold.exists())
+
     def test_other_authority_claims_cannot_be_auto_promoted(self):
         for key in (
             "g1_receipt_issuance_allowed", "g2_provider_call_allowed",

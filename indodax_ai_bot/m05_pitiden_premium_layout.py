@@ -243,7 +243,7 @@ def build_timeframes(candidate, references, *, candles=None, previous_24h=None):
     """Completed interval Open -> Close; rolling 24h -> latest ticker.
 
     Prefer complete cached minute candles. Otherwise use distinct near-edge
-    samples inside the interval only, always marked approximate. No nearest
+    samples near the interval edges, always marked approximate. No nearest
     future sample, cross-midnight substitute, or invented zero volume.
     """
     end = candidate["observed_epoch"]
@@ -277,6 +277,15 @@ def build_timeframes(candidate, references, *, candles=None, previous_24h=None):
             right = [(t,p) for t,p in samples if stop-1-t <= tolerance]
             op = min(left,default=None,key=lambda x:x[0])
             cl = max(right,default=None,key=lambda x:x[0])
+            # Original archive commonly has ONE quote near :49 per minute.
+            # If an in-bucket open is unavailable (or is the same quote as
+            # the close), use only a genuinely observed previous-boundary
+            # sample within the same tolerance. This is a marked sample
+            # change, NEVER a verified candle open or complete trade tape.
+            if cl and (op is None or op[0] >= cl[0]):
+                before = [(t,p) for t,p in references
+                          if start-tolerance <= t < start]
+                op = max(before,default=None,key=lambda x:x[0])
             if op and cl and op[0] < cl[0]:
                 opening, closing_price = op[1],cl[1]
                 approx = True

@@ -119,6 +119,20 @@ class PremiumWatchTests(unittest.TestCase):
         self.assertIn("1m~",msg)
         self.assertIn("Trigger +1,77% / 4m05s",msg)
 
+    def test_sparse_minute_quotes_at_49_seconds_can_compare_edges(self):
+        c=candidate()
+        _,start,stop=next(interval_windows(END))
+        prior=(start-11,Decimal("100"))
+        last=(stop-11,Decimal("103"))
+        row=build_timeframes(c,[prior,last])[0]
+        self.assertTrue(row["approx"])
+        self.assertEqual(row["opening_price"],Decimal("100"))
+        self.assertEqual(row["close_price"],Decimal("103"))
+        self.assertEqual(row["change"],Decimal("3"))
+        for refs in ([(start-16,Decimal("100")),last],
+                     [prior,(stop,Decimal("103"))], [last]):
+            self.assertIsNone(build_timeframes(c,refs)[0]["change"])
+
     def test_native_previous_preferred_and_history_fallback_marked(self):
         c=candidate()
         refs=[(END-86400-10,Decimal("5000")),

@@ -720,28 +720,37 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
         micro_autoselect_from_stream=(micro_enabled and not watch_pairs),
     )
     now = int((now_fn or time.time)())
-    report = persist_ws3_summary_watch(
-        DecisionJournal(db_path), source, now_epoch=now,
-    )
-    # Optional separate research DB, using the SAME already-received WS3
-    # snapshot. Never change original WATCH candidates, trading, or the
-    # original M03 DB's 2h retention. Best-effort evidence must not turn a
-    # successful scanner tick into a failure.
+    # Keep the existing optional archive of the already-received snapshot.
+    # A genuine no-fresh-liquid cycle is useful negative evidence, even
+    # though the original WATCH lane still rejects that cycle. No additional
+    # connection and no relaxation of source validity or original thresholds.
     import os
-    if os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") == "YES":
+    def archive_source():
+        if os.environ.get("M03_WS3_EVIDENCE_ARCHIVE_GO") != "YES":
+            return None
         try:
             from .m03_ws3_evidence_archive_nonlive import (
                 archive_ws3_evidence_nonlive,
             )
-            report["research_archive"] = archive_ws3_evidence_nonlive(
-                source, now_epoch=now,
-            )
+            return archive_ws3_evidence_nonlive(source, now_epoch=now)
         except Exception:
-            report["research_archive"] = {
+            return {
                 "status": "M03_WS3_RESEARCH_ARCHIVE_UNAVAILABLE",
                 "exchange_requests_added": 0,
                 "orders_sent": 0,
             }
+
+    try:
+        report = persist_ws3_summary_watch(
+            DecisionJournal(db_path), source, now_epoch=now,
+        )
+    except M03WSWatchError as exc:
+        if str(exc) == "M03_WS_WATCH_NO_FRESH_LIQUID_IDR_PAIR":
+            archive_source()
+        raise
+    archived = archive_source()
+    if archived is not None:
+        report["research_archive"] = archived
     # Separate opt-in from already-active 72h price archive. Preserve the
     # original 2h micro table and M03 WATCH behavior. This is local research
     # evidence only, with no additional WS/REST request or trading authority.
