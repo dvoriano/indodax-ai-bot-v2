@@ -97,6 +97,43 @@ class OriginalM09VirtualPaper(unittest.TestCase):
         for r in (buy,sell,summary):
             self.check_isolation(r)
 
+    def test_no_second_paper_buy_until_final_exit_across_restart(self):
+        self.buy()
+        self.sell(sell_qty=D("1"))
+        restarted=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+        with self.assertRaisesRegex(DecisionConflictError,
+                                    "M09_PAPER_POSITION_ALREADY_OPEN"):
+            self.buy(app=restarted,paper_id="paper_next",symbol="ETHIDR",
+                     buy_epoch=SELL_EPOCH+1)
+        final=self.sell(app=restarted,paper_exit_id="pexit_final",
+                        sell_qty=D("3"),sell_epoch=SELL_EPOCH+2)
+        self.assertEqual(final["paper"]["paper_remaining_qty"],"0")
+        with self.assertRaisesRegex(DecisionConflictError,
+                                    "M09_PAPER_BUY_PRECEDES_LAST_EXIT"):
+            self.buy(app=restarted,paper_id="paper_next",symbol="ETHIDR",
+                     buy_epoch=SELL_EPOCH+1)
+        new=self.buy(app=restarted,paper_id="paper_next",symbol="ETHIDR",
+                     buy_epoch=SELL_EPOCH+3)
+        self.assertEqual(new["paper"]["status"],"M09_SIMULATED_BUY_OPEN")
+        self.assertTrue(self.buy(app=restarted)["paper"]["replay"])
+        self.assertEqual(self.summary()["paper"]["paper_open_or_partial_positions"],1)
+        self.check_isolation(new)
+
+    def test_competing_paper_buys_accept_only_one(self):
+        def one(i):
+            try:
+                return self.buy(paper_id="paper_concurrent_"+str(i))
+            except DecisionConflictError as exc:
+                return str(exc)
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results=list(pool.map(one,range(5)))
+        accepted=[r for r in results if isinstance(r,dict)]
+        refused=[r for r in results if isinstance(r,str)]
+        self.assertEqual(len(accepted),1)
+        self.assertEqual(refused,["M09_PAPER_POSITION_ALREADY_OPEN"]*4)
+        self.assertEqual(self.summary()["paper"]["paper_open_or_partial_positions"],1)
+        self.check_isolation(accepted[0])
+
     def test_loss_accepted_on_paper_protection_does_not_stop_or_buy(self):
         self.buy()
         loss=self.sell(sell_price_idr=D("24000"),
