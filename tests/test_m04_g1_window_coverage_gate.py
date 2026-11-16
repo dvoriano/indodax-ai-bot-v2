@@ -106,19 +106,21 @@ class M04G1WindowCoverageGateTests(unittest.TestCase):
                 caller.assert_not_called()
                 self.assertFalse(out["execution_allowed"])
 
-    def test_two_candidates_bad_second_signed_coverage_blocks_both(self):
+    def test_two_candidates_bad_second_signed_coverage_blocks_only_second(self):
         bulk, verifier = signed_two_pair_source()
         bulk["g1_coverage_manifests_by_pair"][PAIRS[1]]["tape_windows"]["1h"][
             "unrecovered_gap_count"
         ] = 1
         resign_test_receipt(bulk, pair=PAIRS[1])
-        caller = Mock()
+        caller = RoleCaller()
         out = ThreeRoleShadow(
             caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
         ).run("trace", bulk)
-        self.assertEqual(out["reason"], "G1_WINDOW_COVERAGE_INVALID")
-        self.assertEqual(out["candidate_pair"], PAIRS[1])
-        caller.assert_not_called()
+        reports = {r["pair"]: r for r in out["candidate_reports"]}
+        self.assertEqual(reports[PAIRS[1]]["reason"], "G1_WINDOW_COVERAGE_INVALID")
+        self.assertEqual(reports[PAIRS[1]]["completed_roles"], [])
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
+        self.assertEqual({e["source"]["pair"] for e in caller.inputs}, {PAIRS[0]})
         self.assertFalse(out["execution_allowed"])
 
 
