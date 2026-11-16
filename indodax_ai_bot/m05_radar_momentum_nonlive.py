@@ -751,6 +751,7 @@ def inspect_original_m03_ws3_watch_readonly(
 
     candidates = []
     micro_prealert_candidates = []
+    liquid_watch_candidates = []
     for pair, samples in by_pair.items():
         latest = samples[0]
         if (not 0 <= now - latest[0] <= WS3_MAX_AGE_SECONDS
@@ -762,6 +763,23 @@ def inspect_original_m03_ws3_watch_readonly(
             if 60 <= latest[0] - old[0] <= 300
             and old[1] < latest[1]
         ), None)
+        # Independent WATCH universe: same original fresh WS3 rows, not
+        # conditional on a positive short step, momentum rank or AI/G1.
+        # No reference is not made up; timeframe coverage is checked in M05.
+        if latest[3] >= Decimal("400000000"):
+            short_rise = (latest[2] / reference[2] - 1) * 100 if reference else None
+            liquid_watch_candidates.append({
+                "pair": pair, "observed_epoch": latest[1],
+                "reference_epoch": reference[1] if reference else None,
+                "observed_rise_pct": format(short_rise, ".4f") if short_rise is not None else None,
+                "latest_price_idr": format(latest[2], "f"),
+                "volume_24h_idr": format(latest[3], "f"),
+                "source": "INDODAX_PUBLIC_WS3_SUMMARY_24H",
+                "microstructure_observation": _ws3_micro_observation(
+                    micro_by_pair.get(pair), now=now, source_minute=latest[0]),
+                "g1_verified": False, "execution_allowed": False,
+                "watch_path": "INDEPENDENT_FOUR_GREEN",
+            })
         if reference is None:
             continue
         rise = (latest[2] / reference[2] - 1) * 100
@@ -833,6 +851,10 @@ def inspect_original_m03_ws3_watch_readonly(
         "candidates": candidates[:5],
         "quality_reviewed_candidate_count": len(candidates),
         "ranked_review_shortlist_top40": candidates[:40],
+        # Bounded by the original 2000-row snapshot read, no extra network.
+        # No top40 momentum cut on the independent WATCH universe.
+        "liquid_watch_candidates": sorted(liquid_watch_candidates, key=lambda c: (
+            -Decimal(c["volume_24h_idr"]), c["pair"])),
         "micro_prealert_candidates_top40": micro_prealert_candidates[:40],
         "micro_prealert_observed_count": len(micro_prealert_candidates),
         "micro_prealert_is_owner_telegram_alert": False,
@@ -919,7 +941,9 @@ def format_owner_ws3_radar_compact(candidate: dict) -> str:
 
 def _claim_once(ledger, pair: str, observed_epoch: int,
                 now_epoch: int, *, source_kind: str,
-                global_spacing_seconds: int = GLOBAL_SPACING_SECONDS) -> bool:
+                global_spacing_seconds: int = GLOBAL_SPACING_SECONDS,
+                watch_path: str = "MOMENTUM",
+                green_at_claim: int | None = None) -> bool:
     """Durable at-most-once claim, plus bounded per-pair delivery audit.
 
     The ORIGINAL one-row-per-pair cooldown table is untouched. An additive
@@ -927,7 +951,13 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
     a Bot API send. An ACK is never inferred just from this claim.
     """
     if (source_kind not in ("WS3", "REST") or global_spacing_seconds not in
-            (GLOBAL_SPACING_SECONDS, PREMIUM_GLOBAL_SPACING_SECONDS)):
+            (GLOBAL_SPACING_SECONDS, PREMIUM_GLOBAL_SPACING_SECONDS)
+            or watch_path not in ("MOMENTUM", "INDEPENDENT_FOUR_GREEN")
+            or (watch_path == "INDEPENDENT_FOUR_GREEN" and
+                (source_kind != "WS3" or type(green_at_claim) is not int
+                 or not 4 <= green_at_claim <= 8))
+            or (green_at_claim is not None and
+                (type(green_at_claim) is not int or not 4 <= green_at_claim <= 8))):
         return False
     dbpath = Path(ledger.db_path)
     if not _owned_private_regular(dbpath):
@@ -967,6 +997,14 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
                     )
                 )
             """)
+            columns = {r[1] for r in db.execute(
+                "PRAGMA table_info(m05_radar_delivery_events)")}
+            if "watch_path" not in columns:
+                db.execute("ALTER TABLE m05_radar_delivery_events "
+                           "ADD COLUMN watch_path TEXT NOT NULL DEFAULT 'MOMENTUM'")
+            if "green_at_claim" not in columns:
+                db.execute("ALTER TABLE m05_radar_delivery_events "
+                           "ADD COLUMN green_at_claim INTEGER")
             db.execute("CREATE INDEX IF NOT EXISTS "
                        "m05_radar_delivery_events_claimed_idx ON "
                        "m05_radar_delivery_events(claimed_epoch)")
@@ -997,9 +1035,10 @@ def _claim_once(ledger, pair: str, observed_epoch: int,
             db.execute("""
                 INSERT INTO m05_radar_delivery_events(
                     pair,claimed_epoch,source_observed_epoch,source_kind,
-                    delivery_state,ack_received_epoch,telegram_message_id
-                ) VALUES(?,?,?,?, 'CLAIMED',NULL,NULL)
-            """, (pair, now_epoch, observed_epoch, source_kind))
+                    delivery_state,ack_received_epoch,telegram_message_id,
+                    watch_path,green_at_claim
+                ) VALUES(?,?,?,?, 'CLAIMED',NULL,NULL,?,?)
+            """, (pair, now_epoch, observed_epoch, source_kind,watch_path,green_at_claim))
             # Max 30 days per-pair outcome evidence, preserving bounded disk.
             db.execute(
                 "DELETE FROM m05_radar_delivery_events WHERE claimed_epoch < ?",
@@ -1202,6 +1241,7 @@ def send_one_owner_radar_momentum_nonlive(
     # WS3 first in the WS3-enabled premium runtime; each card uses its own
     # source and never combines REST price history with WS3 ticker history.
     snapshots = [snap]
+    independent = []
     if ws3_enabled and (premium or not snap.get("candidates")):
         ws3 = inspect_original_m03_ws3_watch_readonly(
             db_path=db_path, now_epoch=now,
@@ -1209,6 +1249,8 @@ def send_one_owner_radar_momentum_nonlive(
         if ws3["status"] == "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED":
             filtered = priority_only(ws3)
             snapshots = [filtered, snap] if premium else [filtered]
+            if premium:
+                independent = ws3.get("liquid_watch_candidates", [])
     valid = [x for x in snapshots if x["status"] in (
         "M03_ORIGINAL_PUBLIC_RADAR_OBSERVED_UNATTESTED",
         "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED")]
@@ -1218,12 +1260,19 @@ def send_one_owner_radar_momentum_nonlive(
     pool = [(c, "WS3" if x["status"] ==
              "M03_WS3_WATCH_RADAR_OBSERVED_UNATTESTED" else "REST")
             for x in valid for c in x["candidates"]]
+    # Preserve original momentum priority, then examine all remaining
+    # fresh liquid WS3 candidates using the same rendered 4/8 gate.
+    # A pair already in the original WS3 path has identical source rows.
+    if premium:
+        present = {c["pair"] for c, kind in pool if kind == "WS3"}
+        pool.extend((c, "WS3") for c in independent if c["pair"] not in present)
     if not pool:
         return {"status": "M05_RADAR_NO_CURRENT_QUALIFIED_WATCH",
                 "messages_sent": 0}
     eligible_count = 0
     for candidate, source_kind in pool:
         parse_mode = None
+        green_at_claim = None
         if premium:
             # New owner publication gate BEFORE durable claim. No legacy
             # fallback may bypass the four-green rule on data/render failure.
@@ -1231,7 +1280,7 @@ def send_one_owner_radar_momentum_nonlive(
                 DEFAULT_EVIDENCE_DB, format_pitiden_premium,
                 read_price_references, read_closed_candles,
                 read_native_previous_24h, build_timeframes,
-                eligible_premium_watch, MIN_TURNOVER_24H,
+                eligible_premium_watch, MIN_TURNOVER_24H, count_green,
             )
             evidence_path = DEFAULT_EVIDENCE_DB if Path(db_path) == DEFAULT_DB else None
             try:
@@ -1252,6 +1301,7 @@ def send_one_owner_radar_momentum_nonlive(
                                         previous_24h=previous)
                 if not eligible_premium_watch(candidate, rows):
                     continue
+                green_at_claim = count_green(rows)
                 message = format_pitiden_premium(
                     candidate, refs, source_kind=source_kind,
                     now_epoch=now, rows=rows,
@@ -1270,6 +1320,8 @@ def send_one_owner_radar_momentum_nonlive(
             source_kind=source_kind,
             global_spacing_seconds=(PREMIUM_GLOBAL_SPACING_SECONDS if premium
                                     else GLOBAL_SPACING_SECONDS),
+            watch_path=candidate.get("watch_path", "MOMENTUM"),
+            green_at_claim=green_at_claim,
         ):
             continue
         # Claim is durable BEFORE send; uncertainty must never replay it.
