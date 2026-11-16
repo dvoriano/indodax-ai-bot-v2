@@ -1306,6 +1306,11 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "DISCOVER":set(),
                     "OBSERVE":{"paper_id","sell_fee_pct","slippage_pct"},
+                    "AUTO_STEP":{
+                        "seed_idr","buy_fee_pct","maker_sell_fee_pct",
+                        "taker_sell_fee_pct","slippage_pct","depth_fraction_pct",
+                        "trailing_pct",
+                    },
                     "SUMMARY":{"day_wib"},
                 }
                 if action not in fields or set(raw)!=(fields[action]|{"action"}):
@@ -1319,7 +1324,8 @@ def main(argv: list[str] | None = None) -> int:
                 money_keys.update(("tier_sell_qty","best_ask",
                                    "taker_sell_fee_pct","maker_sell_fee_pct",
                                    "taker_slippage_pct","sell_fee_pct",
-                                   "slippage_pct"))
+                                   "slippage_pct","seed_idr","buy_fee_pct",
+                                   "depth_fraction_pct","trailing_pct"))
                 epoch_keys={"buy_epoch","sell_epoch","observed_epoch",
                             "book_observed_epoch"}
                 for k in fields[action]:
