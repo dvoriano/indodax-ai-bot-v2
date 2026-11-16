@@ -353,7 +353,7 @@ def _momentum(rows):
 
 def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
                            candles=None, previous_24h=None, rows=None):
-    """Telegram HTML: only heading bold; preformatted compact columns.
+    """Telegram HTML: compact inline rows, no pre/code-block copy panel.
 
     Watch score and volume acceleration remain unavailable until real
     transaction-window evidence and a validated score definition exist.
@@ -364,7 +364,7 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     pair = candidate["pair"].upper().replace("_IDR", "/IDR")
     current = _number(_decimal(candidate["latest_price_idr"], positive=True))
     time = datetime.fromtimestamp(candidate["observed_epoch"], WIB).strftime("%H:%M:%S")
-    table = ["TF    CHANGE      CLOSE      VOL"]
+    table = ["   TF   CHANGE      PRICE   VOL(Rp)"]
     for row in rows:
         change = _percent(row["change"])
         label = row["tf"] + ("~" if row["approx"] else "")
@@ -394,9 +394,9 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
     context = f"Trigger {_percent(trigger)} / {elapsed//60}m{elapsed%60:02d}s"
     lines = [
         f"📡 <b>{escape(pair)} · Rp{escape(current)}</b>",
-        "<pre>" + escape("\n".join(table)) + "</pre>",
-        escape(f"📈 {_momentum(rows)} · Vol accel N/A · Spread {spread_text}"),
-        f"👀 WATCH · Green {count_green(rows)}/8 · Score N/A",
+        *("<code>" + escape(line) + "</code>" for line in table),
+        f"⚡ <b>{escape(_momentum(rows))}</b> · Vol accel N/A · Spread {escape(spread_text)}",
+        f"👀 <b>WATCH</b> · Green {count_green(rows)}/8 · Score N/A",
         escape(f"{context} · {time} WIB"),
         "<i>~ sampled · Vol 24h rolling Rp</i>",
         "<i>AI/G1 unverified · Watch only · Not BUY</i>",

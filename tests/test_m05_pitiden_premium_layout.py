@@ -85,6 +85,15 @@ class PremiumWatchTests(unittest.TestCase):
                        "Green 6/8","Vol 24h rolling Rp","Not BUY"):
             self.assertIn(phrase,msg)
         self.assertLessEqual(len(msg.splitlines()),15)
+        # Telegram <pre> renders a large gray code block and COPY CODE.
+        # Keep the eight source rows and compact alignment without it.
+        self.assertNotIn("<pre",msg)
+        self.assertNotIn("</pre>",msg)
+        self.assertEqual(msg.count("<code>"),9)
+        self.assertEqual(msg.count("</code>"),9)
+        self.assertIn("TF   CHANGE      PRICE   VOL(Rp)",msg)
+        self.assertIn("<b>ONDO/IDR · Rp5.739</b>",msg)
+        self.assertIn("<b>WATCH</b>",msg)
 
     def test_four_green_gate_boundary_unknown_flat_volume_and_duplicates(self):
         def rows(values):
