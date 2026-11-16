@@ -6,6 +6,7 @@ NOT a REST ticker_all substitute, bid/ask quote, G1/AI receipt or trade signal.
 """
 from __future__ import annotations
 
+from collections import deque
 from decimal import Decimal
 from pathlib import Path
 import json
@@ -80,6 +81,61 @@ def _redacted_json_failure_code(raw: str, *, phase: str,
     return "M03_WS_WATCH_JSON_INVALID:" + stage + ":" + kind
 
 
+def _decode_coalesced_publications(raw, *, micro_channels, micro_active):
+    """Only complete, bounded, already subscribed OBSERVE publications.
+
+    Never salvage a prefix, strip junk, accept a partial message, or
+    apply this framing compatibility to authentication/subscription ACKs.
+    Every object is validated before the original processing loop sees it.
+    """
+    decoder = json.JSONDecoder()
+    messages = []
+    pos = 0
+    try:
+        while pos < len(raw):
+            while pos < len(raw) and raw[pos] in " \t\r\n":
+                pos += 1
+            if pos == len(raw):
+                break
+            if len(messages) >= 8:
+                return []
+            msg, pos = decoder.raw_decode(raw, pos)
+            if not isinstance(msg, dict) or set(msg) != {"result"}:
+                return []
+            result = msg["result"]
+            if not isinstance(result, dict):
+                return []
+            channel = result.get("channel")
+            if channel == _CHANNEL:
+                data = result.get("data")
+                rows = data.get("data") if isinstance(data, dict) else None
+                if not isinstance(rows, list) or len(rows) > 800:
+                    return []
+                if any(not isinstance(row, list) or not row
+                       or not isinstance(row[0], str) for row in rows):
+                    return []
+                idr = [row for row in rows if row[0].endswith("idr")]
+                if not idr:
+                    return []
+                normalize_documented_market_summary_offline({
+                    "result": {"channel": _CHANNEL, "data": {
+                        "data": idr, "offset": data.get("offset")}}
+                })
+            elif isinstance(channel, str) and channel in micro_active:
+                pair, kind = micro_channels[channel]
+                if kind == "trade":
+                    parse_trade_activity_frame(msg, pair=pair)
+                else:
+                    parse_orderbook_frame(msg, pair=pair)
+            else:
+                return []
+            messages.append(msg)
+    except (ValueError, TypeError, KeyError, RecursionError,
+            MarketSummaryContractError, WS3MicrostructureInvalid):
+        return []
+    return messages if len(messages) >= 2 else []
+
+
 def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                     observe_seconds: int = 12,
                                     micro_pairs: tuple[str, ...] = (),
@@ -149,26 +205,39 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         micro_offsets = {}
         micro_frame_count = 0
         next_micro_subscribe_id = 2
+        pending = deque()
+        coalesced_frames = 0
         while True:
             now = clock()
-            if (phase == "AUTH" and now >= auth_deadline
+            if not pending and (
+                    phase == "AUTH" and now >= auth_deadline
                     or phase == "SUBSCRIBE" and now >= auth_deadline
                     or phase == "OBSERVE" and now >= deadline):
                 break
-            try:
-                raw = sock.recv()
-            except ws_module.WebSocketTimeoutException:
-                continue
-            if not isinstance(raw, str) or len(raw) > 512000:
-                raise M03WSWatchError("M03_WS_WATCH_FRAME_SIZE_INVALID")
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                # Preserve fail-closed semantics; this error cannot be
-                # converted into a WATCH observation or positive ACK.
-                raise M03WSWatchError(
-                    _redacted_json_failure_code(raw, phase=phase, error=exc)
-                ) from None
+            if pending:
+                msg = pending.popleft()
+            else:
+                try:
+                    raw = sock.recv()
+                except ws_module.WebSocketTimeoutException:
+                    continue
+                if not isinstance(raw, str) or len(raw) > 512000:
+                    raise M03WSWatchError("M03_WS_WATCH_FRAME_SIZE_INVALID")
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    batch = []
+                    if phase == "OBSERVE" and exc.msg == "Extra data":
+                        batch = _decode_coalesced_publications(
+                            raw, micro_channels=micro_channels,
+                            micro_active=micro_active)
+                    if not batch:
+                        raise M03WSWatchError(
+                            _redacted_json_failure_code(raw, phase=phase, error=exc)
+                        ) from None
+                    coalesced_frames += 1
+                    pending.extend(batch)
+                    msg = pending.popleft()
             if not isinstance(msg, dict):
                 raise M03WSWatchError("M03_WS_WATCH_ENVELOPE_INVALID")
             if phase == "AUTH":
@@ -390,6 +459,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
             "public_ws_authentication_observed": True,
             "not_full_universe_proof": True,
         }
+        if coalesced_frames:
+            report["coalesced_publication_frames"] = coalesced_frames
         if micro_pairs or micro_autoselect_from_stream:
             report["microstructure_selection_source"] = (
                 "CURRENT_AUTHENTICATED_WS3_SUMMARY"
