@@ -185,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--health", action="store_true")
     group.add_argument("--m10-07-mainpath-readiness-once", action="store_true",
                        help="Original V2 M03 scanner + M04 three-role local config + M05 owner outbox READ ONLY; no extra worker, HTTP, orders or GO")
+    group.add_argument("--m04-history-evaluate-once", action="store_true",
+                       help="Evaluate mature claimed AI review outcomes from existing WS3 archive, journal only, no AI or order")
     group.add_argument("--m04-provider-readiness-once", action="store_true",
                        help="M04 original role/model/credential readiness only: no HTTP, provider billing, issuer or orders")
     group.add_argument("--m04-ws3-micro-readiness-once", action="store_true",
@@ -492,6 +494,27 @@ def main(argv: list[str] | None = None) -> int:
                 "live_trading_authorized": False,
             }, sort_keys=True))
             return 0
+        if args.m04_history_evaluate_once:
+            settings.require_m01_safety()
+            from .calibration_replay import evaluate_m04_review_history_once
+            from .m03_ws3_evidence_archive_nonlive import _private_owned_regular
+            path = Path(args.db).expanduser()
+            if (args.sumopod_shadow or not path.is_absolute()
+                    or not _private_owned_regular(path)):
+                raise ConfigurationError("M04_HISTORY_EXISTING_PRIVATE_JOURNAL_REQUIRED")
+            # Verify existing original DB before constructor; do not silently
+            # create a journal or initialize a different application's DB.
+            from contextlib import closing
+            with closing(sqlite3.connect(path.as_uri()+"?mode=ro", uri=True, timeout=5)) as check:
+                original = check.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('decisions','pipeline_stage_observations')").fetchone()[0]
+            if original != 2:
+                raise ConfigurationError("M04_HISTORY_ORIGINAL_JOURNAL_REQUIRED")
+            result = evaluate_m04_review_history_once(
+                DecisionJournal(path), now_epoch=int(time.time()))
+            print(json.dumps({"m04_history":result,"final_decision":None,
+                              "execution_allowed":False},sort_keys=True))
+            return 0 if result["status"]=="M04_HISTORY_EVALUATED" else 3
         if args.m04_provider_readiness_once:
             # Direct original V2 CLI, BEFORE creating a DecisionJournal or
             # scanning or instantiating the paid provider. This only checks
