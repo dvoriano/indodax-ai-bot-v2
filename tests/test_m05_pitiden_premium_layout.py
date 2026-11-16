@@ -86,15 +86,17 @@ class PremiumWatchTests(unittest.TestCase):
             self.assertIn(phrase,msg)
         self.assertLessEqual(len(msg.splitlines()),15)
 
-    def test_six_green_gate_boundary_unknown_flat_volume_and_duplicates(self):
+    def test_four_green_gate_boundary_unknown_flat_volume_and_duplicates(self):
         def rows(values):
             return [{"tf":tf,"change":v} for (tf,_),v in zip(FRAMES,values)]
-        for n in (0,5,6,7,8):
+        for n in range(9):
             r=rows([Decimal("0.01")]*n+[None]*(8-n))
             self.assertEqual(count_green(r),n)
-            self.assertEqual(eligible_premium_watch(candidate(),r),n>=6)
-        r=rows([Decimal("1")]*5+[Decimal(0),Decimal("-1"),None])
+            self.assertEqual(eligible_premium_watch(candidate(),r),n>=4)
+        r=rows([Decimal("1")]*3+[Decimal(0),Decimal("-1"),None,None,None])
         self.assertFalse(eligible_premium_watch(candidate(),r))
+        r=rows([Decimal("1")]*4+[Decimal(0),Decimal("-1"),None,None])
+        self.assertTrue(eligible_premium_watch(candidate(),r))
         r=rows([Decimal("1")]*8)
         self.assertFalse(eligible_premium_watch(candidate(volume_24h_idr="399999999"),r))
         self.assertTrue(eligible_premium_watch(candidate(volume_24h_idr="400000000"),r))
