@@ -10,7 +10,8 @@ import unittest
 
 from indodax_ai_bot.m05_pitiden_premium_layout import (
     build_timeframes, format_pitiden_premium, read_price_references,
-    read_closed_candles, interval_windows, FRAMES,
+    read_closed_candles, interval_windows, FRAMES, count_green,
+    eligible_premium_watch, read_native_previous_24h,
 )
 
 END = 1794794400
@@ -30,109 +31,126 @@ def candidate(**updates):
 
 
 class PremiumWatchTests(unittest.TestCase):
-    def test_wib_windows_and_midnight_rollover(self):
-        wib = ZoneInfo("Asia/Jakarta")
-        end = int(datetime(2026,11,16,10,43,27,tzinfo=wib).timestamp())
+    def test_exchange_clock_windows_and_rolling_24h(self):
+        wib=ZoneInfo("Asia/Jakarta")
+        end=int(datetime(2026,11,16,10,43,27,tzinfo=wib).timestamp())
         def hhmm(t):
             return datetime.fromtimestamp(t,wib).strftime("%H:%M:%S")
-        self.assertEqual([(tf,hhmm(a),hhmm(b))
-                          for tf,a,b in interval_windows(end)], [
+        self.assertEqual([(tf,hhmm(a),hhmm(b)) for tf,a,b in
+                          interval_windows(end)], [
             ("1m","10:42:00","10:43:00"),
             ("5m","10:35:00","10:40:00"),
             ("10m","10:30:00","10:40:00"),
             ("15m","10:15:00","10:30:00"),
             ("30m","10:00:00","10:30:00"),
             ("1h","09:00:00","10:00:00"),
-            ("1D","00:00:00","10:43:27"),
+            ("4h","03:00:00","07:00:00"),
+            ("24h","10:43:27","10:43:27"),
         ])
-        midnight = int(datetime(2026,11,16,tzinfo=wib).timestamp())
-        rows = build_timeframes(candidate(observed_epoch=midnight), [])
-        self.assertEqual(rows[0]["start_epoch"], midnight-60)
-        self.assertEqual(rows[-1]["start_epoch"], midnight)
-        self.assertEqual(rows[-1]["close_price"], Decimal("5739"))
-        self.assertIsNone(rows[-1]["change"])
+        midnight=int(datetime(2026,11,16,tzinfo=wib).timestamp())
+        row=build_timeframes(candidate(observed_epoch=midnight),[],
+                             previous_24h=Decimal("5268"))[-1]
+        self.assertEqual(row["start_epoch"],midnight-86400)
+        self.assertEqual(row["close_price"],Decimal("5739"))
+        self.assertGreater(row["change"],0)
 
     def test_independent_signs_and_close_not_open(self):
-        end = int(datetime(2026,11,16,10,43,27,
-                           tzinfo=ZoneInfo("Asia/Jakarta")).timestamp())
-        c = candidate(observed_epoch=end,reference_epoch=end-245)
-        lookup = list(interval_windows(end))
-        candles = {}
-        # Overlapping intervals intentionally share final close.
+        end=int(datetime(2026,11,16,10,43,27,
+                         tzinfo=ZoneInfo("Asia/Jakarta")).timestamp())
+        c=candidate(observed_epoch=end,reference_epoch=end-245)
+        lookup=list(interval_windows(end))
+        candles={}
         for _,a,b in lookup[:-1]:
             for t in range(a,b,60):
-                candles[t] = (Decimal("5700"),Decimal("5710"))
+                candles[t]=(Decimal("5700"),Decimal("5710"))
         for tf,a,b in lookup[:-1]:
-            if tf == "1m":
+            if tf=="1m":
                 candles[a]=(Decimal("5700"),Decimal("5730"))
-            elif tf == "5m":
+            elif tf=="5m":
                 candles[a]=(Decimal("5750"),Decimal("5710"))
-            elif tf == "10m":
+            elif tf=="10m":
                 candles[a]=(Decimal("5770"),Decimal("5710"))
-            elif tf == "15m":
-                candles[a]=(Decimal("5660"),Decimal("5700"))
-        candles[lookup[-1][1]]=(Decimal("5268"),Decimal("5270"))
-        rows=build_timeframes(c, [], candles=candles)
+        rows=build_timeframes(c,[],candles=candles,previous_24h=Decimal("5268"))
         self.assertEqual([r["tf"] for r in rows],
-                         ["1m","5m","10m","15m","30m","1h","1D"])
-        self.assertGreater(rows[0]["change"],0)
-        self.assertLess(rows[1]["change"],0)
-        self.assertLess(rows[2]["change"],0)
-        self.assertGreater(rows[3]["change"],0)
+                         ["1m","5m","10m","15m","30m","1h","4h","24h"])
+        self.assertEqual(count_green(rows),6)
+        self.assertTrue(eligible_premium_watch(c,rows))
         self.assertEqual(rows[1]["close_price"],Decimal("5710"))
         self.assertEqual(rows[2]["close_price"],Decimal("5710"))
         self.assertEqual(rows[-1]["close_price"],Decimal("5739"))
-        self.assertEqual(rows[-1]["opening_price"],Decimal("5268"))
-        self.assertTrue(all(row["volume"] is None for row in rows))
-        msg=format_pitiden_premium(c,[],source_kind="WS3",
-                                    now_epoch=end,candles=candles)
-        self.assertIn("📡 <b>ONDO/IDR · Rp5.739</b>",msg)
-        self.assertIn("🟢 1m",msg)
-        self.assertIn("🔴 10m",msg)
-        self.assertIn("🟢 15m",msg)
-        self.assertIn("1D",msg)
-        self.assertIn("5.710",msg)
-        self.assertNotIn("461,46jt",msg)
-        self.assertIn("Mixed",msg)
-        self.assertIn("Score N/A",msg)
-        self.assertIn("Not BUY",msg)
-        self.assertLessEqual(len(msg.splitlines()),14)
+        self.assertTrue(all(r["volume"] is None for r in rows[:-1]))
+        self.assertEqual(rows[-1]["volume"],Decimal("461460000"))
+        msg=format_pitiden_premium(c,[],source_kind="WS3",now_epoch=end,rows=rows)
+        for phrase in ("🟢 1m","🔴 10m","🟢 4h","24h","461,46jt",
+                       "Green 6/8","Vol 24h rolling Rp","Not BUY"):
+            self.assertIn(phrase,msg)
+        self.assertLessEqual(len(msg.splitlines()),15)
 
-    def test_sample_edges_approximate_and_no_future_or_cross_boundary(self):
+    def test_six_green_gate_boundary_unknown_flat_volume_and_duplicates(self):
+        def rows(values):
+            return [{"tf":tf,"change":v} for (tf,_),v in zip(FRAMES,values)]
+        for n in (0,5,6,7,8):
+            r=rows([Decimal("0.01")]*n+[None]*(8-n))
+            self.assertEqual(count_green(r),n)
+            self.assertEqual(eligible_premium_watch(candidate(),r),n>=6)
+        r=rows([Decimal("1")]*5+[Decimal(0),Decimal("-1"),None])
+        self.assertFalse(eligible_premium_watch(candidate(),r))
+        r=rows([Decimal("1")]*8)
+        self.assertFalse(eligible_premium_watch(candidate(volume_24h_idr="399999999"),r))
+        self.assertTrue(eligible_premium_watch(candidate(volume_24h_idr="400000000"),r))
+        self.assertFalse(eligible_premium_watch(candidate(volume_24h_idr="NaN"),r))
+        r[7]["tf"]="1m"
+        self.assertEqual(count_green(r),0)
+
+    def test_sample_edges_approximate_no_cross_boundary(self):
         c=candidate()
         _,start,stop=next(interval_windows(END))
-        _,midnight,_=list(interval_windows(END))[-1]
         refs=[(start-1,Decimal("1")),(start+2,Decimal("5600")),
-              (stop-1,Decimal("5700")),(stop,Decimal("9999")),
-              (midnight-1,Decimal("3"))]
+              (stop-1,Decimal("5700")),(stop,Decimal("9999"))]
         rows=build_timeframes(c,refs)
         self.assertTrue(rows[0]["approx"])
-        self.assertEqual(rows[0]["opening_price"],Decimal("5600"))
         self.assertEqual(rows[0]["close_price"],Decimal("5700"))
         self.assertIsNone(rows[-1]["opening_price"])
         self.assertEqual(rows[-1]["close_price"],Decimal("5739"))
-        self.assertTrue(all(r["volume"] is None for r in rows))
         gap=build_timeframes(c,[(stop-1,Decimal("5700"))])[0]
         self.assertIsNone(gap["change"])
         self.assertEqual(gap["close_price"],Decimal("5700"))
         msg=format_pitiden_premium(c,refs,source_kind="WS3",now_epoch=END)
         self.assertIn("1m~",msg)
-        self.assertIn("N/A",msg)
-        self.assertIn("1D since 00:00 WIB",msg)
         self.assertIn("Trigger +1,77% / 4m05s",msg)
 
-    def test_daily_open_resets_never_uses_rolling_24h_turnover(self):
-        end=int(datetime(2026,11,16,0,1,5,
-                         tzinfo=ZoneInfo("Asia/Jakarta")).timestamp())
-        c=candidate(observed_epoch=end,latest_price_idr="110")
-        midnight=end-65
-        rows=build_timeframes(c,[(midnight-1,Decimal("1")),
-                                  (midnight+5,Decimal("100"))])
-        daily=rows[-1]
-        self.assertEqual(daily["change"],Decimal("10"))
-        self.assertEqual(daily["close_price"],Decimal("110"))
-        self.assertTrue(daily["approx"])
-        self.assertIsNone(daily["volume"])
+    def test_native_previous_preferred_and_history_fallback_marked(self):
+        c=candidate()
+        refs=[(END-86400-10,Decimal("5000")),
+              (END-86400+1,Decimal("1"))]
+        row=build_timeframes(c,refs,previous_24h=Decimal("5268"))[-1]
+        self.assertEqual(row["opening_price"],Decimal("5268"))
+        self.assertFalse(row["approx"])
+        row=build_timeframes(c,refs)[-1]
+        self.assertEqual(row["opening_price"],Decimal("5000"))
+        self.assertTrue(row["approx"])
+
+    def test_read_native_snapshot_exact_identity_and_asof(self):
+        with TemporaryDirectory() as td:
+            p=Path(td)/"observations.sqlite3"
+            with sqlite3.connect(p) as db:
+                db.execute("CREATE TABLE ws3_source_evidence(pair TEXT,"
+                           "minute_epoch INTEGER,source_exchange_epoch INTEGER,"
+                           "last_idr TEXT,rolling_24h_idr TEXT,public_offset INTEGER,"
+                           "source_status TEXT,previous_24h_idr TEXT)")
+                db.execute("CREATE TABLE ws3_source_cycles(minute_epoch INTEGER,"
+                           "recorded_local_epoch INTEGER)")
+                db.execute("INSERT INTO ws3_source_evidence VALUES(?,?,?,?,?,?,?,?)",
+                           ("ondo_idr",END,END,"5739","461460000",1,
+                            "ELIGIBLE_SOURCE_OBSERVATION","5268"))
+                db.execute("INSERT INTO ws3_source_cycles VALUES(?,?)",(END,END))
+            p.chmod(0o600)
+            def read(c=candidate(),now=END):
+                return read_native_previous_24h(c,evidence_path=p,now_epoch=now)
+            self.assertEqual(read(),Decimal("5268"))
+            self.assertIsNone(read(candidate(latest_price_idr="5740")))
+            self.assertIsNone(read(candidate(volume_24h_idr="1")))
+            self.assertIsNone(read(now=END-1))
 
     def test_flat_and_subrupiah_keep_actual_precision(self):
         c=candidate(latest_price_idr="0.00000014")
