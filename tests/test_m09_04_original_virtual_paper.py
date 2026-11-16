@@ -134,6 +134,39 @@ class OriginalM09VirtualPaper(unittest.TestCase):
         self.assertEqual(self.summary()["paper"]["paper_open_or_partial_positions"],1)
         self.check_isolation(accepted[0])
 
+    def test_paper_review_connects_original_position_policy_after_partial(self):
+        self.buy()
+        self.sell(sell_qty=D("1"))
+        restarted=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+        values=dict(paper_id=PID,observed_epoch=SELL_EPOCH+1,
+                    book_observed_epoch=SELL_EPOCH+1,tier_sell_qty=D("3"),
+                    bid_levels=((D("29900"),D("3")),),best_ask=D("30000"),
+                    taker_sell_fee_pct=D("0.3"),maker_sell_fee_pct=D("0.2"),
+                    taker_slippage_pct=D("0.1"))
+        def review(**changes):
+            return restarted.run_m09_original_paper_cycle_offline_once(
+                action="REVIEW",details={**values,**changes})
+        outcome=review()
+        self.assertEqual(outcome["paper"]["paper_remaining_qty"],"3")
+        self.assertEqual(D(outcome["paper"]["paper_remaining_cost_idr"]),D("75150"))
+        self.assertEqual(outcome["paper"]["paper_holding_phase"],"EXIT_PRIORITY_REVIEW")
+        self.assertEqual(outcome["paper"]["paper_strategy_a_reference"]["status"],
+                         "T3_TAKER_PREVIEW_ONLY")
+        self.assertFalse(outcome["paper"]["paper_sell_fill_recorded"])
+        self.check_isolation(outcome)
+        stop=review(bid_levels=((D("23000"),D("3")),),best_ask=D("23100"))
+        self.assertEqual(stop["paper"]["paper_strategy_a_reference"]["status"],
+                         "STOP_TAKER_PREVIEW_ONLY")
+        self.check_isolation(stop)
+        stale=review(book_observed_epoch=SELL_EPOCH-40)
+        self.assertEqual(stale["paper"]["paper_strategy_a_reference"]["status"],
+                         "STALE_BOOK_RISK_ALERT_NO_ORDER")
+        self.assertEqual(self.summary()["paper"]["paper_exit_count"],1)
+        self.sell(paper_exit_id="pexit_finish",sell_qty=D("3"),
+                  sell_epoch=SELL_EPOCH+1)
+        with self.assertRaisesRegex(DecisionConflictError,"M09_PAPER_POSITION_CLOSED"):
+            review()
+
     def test_loss_accepted_on_paper_protection_does_not_stop_or_buy(self):
         self.buy()
         loss=self.sell(sell_price_idr=D("24000"),
