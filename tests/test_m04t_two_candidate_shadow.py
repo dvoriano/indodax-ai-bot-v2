@@ -126,16 +126,35 @@ class M04TTwoCandidateShadowTests(unittest.TestCase):
         self.assertFalse(result["execution_allowed"])
         self.assertFalse(result["provider_connected"])
 
-    def test_invalid_second_signature_blocks_first_model_call(self):
+    def test_invalid_individual_receipt_does_not_poison_valid_peer(self):
+        for bad in PAIRS:
+            with self.subTest(bad=bad):
+                bulk, verifier = signed_two_pair_source()
+                bulk["g1_attestations"][bad]["mac_sha256"] = "0" * 64
+                caller = RoleCaller()
+                result = ThreeRoleShadow(
+                    caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
+                ).run("trace", bulk)
+                good = next(p for p in PAIRS if p != bad)
+                self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
+                self.assertEqual({e["source"]["pair"] for e in caller.inputs}, {good})
+                reports = {r["pair"]: r for r in result["candidate_reports"]}
+                self.assertEqual(reports[bad]["reason"], "G1_ISSUER_RECEIPT_UNVERIFIED")
+                self.assertEqual(reports[bad]["completed_roles"], [])
+                self.assertEqual(set(result["source_digests_by_pair"]), {good})
+                self.assertFalse(result["execution_allowed"])
+
+    def test_missing_individual_receipt_does_not_poison_valid_peer(self):
         bulk, verifier = signed_two_pair_source()
-        bulk["g1_attestations"][PAIRS[1]]["mac_sha256"] = "0" * 64
-        caller = Mock()
+        del bulk["g1_attestations"][PAIRS[1]]
+        caller = RoleCaller()
         result = ThreeRoleShadow(
             caller=caller, clock=lambda: CLOCK, source_verifier=verifier,
         ).run("trace", bulk)
-        self.assertEqual(result["candidate_pair"], PAIRS[1])
-        self.assertEqual(result["reason"], "G1_ISSUER_RECEIPT_UNVERIFIED")
-        caller.assert_not_called()
+        self.assertEqual(caller.calls, ["MARKET", "RISK", "STRATEGY"])
+        self.assertEqual(result["candidate_reports"][1]["reason"],
+                         "G1_ISSUER_RECEIPT_UNVERIFIED")
+        self.assertFalse(result["execution_allowed"])
 
     def test_second_candidate_quality_failure_blocks_all_model_calls(self):
         bulk, verifier = signed_two_pair_source()
