@@ -20,11 +20,11 @@ from .m03_ws3_evidence_archive_nonlive import (
     DEFAULT_EVIDENCE_DB, _private_owned_regular,
 )
 
-FRAMES = (("1m", 60), ("3m", 180), ("5m", 300), ("15m", 900),
-          ("1h", 3600), ("4h", 14400), ("24h", 86400))
+FRAMES = (("1m", 60), ("5m", 300), ("10m", 600), ("15m", 900),
+          ("30m", 1800), ("1h", 3600), ("4h", 14400), ("24h", 86400))
 WIB = ZoneInfo("Asia/Jakarta")
-_LAYOUT = "PITIDEN_PREMIUM_WATCH_V3_5_GREEN"
-MIN_GREEN = 5
+_LAYOUT = "PITIDEN_PREMIUM_WATCH_V3_6_GREEN"
+MIN_GREEN = 6
 MIN_TURNOVER_24H = Decimal("400000000")
 
 
@@ -301,7 +301,7 @@ def build_timeframes(candidate, references, *, candles=None, previous_24h=None):
 
 
 def count_green(rows):
-    """Count only seven distinct finite, strictly positive displayed returns."""
+    """Count only eight distinct finite, strictly positive displayed returns."""
     if [row.get("tf") for row in rows] != [label for label,_ in FRAMES]:
         return 0
     return sum(isinstance(row.get("change"),Decimal)
@@ -387,7 +387,7 @@ def format_pitiden_premium(candidate, references, *, source_kind, now_epoch,
         f"📡 <b>{escape(pair)} · Rp{escape(current)}</b>",
         "<pre>" + escape("\n".join(table)) + "</pre>",
         escape(f"📈 {_momentum(rows)} · Vol accel N/A · Spread {spread_text}"),
-        f"👀 WATCH · Green {count_green(rows)}/7 · Score N/A",
+        f"👀 WATCH · Green {count_green(rows)}/8 · Score N/A",
         escape(f"{context} · {time} WIB"),
         "<i>~ sampled · Vol 24h rolling Rp</i>",
         "<i>AI/G1 unverified · Watch only · Not BUY</i>",
