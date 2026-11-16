@@ -167,6 +167,72 @@ class OriginalM09VirtualPaper(unittest.TestCase):
         with self.assertRaisesRegex(DecisionConflictError,"M09_PAPER_POSITION_CLOSED"):
             review()
 
+    def test_observed_market_mark_uses_original_book_without_sell_or_mutation(self):
+        self.buy()
+        source=self.db.parent/"original-m03.sqlite3"
+        now=BUY_EPOCH+121
+        minute=now-now%60
+        with sqlite3.connect(source) as con:
+            con.execute("""CREATE TABLE m03_ws_microstructure_watch_minute (
+              pair,minute_epoch,observed_local_epoch,trade_frames,
+              source_buy_count,source_sell_count,source_buy_idr,source_sell_idr,
+              last_trade_epoch,trade_offset,trade_gap_observed,trade_truncated,
+              book_offset,book_local_epoch,best_bid_idr,best_ask_idr,
+              spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,
+              book_imbalance_top5_ratio,source_malformed)""")
+            spread=str(D("100")/D("30050")*10000)
+            con.execute("INSERT INTO m03_ws_microstructure_watch_minute VALUES ("+
+                        ",".join(["?"]*21)+")",
+                        ("xrp_idr",minute,now,0,None,None,None,None,None,None,
+                         0,0,12,now,"30000","30100",spread,"5000000",
+                         "6000000",None,0))
+        source.chmod(0o600)
+        original=source.read_bytes()
+        args=dict(paper_id=PID,sell_fee_pct=D("0.3"),slippage_pct=D("0.1"),
+                  source_db=source,now_epoch=now)
+        result=self.app.run_m09_original_paper_cycle_offline_once(
+            action="OBSERVE",details=args)
+        self.assertEqual(result["paper"]["paper_exit_reference"],
+                         "T3_NET_MARK_REVIEW_NO_FILL")
+        self.assertEqual(D(result["paper"]["paper_net_mark_profit_idr"]),D("19320"))
+        self.assertFalse(result["paper"]["paper_sell_fill_recorded"])
+        self.assertFalse(result["paper"]["paper_fill_depth_verified"])
+        self.check_isolation(result)
+        stale=self.app.run_m09_original_paper_cycle_offline_once(
+            action="OBSERVE",details={**args,"now_epoch":now+31})
+        self.assertEqual(stale["paper"]["status"],
+                         "M09_PAPER_WAIT_FOR_FRESH_OBSERVED_BOOK")
+        self.assertIsNone(stale["paper"]["paper_net_mark_profit_idr"])
+        self.assertEqual(original,source.read_bytes())
+        self.assertEqual(self.summary()["paper"]["paper_exit_count"],0)
+
+    def test_discover_reuses_original_radar_without_paper_fill(self):
+        now=BUY_EPOCH+121
+        candidate={"pair":"xrp_idr","observed_epoch":now,
+                   "volume_24h_idr":"500000000","observed_rise_pct":"0.35",
+                   "microstructure_observation":{
+                       "orderbook_snapshot_observed":True,
+                       "trade_activity_observed":True,"source_malformed":False,
+                       "trade_source_gap_or_truncation":False,
+                       "orderbook_locally_observed_epoch":now,
+                       "best_bid_idr":"25000","best_ask_idr":"25100"}}
+        source=self.db.parent/"original-m03.sqlite3"
+        with patch("indodax_ai_bot.m05_radar_momentum_nonlive."
+                   "inspect_original_m03_ws3_watch_readonly",
+                   return_value={"micro_prealert_candidates_top40":[candidate]}) as read:
+            result=self.app.run_m09_original_paper_cycle_offline_once(
+                action="DISCOVER",details={"source_db":source,"now_epoch":now})
+            self.assertEqual(result["paper"]["status"],
+                             "M09_PAPER_MAKER_ENTRY_REFERENCE_NO_FILL")
+            self.assertFalse(result["paper"]["paper_buy_fill_recorded"])
+            self.check_isolation(result)
+            self.buy()
+            blocked=self.app.run_m09_original_paper_cycle_offline_once(
+                action="DISCOVER",details={"source_db":source,"now_epoch":now})
+            self.assertEqual(blocked["paper"]["status"],
+                             "M09_PAPER_MONITOR_EXISTING_POSITION")
+            self.assertEqual(read.call_count,1)
+
     def test_loss_accepted_on_paper_protection_does_not_stop_or_buy(self):
         self.buy()
         loss=self.sell(sell_price_idr=D("24000"),

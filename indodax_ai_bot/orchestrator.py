@@ -2245,6 +2245,170 @@ class DailyScalpingOrchestrator:
             "paper_sell_fill_recorded":False,
         }
 
+    def discover_m09_paper_entry_reference_once(self, *,
+            now_epoch: int | None = None, source_db=None) -> dict:
+        """Reuse the original early WS3 radar, never a second scanner.
+
+        This is a maker entry reference, not a simulated fill. Existing
+        aggregate depth cannot prove our passive order got executed.
+        """
+        from .m05_radar_momentum_nonlive import (
+            DEFAULT_DB, inspect_original_m03_ws3_watch_readonly,
+        )
+        self.settings.require_m01_safety()
+        now=int(time.time()) if now_epoch is None else now_epoch
+        if type(now) is not int or now<=0:
+            raise ValueError("M09_PAPER_CLOCK_INVALID")
+        base={
+            **self.journal._m09_paper_source_only(),
+            "status":"M09_PAPER_WAIT_FOR_ENTRY_SOURCE",
+            "paper_entry_reference":None,"paper_buy_fill_recorded":False,
+            "paper_source_g1_verified":False,"paper_ai_review_verified":False,
+        }
+        if self.journal.review_m09_paper_pnl_offline()[
+                "paper_open_or_partial_positions"]!=0:
+            return {**base,"status":"M09_PAPER_MONITOR_EXISTING_POSITION"}
+        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
+        if path.resolve()==Path(self.journal._db_path).resolve():
+            return base
+        report=inspect_original_m03_ws3_watch_readonly(
+            db_path=path,now_epoch=now)
+        for candidate in report.get("micro_prealert_candidates_top40",[]):
+            micro=candidate.get("microstructure_observation",{})
+            if (micro.get("orderbook_snapshot_observed") is not True
+                    or micro.get("source_malformed") is not False
+                    or micro.get("trade_activity_observed") is not True
+                    or micro.get("trade_source_gap_or_truncation") is not False
+                    or not 0<=now-micro["orderbook_locally_observed_epoch"]<=30
+                    or not 0<=now-candidate["observed_epoch"]<=90
+                    or Decimal(candidate["volume_24h_idr"])<Decimal("400000000")):
+                continue
+            bid=Decimal(micro["best_bid_idr"])
+            assessment=self.review_strategy_a_nonlive_once(
+                review_type="BUY_MAKER",proposed_buy_price=bid,
+                best_bid=bid,best_ask=Decimal(micro["best_ask_idr"]))
+            if assessment.get("maker_buy_eligible") is not True:
+                continue
+            return {**base,"status":"M09_PAPER_MAKER_ENTRY_REFERENCE_NO_FILL",
+                    "paper_entry_reference":{
+                        "pair":candidate["pair"],
+                        "observed_epoch":micro["orderbook_locally_observed_epoch"],
+                        "maker_limit_price_idr":str(bid),
+                        "rolling_24h_idr":candidate["volume_24h_idr"],
+                        "observed_rise_pct":candidate["observed_rise_pct"],
+                        "maker_fill_verified":False,
+                        "entry_policy":assessment}}
+        return base
+
+    def review_m09_paper_observed_market_once(self, *, paper_id: str,
+            sell_fee_pct: Decimal, slippage_pct: Decimal,
+            now_epoch: int | None = None, source_db=None) -> dict:
+        """One source-backed PAPER mark review; no market requests or fills.
+
+        M03 stores top-of-book prices and aggregate depth, not a price ladder
+        or maker queue/fill receipt. A bid mark times quantity is an estimate,
+        not a realizable VWAP. Never synthesize a bid level or a PAPER SELL.
+        """
+        from .m05_radar_momentum_nonlive import (
+            DEFAULT_DB, _owned_private_regular, _ws3_micro_observation,
+        )
+        from .m08_strategy_a_nonlive import STOP_NET_PCT, MIN_PROFIT_IDR
+        self.settings.require_m01_safety()
+        now=int(time.time()) if now_epoch is None else now_epoch
+        lot=self.journal.read_m09_open_paper_position_offline(
+            paper_id=paper_id,observed_epoch=now)
+        for value in (sell_fee_pct,slippage_pct):
+            if (type(value) is not Decimal or not value.is_finite()
+                    or not 0<=value<5):
+                raise ValueError("M09_PAPER_MODELED_FRICTION_INVALID")
+        holding=ScalpingPolicy().assess_position_holding_time(
+            actual_buy_fill_epoch=lot["buy_epoch"],observed_epoch=now)
+        pair=lot["symbol"][:-3].lower()+"_idr"
+        base={
+            **self.journal._m09_paper_source_only(),
+            "status":"M09_PAPER_WAIT_FOR_FRESH_OBSERVED_BOOK",
+            "paper_id":paper_id,"paper_symbol":lot["symbol"],
+            "paper_remaining_qty":format(lot["remaining_qty"],"f"),
+            "paper_remaining_cost_idr":format(lot["remaining_cost_idr"],"f"),
+            "paper_holding_phase":holding.phase,
+            "paper_holding_seconds":holding.elapsed_seconds,
+            "paper_market_book_observed":False,
+            "paper_fill_depth_verified":False,
+            "paper_sell_fill_recorded":False,
+            "paper_source_g1_verified":False,
+            "paper_net_mark_profit_idr":None,
+            "paper_net_mark_roi_percent":None,
+            "paper_exit_reference":None,
+        }
+        path=Path(DEFAULT_DB if source_db is None else source_db).expanduser()
+        if (not _owned_private_regular(path)
+                or path.resolve()==Path(self.journal._db_path).resolve()):
+            return base
+        try:
+            with sqlite3.connect(path.absolute().as_uri()+"?mode=ro",
+                                 uri=True,timeout=2) as con:
+                con.execute("PRAGMA query_only=ON")
+                row=con.execute(
+                    "SELECT pair,minute_epoch,observed_local_epoch,"
+                    "trade_frames,source_buy_count,source_sell_count,"
+                    "source_buy_idr,source_sell_idr,last_trade_epoch,"
+                    "trade_offset,trade_gap_observed,trade_truncated,"
+                    "book_offset,book_local_epoch,best_bid_idr,best_ask_idr,"
+                    "spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,"
+                    "book_imbalance_top5_ratio,source_malformed "
+                    "FROM m03_ws_microstructure_watch_minute "
+                    "WHERE pair=? ORDER BY minute_epoch DESC LIMIT 1",
+                    (pair,),
+                ).fetchone()
+        except (sqlite3.Error,OSError,ValueError):
+            return base
+        if (not row or type(row[1]) is not int or row[1]%60
+                or type(row[2]) is not int or type(row[13]) is not int
+                or not lot["buy_epoch"]<=row[13]<=row[2]<=now
+                or not 0<=now-row[13]<=30
+                or not row[1]<=row[2]<row[1]+60):
+            return base
+        obs=_ws3_micro_observation(row,now=now,source_minute=row[1])
+        if (obs.get("orderbook_snapshot_observed") is not True
+                or obs.get("source_malformed") is not False):
+            return base
+        bid=Decimal(obs["best_bid_idr"])
+        gross=lot["remaining_qty"]*bid
+        fee=gross*sell_fee_pct/100
+        slip=gross*slippage_pct/100
+        target=ScalpingPolicy().assess_position_exit_targets(
+            filled_buy_quantity=lot["remaining_qty"],
+            filled_buy_notional_idr=lot["remaining_cost_idr"],
+            allocated_buy_fees_idr=Decimal(0),
+            quantity_to_sell=lot["remaining_qty"],
+            expected_sell_notional_idr=gross,
+            estimated_sell_fees_idr=fee,
+            incremental_slippage_idr=slip)
+        if target.expected_net_roi_percent<=STOP_NET_PCT:
+            trigger="STOP_LOSS_MARK_REVIEW_NO_FILL"
+        elif holding.phase in ("TIME_STOP_PROTECTIVE_REVIEW",
+                               "EXTENDED_POSITION_RISK_REVIEW"):
+            trigger="TIME_STOP_MARK_REVIEW_NO_FILL"
+        elif (target.highest_reached_tier is not None
+                and target.expected_net_profit_idr>=MIN_PROFIT_IDR):
+            trigger=target.highest_reached_tier+"_NET_MARK_REVIEW_NO_FILL"
+        else:
+            trigger="HOLD_NO_QUALIFIED_NET_MARK_EXIT"
+        return {
+            **base,"status":"M09_PAPER_OBSERVED_BOOK_MARK_REVIEW",
+            "paper_market_book_observed":True,
+            "paper_book_epoch":row[13],
+            "paper_book_age_seconds":now-row[13],
+            "paper_best_bid_idr":str(bid),
+            "paper_best_ask_idr":obs["best_ask_idr"],
+            "paper_bid_depth_top5_idr":obs["bid_depth_top5_idr"],
+            "paper_net_mark_profit_idr":str(target.expected_net_profit_idr),
+            "paper_net_mark_roi_percent":str(target.expected_net_roi_percent),
+            "paper_exit_reference":trigger,
+            "paper_friction_is_modeled_not_account_fee":True,
+            "paper_mark_is_not_executable_vwap":True,
+        }
+
     def run_m09_original_paper_cycle_offline_once(self, *,
             action: str, details: dict,
             include_m11_risk_halt_readonly_reference: bool = False) -> dict:
@@ -2284,6 +2448,10 @@ class DailyScalpingOrchestrator:
             result=self.journal.record_m09_paper_sell_offline(**details)
         elif action == "REVIEW":
             result=self.review_m09_paper_position_policy_offline(**details)
+        elif action == "OBSERVE":
+            result=self.review_m09_paper_observed_market_once(**details)
+        elif action == "DISCOVER":
+            result=self.discover_m09_paper_entry_reference_once(**details)
         elif action == "SUMMARY":
             result=self.journal.review_m09_paper_pnl_offline(**details)
         else:
