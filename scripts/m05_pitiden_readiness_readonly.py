@@ -95,6 +95,7 @@ def inspect_readiness(*, now=None, db_path=DEFAULT_DB,
             candles=read_closed_candles(c,db_path=db_path,now_epoch=now)
             prev=read_native_previous_24h(c,evidence_path=evidence_path,now_epoch=now)
             rows=build_timeframes(c,refs,candles=candles,previous_24h=prev)
+            rows=apply_ws3_trade_samples(c,rows,db_path=db_path,now_epoch=now)
             for row in rows:
                 coverage[row["tf"]]+=int(row["change"] is not None)
             fresh=0<=now-c["observed_epoch"]<=150 and 0<=now-minute<=150
@@ -146,6 +147,7 @@ def inspect_named_pairs(*, pairs, now=None, db_path=DEFAULT_DB,
     independent={c["pair"]:c for c in snap.get("liquid_watch_candidates",[])}
     archive_ok=_private_owned_regular(Path(evidence_path))
     from indodax_ai_bot.m08_strategy_a_nonlive import assess_ws3_priority_alert_offline
+    from indodax_ai_bot.m05_pitiden_premium_layout import apply_ws3_trade_samples
     for pair in pairs:
         row={"pair":pair}
         result["pairs"].append(row)
@@ -192,7 +194,7 @@ def inspect_named_pairs(*, pairs, now=None, db_path=DEFAULT_DB,
                 "timeframes":[{"tf":x["tf"],"change_pct":str(x["change"]) if x["change"] is not None else None,
                                "close_idr":str(x["close_price"]) if x["close_price"] is not None else None,
                                "volume_idr":str(x["volume"]) if x["volume"] is not None else None,
-                               "sampled":x["approx"]} for x in rows]})
+                               "sampled":x["approx"],"volume_sampled":bool(x.get("volume_sampled"))} for x in rows]})
             independent_row=independent.get(pair)
             row["independent_4_green_gate"] = bool(independent_row and
                 independent_row["observed_epoch"]==stamp and eligible_premium_watch(c,rows))
