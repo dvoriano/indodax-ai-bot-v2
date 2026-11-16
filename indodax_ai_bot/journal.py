@@ -2626,6 +2626,46 @@ class DecisionJournal:
                     raise DecisionConflictError("M09_PAPER_BUY_REPLAY_CONFLICT")
                 replay=True
             else:
+                # One PAPER position globally, including partial exits.
+                # The existing BEGIN IMMEDIATE serializes competing BUYs
+                # and SELLs; no new ledger, lock, or real position authority.
+                buys=con.execute(
+                    "SELECT paper_id,buy_qty,buy_epoch,source "
+                    "FROM m09_paper_simulated_buys",
+                ).fetchall()
+                sells=con.execute(
+                    "SELECT paper_id,sell_qty,sell_epoch,source "
+                    "FROM m09_paper_simulated_sells",
+                ).fetchall()
+                positions={}
+                last_exit_epoch=0
+                try:
+                    for pid,raw_qty,stamp,source in buys:
+                        amount=Decimal(raw_qty)
+                        if (source!="M09_PAPER_SCENARIO_ONLY"
+                                or not amount.is_finite() or amount<=0
+                                or type(stamp) is not int):
+                            raise ValueError("invalid buy receipt")
+                        positions[pid]=[amount,stamp]
+                    for pid,raw_qty,stamp,source in sells:
+                        amount=Decimal(raw_qty)
+                        if (source!="M09_PAPER_SCENARIO_ONLY"
+                                or pid not in positions
+                                or not amount.is_finite() or amount<=0
+                                or type(stamp) is not int
+                                or stamp<positions[pid][1]):
+                            raise ValueError("invalid sell receipt")
+                        positions[pid][0]-=amount
+                        if positions[pid][0]<0:
+                            raise ValueError("oversold paper receipt")
+                        last_exit_epoch=max(last_exit_epoch,stamp)
+                except (TypeError,ValueError,ArithmeticError):
+                    raise DecisionConflictError(
+                        "M09_PAPER_POSITION_HISTORY_CORRUPT") from None
+                if any(remaining>0 for remaining,_ in positions.values()):
+                    raise DecisionConflictError("M09_PAPER_POSITION_ALREADY_OPEN")
+                if epoch<last_exit_epoch:
+                    raise DecisionConflictError("M09_PAPER_BUY_PRECEDES_LAST_EXIT")
                 con.execute(
                     "INSERT INTO m09_paper_simulated_buys "
                     "(paper_id,symbol,buy_qty,buy_price_idr,"
