@@ -395,35 +395,45 @@ class WS3OriginalRadarBridgeTests(unittest.TestCase):
         self.assertEqual(len(api.calls), 1)
 
     def test_premium_opt_in_uses_same_single_durable_send(self):
+        from decimal import Decimal
+        from indodax_ai_bot.m05_pitiden_premium_layout import interval_windows
         self.seed()
         api = FakeTelegram()
-        with patch.dict("os.environ", {"M05_RADAR_PREMIUM_LAYOUT_GO": "YES"}):
-            self.assertEqual(self.send(api)["messages_sent"], 1)
-            self.assertEqual(self.send(api)["messages_sent"], 0)
-        self.assertEqual(len(api.calls), 1)
-        method, payload = api.calls[0]
-        self.assertEqual(method, "sendMessage")
-        self.assertEqual(payload["parse_mode"], "HTML")
-        self.assertIn("<b>UAI/IDR · Rp101</b>", payload["text"])
-        self.assertIn("⚫ 1m", payload["text"])
-        self.assertIn("1D", payload["text"])
-        self.assertIn("CLOSE", payload["text"])
-        self.assertIn("Rp101", payload["text"])
-        self.assertIn("Score N/A", payload["text"])
-        self.assertIn("Not BUY", payload["text"])
-        self.assertNotIn("reply_markup", payload)
-
-    def test_premium_render_failure_keeps_existing_single_watch(self):
-        self.seed()
-        api = FakeTelegram()
-        with patch.dict("os.environ", {"M05_RADAR_PREMIUM_LAYOUT_GO": "YES"}), patch(
-            "indodax_ai_bot.m05_pitiden_premium_layout.read_price_references",
-            side_effect=ValueError("test"),
+        c = self.inspect()["candidates"][0]
+        candles = {t:(Decimal("100"),Decimal("101"))
+                   for label,a,b in interval_windows(c["observed_epoch"])
+                   if label != "24h" for t in range(a,b,60)}
+        with patch.dict("os.environ", {"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_pitiden_premium_layout.read_closed_candles",
+            return_value=candles,
         ):
             self.assertEqual(self.send(api)["messages_sent"], 1)
-        self.assertEqual(len(api.calls), 1)
-        self.assertNotIn("parse_mode", api.calls[0][1])
-        self.assertIn("WS3 WATCH", api.calls[0][1]["text"])
+            self.assertEqual(self.send(api)["messages_sent"], 0)
+        self.assertEqual(len(api.calls),1)
+        method,payload=api.calls[0]
+        self.assertEqual(method,"sendMessage")
+        self.assertEqual(payload["parse_mode"],"HTML")
+        self.assertIn("<b>UAI/IDR · Rp101</b>",payload["text"])
+        self.assertIn("🟢 4h",payload["text"])
+        self.assertIn("Green 7/8",payload["text"])
+        self.assertIn("24h",payload["text"])
+        self.assertNotIn("reply_markup",payload)
+
+    def test_premium_sparse_data_or_render_failure_never_claim_or_send(self):
+        self.seed()
+        api=FakeTelegram()
+        with patch.dict("os.environ", {"M05_RADAR_PREMIUM_LAYOUT_GO":"YES"}), patch(
+            "indodax_ai_bot.m05_radar_momentum_nonlive._claim_once"
+        ) as claim:
+            self.assertEqual(self.send(api)["status"],
+                             "M05_RADAR_PREMIUM_SIX_GREEN_NOT_MET")
+            with patch(
+                "indodax_ai_bot.m05_pitiden_premium_layout.read_price_references",
+                side_effect=ValueError("test")
+            ):
+                self.assertEqual(self.send(api)["messages_sent"],0)
+            claim.assert_not_called()
+        self.assertEqual(api.calls,[])
 
     def test_phone_size_indonesian_ws3_notice_from_ucl_screenshot_values(self):
         from datetime import datetime
