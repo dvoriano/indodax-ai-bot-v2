@@ -996,7 +996,9 @@ class DailyScalpingOrchestrator:
             self, *, user_id: int, chat_id: int,
             account_fingerprint: str, draft: M07OrderDraft,
             now_epoch: int,
-            expected_buy_total_idr: Decimal | None = None) -> dict:
+            expected_buy_total_idr: Decimal | None = None,
+            modeled_sell_vwap_reference_idr: Decimal | None = None,
+            public_quote_age_seconds: int | None = None) -> dict:
         """One original M07 draft to SAME M05 owner ledger, preview ONLY.
 
         No fake market, account, AI, owner Final, preflight, execution or
@@ -1014,6 +1016,8 @@ class DailyScalpingOrchestrator:
             account_fingerprint=account_fingerprint,
             draft=draft,now_epoch=now_epoch,
             expected_buy_total_idr=expected_buy_total_idr,
+            modeled_sell_vwap_reference_idr=modeled_sell_vwap_reference_idr,
+            public_quote_age_seconds=public_quote_age_seconds,
         )
         if result.get("accepted") is True and (
                 result.get("execution_allowed") is not False
@@ -1102,18 +1106,22 @@ class DailyScalpingOrchestrator:
             price = Decimal(public_candidate["public_best_ask_idr_reference"])
             qty = Decimal(sized["sized_qty_base_reference"])
             quoted_cost = Decimal(sized["buy_max_cost_idr_reference"])
+            modeled_sell_vwap = Decimal(sized["future_sell_vwap_idr_reference"])
+            quote_age = now_epoch - public_candidate["observed_epoch"]
             available = Decimal(sized["main_idr_pool_scenario"])
             precision = Decimal(public_candidate["public_pair_rules_reference"]["price_precision"])
             increment = Decimal(public_candidate["public_pair_rules_reference"]["quantity_increment"])
             gross = price * qty
             ticket_cap = funding.get("requested_ticket_ceiling_idr", available)
             if (not all(v.is_finite() for v in (
-                    price, qty, quoted_cost, available, precision, increment,
-                    gross, ticket_cap))
+                    price, qty, quoted_cost, modeled_sell_vwap, available,
+                    precision, increment, gross, ticket_cap))
                     or any(v <= 0 for v in (
                         price, qty, quoted_cost, available, precision,
                         increment, gross, ticket_cap))
                     or gross > quoted_cost
+                    or modeled_sell_vwap <= price
+                    or type(quote_age) is not int or not 0 <= quote_age <= 30
                     or quoted_cost > min(ticket_cap, available)
                     or price % precision != 0
                     or qty % increment != 0):
@@ -1132,6 +1140,8 @@ class DailyScalpingOrchestrator:
             account_fingerprint=account_fingerprint,
             draft=draft, now_epoch=now_epoch,
             expected_buy_total_idr=quoted_cost,
+            modeled_sell_vwap_reference_idr=modeled_sell_vwap,
+            public_quote_age_seconds=quote_age,
         )
         if queued.get("accepted") is not True:
             return dict(
@@ -1148,8 +1158,8 @@ class DailyScalpingOrchestrator:
             "buy_limit_price_idr_reference": format(price, "f"),
             "base_quantity_reference": format(qty, "f"),
             "buy_max_cost_idr_reference": format(quoted_cost, "f"),
-            "future_sell_vwap_idr_reference": sized.get(
-                "future_sell_vwap_idr_reference"),
+            "future_sell_vwap_idr_reference": format(modeled_sell_vwap, "f"),
+            "public_quote_age_seconds": quote_age,
             "owner_card_preview_only": True,
             "existing_m05_owner_telegram_delivery": True,
         }
