@@ -977,10 +977,14 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
             "observed_epoch": NOW - 10,
             "indexed_trade_pairs": ["tmg_idr"],
         }
-        live_operator_sample = inspect_m04_watch_trade_channels_readonly(
-            source_db=self.ws, evaluation_epoch=NOW,
-            checkpoint_records=[checkpoint],
-        )
+        with patch(
+            "scripts.m04_ws3_watch_channel_coverage_readonly._journal_checkpoints",
+            return_value=([checkpoint], "JOURNAL_READ_OK"),
+        ) as journal:
+            live_operator_sample = inspect_m04_watch_trade_channels_readonly(
+                source_db=self.ws, evaluation_epoch=NOW,
+            )
+        journal.assert_called_once()
         self.assertEqual(
             live_operator_sample["status"],
             "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY",
