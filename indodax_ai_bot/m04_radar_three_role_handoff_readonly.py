@@ -568,6 +568,34 @@ def inspect_original_ws3_three_role_handoff_readonly(
             )
         report["source_pool_size_from_original_m03"] = len(pool)
         report["m05_original_telegram_top5_unchanged"] = True
+        # Bind actual indexed M03 WS3 trades to the SAME two original M04
+        # role packets and digests. The source is local/partial; it can never
+        # establish G1, all-trade completeness, provider decisions, or BUY.
+        from .m04_ws3_indexed_observation_nonlive import (
+            inspect_ws3_indexed_trade_asof_nonlive,
+        )
+        asof = inspect_ws3_indexed_trade_asof_nonlive(
+            db_path=db_path, now_epoch=now,
+            candidate_epochs={row["pair"]: row["public_evidence"]["observed_epoch"]
+                              for row in report["candidates"]},
+        )
+        report["indexed_trade_window_source"] = (
+            "ORIGINAL_LOCAL_INDEX_READONLY"
+            if asof is not None else "INDEX_NOT_INSTALLED_OR_NOT_READABLE"
+        )
+        if asof is not None:
+            for row in report["candidates"]:
+                packet = row["public_evidence"]
+                packet["indexed_trade_window_evidence"] = asof[row["pair"]]
+                digest = sha256(json.dumps(
+                    packet, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=True, allow_nan=False,
+                ).encode("ascii")).hexdigest()
+                row["evidence_digest_sha256"] = digest
+                for slot in row["role_slots"]:
+                    slot["evidence_digest_sha256"] = digest
+            report["indexed_asof_candidates_attached"] = len(report["candidates"])
+            report["indexed_trade_source_is_complete"] = False
     return report
 
 
