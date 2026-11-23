@@ -305,3 +305,45 @@ allocator. Formal per-pair subscription ACK and complete 15m/1h trade tape
 will require additional independently verifiable capture-time metadata;
 the existing checkpoint is not sufficient. Meanwhile the Indodax OHLCV
 reference Close remains **8/8 available** on the original TMG/DRX cohort.
+
+## Multi-cohort: collect several genuine CURRENT original M04 WATCHs (operator-only)
+
+Two *separate* tools are now available:
+
+- `scripts/m04_ws3_watch_cohort_capture_once.sh` observes the **currently existing original M04 WATCH** once, and saves a private `0600` report under `runtime/m04-watch-cohorts/` **only when valid**. It changes no M03 scanner/runtime service, no candidate ranking, no Telegram or paid AI, and issues no exchange calls or orders. If no eligible WATCH exists, it prints `NO_VALID_CURRENT_M04_WATCH_CAPTURE` and saves nothing.
+- `scripts/m04_ws3_watch_multicohort_readonly.py` aggregates 1–32 operator-saved **CURRENT** reports read-only. It explicitly **rejects** retrospective capture reports, invalid/mutable file permissions, duplicate JSON keys, missing timestamps, unsafe authority claims, malformed counts and conflicts. It deduplicates the **original M04 pair + evidence digest** and repeated WATCH packet fingerprints so the same market observation is not counted as several independent cases.
+
+After syncing the verified code, run this manually **at different natural WATCH opportunities** to capture one current report per invocation:
+
+```bash
+(
+  set -euo pipefail
+  cd "$HOME/indodax-ai-bot-v2"
+  export INDODAX_TRADING_ENABLED=NO
+  export INDODAX_ALLOW_LIVE_EXECUTION=NO
+  export INDODAX_EXECUTION_MODE=DRY_RUN
+  bash scripts/m04_ws3_watch_cohort_capture_once.sh
+)
+```
+
+To summarize only owner-private files that were actually saved, use:
+
+```bash
+(
+  set -euo pipefail
+  cd "$HOME/indodax-ai-bot-v2"
+  shopt -s nullglob
+  files=(runtime/m04-watch-cohorts/watch-*.json)
+  if (( ${#files[@]} == 0 || ${#files[@]} > 32 )); then
+    echo "COLLECTION_EMPTY_OR_OVER_32" >&2
+    exit 2
+  fi
+  args=()
+  for f in "${files[@]}"; do args+=(--evidence-file "$f"); done
+  .venv/bin/python -B -m scripts.m04_ws3_watch_multicohort_readonly "${args[@]}"
+)
+```
+
+For a repeat pattern, aim for **at least three distinct original WATCH packet fingerprints**, ideally over different naturally observed market intervals, not three rapid repeated samples of a single source observation. The report distinguishes `request_listed`, `not_listed_latest_checkpoint`, `checkpoint_unavailable`, and samples with retained local trade rows. These labels are **never** pair-specific ACKs, proof of rank among the original in-memory M03 40 pair allocator, independent G1 complete trade-tape evidence, or proof that the exchange made zero trades.
+
+The private evidence files are snapshots generated on demand, not cryptographically authenticated/immutable exchange records. No existing TMG/DRX **retrospective** capture is imported into the multi-cohort denominator. TMG/DRX original **8/8 historical candle reference prices** remain separately valid. The capture shell writes only to the dedicated private evidence directory; the summarizer does not write anything.

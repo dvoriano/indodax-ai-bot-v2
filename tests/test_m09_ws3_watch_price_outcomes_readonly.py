@@ -963,5 +963,52 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertFalse(report["execution_allowed"])
 
 
+    def test_multicohort_consumes_actual_original_current_m04_audit_contract(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        from scripts.m04_ws3_watch_multicohort_readonly import (
+            summarize_original_current_watch_reports_readonly,
+        )
+        self.seed("tmg_idr")
+        self.seed("drx_idr")
+        checkpoint = {
+            "status": "M03_WS3_CONTINUOUS_CHECKPOINT",
+            "observed_epoch": NOW - 10,
+            "indexed_trade_pairs": ["tmg_idr"],
+        }
+        with patch(
+            "scripts.m04_ws3_watch_channel_coverage_readonly._journal_checkpoints",
+            return_value=([checkpoint], "JOURNAL_READ_OK"),
+        ) as journal:
+            live_operator_sample = inspect_m04_watch_trade_channels_readonly(
+                source_db=self.ws, evaluation_epoch=NOW,
+            )
+        journal.assert_called_once()
+        self.assertEqual(
+            live_operator_sample["status"],
+            "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY",
+        )
+        filename = self.root / "current_original_m04_channel_report.json"
+        filename.write_text(json.dumps(live_operator_sample), encoding="utf-8")
+        filename.chmod(0o600)
+        result = summarize_original_current_watch_reports_readonly(
+            evidence_files=[filename])
+        self.assertEqual(
+            result["status"], "M04_CURRENT_WATCH_MULTICOHORT_RESEARCH_ONLY")
+        self.assertEqual(result["distinct_watch_packet_fingerprints"], 1)
+        self.assertEqual(result["distinct_candidate_evidence"], 2)
+        self.assertFalse(
+            result["enough_distinct_packet_fingerprints_for_repeat_pattern"])
+        rows = {x["pair"]: x for x in result["pair_summaries"]}
+        self.assertEqual(rows["tmg_idr"]["request_listed"], 1)
+        self.assertEqual(rows["drx_idr"]["not_listed_latest_checkpoint"], 1)
+        self.assertFalse(result["pair_specific_ack_verified"])
+        self.assertFalse(result["independent_g1_verified"])
+        self.assertEqual(result["provider_calls"], 0)
+        self.assertEqual(result["paper_orders_created"], 0)
+        self.assertFalse(result["execution_allowed"])
+
+
 if __name__=="__main__":
     unittest.main()

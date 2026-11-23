@@ -62,6 +62,9 @@ on:
       - "scripts/m09_indodax_public_candle_reference_readonly.py"
       - "scripts/m04_ws3_precapture_coverage_audit_readonly.py"
       - "scripts/m04_ws3_watch_channel_coverage_readonly.py"
+      - "scripts/m04_ws3_watch_multicohort_readonly.py"
+      - "scripts/m04_ws3_watch_cohort_capture_once.sh"
+      - "tests/test_m04_ws3_watch_multicohort_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   push:
     branches: [main]
@@ -125,6 +128,9 @@ on:
       - "scripts/m09_indodax_public_candle_reference_readonly.py"
       - "scripts/m04_ws3_precapture_coverage_audit_readonly.py"
       - "scripts/m04_ws3_watch_channel_coverage_readonly.py"
+      - "scripts/m04_ws3_watch_multicohort_readonly.py"
+      - "scripts/m04_ws3_watch_cohort_capture_once.sh"
+      - "tests/test_m04_ws3_watch_multicohort_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   workflow_dispatch:
 
@@ -189,9 +195,12 @@ jobs:
             tests.test_m09_03_original_recovery_shadow \
             tests.test_m09_04_original_virtual_paper \
             tests.test_m09_ws3_watch_price_outcomes_readonly \
+            tests.test_m04_ws3_watch_multicohort_readonly \
             tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath
+      - name: Validate one-shot operator capture shell syntax (no execution)
+        run: bash -n scripts/m04_ws3_watch_cohort_capture_once.sh
       - name: Operator VPS explicit namespaced unittest regressions
         run: |
           python -B -m unittest -q \
