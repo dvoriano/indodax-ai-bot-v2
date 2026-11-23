@@ -2621,7 +2621,7 @@ class DecisionJournal:
         self._m09_paper_id(paper_id,"paper_")
         if (type(symbol) is not str
                 or re.fullmatch(r"[A-Z0-9]{2,20}IDR",symbol) is None
-                or symbol[:-3] in ("FLOKI","PEPE","USDT","USDC")):
+                or symbol[:-3] in ("FLOKI","PEPE")):
             raise DecisionConflictError("M09_PAPER_SYMBOL_SCOPE_INVALID")
         qty = self._m09_paper_decimal(buy_qty,positive=True)
         price = self._m09_paper_decimal(buy_price_idr,positive=True)
