@@ -819,5 +819,149 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
 
 
 
+    def test_watch_channel_current_request_membership_is_not_pair_ack(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        self.seed("humanity_idr")
+        self.seed("ace_idr")
+        with sqlite3.connect(self.ws) as db:
+            db.execute("""CREATE TABLE ws_stream_state(
+                pair TEXT PRIMARY KEY, epoch TEXT,
+                last_offset INTEGER, status TEXT)""")
+            db.execute("INSERT INTO ws_stream_state VALUES(?,?,?,?)",
+                       ("humanity_idr", "111", 33, "CONTIGUOUS_OBSERVED"))
+        checkpoint = {
+            "status": "M03_WS3_CONTINUOUS_CHECKPOINT",
+            "observed_epoch": NOW - 10,
+            "indexed_trade_pairs": ["humanity_idr"],
+            "indexed_trade_channels_acknowledged": 1,
+        }
+        report = inspect_m04_watch_trade_channels_readonly(
+            source_db=self.ws, evaluation_epoch=NOW,
+            checkpoint_records=[checkpoint])
+        self.assertEqual(report["status"],
+                         "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY")
+        self.assertEqual(report["candidate_count"], 2)
+        self.assertEqual(report["capture_mode"], "CURRENT_OPERATOR_ONE_SHOT")
+        self.assertEqual(report["checkpoint_count"], 1)
+        self.assertFalse(report["pair_specific_ack_verified"])
+        self.assertFalse(report["historical_source_immutability_verified"])
+        self.assertFalse(report["execution_allowed"])
+        self.assertFalse(report["m04_selection_modified"])
+        samples = {r["pair"]: r for r in report["observations"]}
+        self.assertEqual(set(samples), {"humanity_idr", "ace_idr"})
+        self.assertTrue(samples["humanity_idr"]["checkpoint_request_membership"])
+        self.assertFalse(samples["ace_idr"]["checkpoint_request_membership"])
+        self.assertEqual(samples["humanity_idr"]["pair_specific_ack_evidence"],
+                         "NOT_AVAILABLE_IN_CHECKPOINT")
+        self.assertEqual(
+            samples["humanity_idr"]["current_cursor_status_not_timestamped_ack"],
+            "CONTIGUOUS_OBSERVED")
+        self.assertFalse(
+            samples["humanity_idr"]["cursor_status_proves_active_subscription"])
+        self.assertGreaterEqual(
+            samples["humanity_idr"]["source_local_retained_trade_windows"]
+                ["15m"]["retained_local_trade_rows_by_capture_cutoff"], 1)
+        self.assertEqual(report["paper_orders_created"], 0)
+        self.assertEqual(report["provider_calls"], 0)
+        with sqlite3.connect(self.paper) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m09_paper_simulated_buys").fetchone()[0], 0)
+
+    def test_watch_channel_saved_capture_excludes_postcapture_rows_and_is_retro(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        saved = self.save_real_capture(pair="tmg_idr")
+        # A past exchange time received AFTER capture is not proof at WATCH.
+        with sqlite3.connect(self.ws) as db:
+            db.execute("INSERT INTO m03_ws3_trade_samples VALUES(?,?,?,?,?,?)",
+                       ("tmg_idr", NOW-100, 89, "102", "50", NOW+30))
+            db.execute("INSERT INTO m03_ws3_trade_samples VALUES(?,?,?,?,?,?)",
+                       ("tmg_idr", NOW+10, 90, "103", "50", NOW+11))
+        old = {
+            "status": "M03_WS3_CONTINUOUS_CHECKPOINT",
+            "observed_epoch": NOW - 45,
+            "indexed_trade_pairs": ["tmg_idr"],
+        }
+        future = dict(old, observed_epoch=NOW+1, indexed_trade_pairs=[])
+        report = inspect_m04_watch_trade_channels_readonly(
+            source_db=self.ws, capture_file=saved,
+            evaluation_epoch=NOW+180,
+            checkpoint_records=[old, future])
+        self.assertEqual(report["status"],
+                         "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY")
+        self.assertEqual(report["capture_mode"], "SAVED_CAPTURE_RETROSPECTIVE")
+        self.assertEqual(report["checkpoint_count"], 1)
+        self.assertEqual(report["latest_checkpoint_age_seconds"], 45)
+        item = report["observations"][0]
+        self.assertTrue(item["checkpoint_request_membership"])
+        self.assertIsNone(item["current_cursor_status_not_timestamped_ack"])
+        self.assertEqual(
+            item["source_local_retained_trade_windows"]["15m"]
+                ["retained_local_trade_rows_by_capture_cutoff"], 1)
+        self.assertFalse(report["pair_specific_ack_verified"])
+        self.assertFalse(report["capture_and_source_db_read_are_atomic"])
+        self.assertFalse(report["independent_g1_verified"])
+        self.assertFalse(report["execution_allowed"])
+
+    def test_watch_channel_no_checkpoint_is_unknown_request_not_false(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        stale = {
+            "status": "M03_WS3_CONTINUOUS_CHECKPOINT",
+            "observed_epoch": NOW - 150,
+            "indexed_trade_pairs": ["drx_idr"],
+        }
+        report = inspect_m04_watch_trade_channels_readonly(
+            source_db=self.ws, capture_file=saved,
+            evaluation_epoch=NOW+200, checkpoint_records=[stale])
+        self.assertEqual(report["checkpoint_count"], 0)
+        item = report["observations"][0]
+        self.assertIsNone(item["checkpoint_request_membership"])
+        self.assertEqual(item["checkpoint_request_evidence_status"],
+                         "RECENT_CHECKPOINT_UNAVAILABLE")
+        self.assertTrue(item["zero_rows_do_not_prove_zero_exchange_trades"])
+        self.assertFalse(item["qualified_for_g1_or_market_decision"])
+
+    def test_watch_channel_invalid_original_capture_fails_before_checkpoint_read(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        saved.chmod(0o644)
+        with patch(
+            "scripts.m04_ws3_watch_channel_coverage_readonly._journal_checkpoints",
+            side_effect=AssertionError("INVALID_CAPTURE_MUST_NOT_READ_JOURNAL"),
+        ) as journal:
+            report = inspect_m04_watch_trade_channels_readonly(
+                source_db=self.ws, capture_file=saved, evaluation_epoch=NOW+200)
+        journal.assert_not_called()
+        self.assertTrue(report["status"].startswith("ORIGINAL_M04_"))
+        self.assertEqual(report["candidate_count"], 0)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_watch_channel_conflicting_checkpoint_epoch_fails_closed(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        saved = self.save_real_capture(pair="tmg_idr")
+        base = {
+            "status": "M03_WS3_CONTINUOUS_CHECKPOINT",
+            "observed_epoch": NOW-20,
+            "indexed_trade_pairs": ["tmg_idr"],
+        }
+        conflicted = dict(base, indexed_trade_pairs=[])
+        report = inspect_m04_watch_trade_channels_readonly(
+            source_db=self.ws, capture_file=saved,
+            evaluation_epoch=NOW+100,
+            checkpoint_records=[base, conflicted])
+        self.assertEqual(report["status"], "ORIGINAL_OR_CHECKPOINT_INVALID")
+        self.assertFalse(report["execution_allowed"])
+
+
 if __name__=="__main__":
     unittest.main()
