@@ -109,3 +109,18 @@ Pada pemeriksaan evaluasi setelah horizon DRX 5 menit, original `m03_ws3_price_s
 Engineering tambahan pada branch khusus mengembangkan operator **M09 source-coverage audit READ ONLY** di atas capture alami M04 dan evaluator M09 yang telah ada. CLI membaca file private 0600 **yang sama**, memverifikasi handoff/digest/3 uncalled role slots melalui evaluator asli, lalu mengukur on-target receipt 30 detik dan nearby ±120 detik dari indeks harga WS3 lokal **yang sudah diterima per evaluation_epoch**. Hasil dibedakan menjadi NOT_YET_MATURED, 30S_WINDOW_OPEN, OBSERVED_ON_TARGET, INVALID_ON_TARGET, NEARBY_ONLY, atau NO_NEARBY_LOCAL_PRICE. Coverage percentage hanya menghitung horizon yang jendela 30 detiknya sudah tertutup. Tidak ada klaim bahwa kekosongan harga = harga turun, coin tidak aktif, collector rusak, atau G1 sah.
 
 **Batas penerimaan:** wajib targeted CI, dan pemakaian VPS baru dapat diklaim sesudah owner menjalankan operator pada capture natural TMG/DRX yang sama. Output melekat pada digest M04 untuk penelitian mutu input saja; tidak menciptakan role response, RISK vote, paid calls, pending PAPER, virtual fill, MANUAL Telegram, BUY/SELL/CANCEL, atau service baru. Bukti natural DRX +0,2986359595% bruto hanya satu horizon observasional, bukan profit bersih atau kandidat qualified. 15m kedua pasangan UNKNOWN saat dievaluasi, 30/60m belum matang pada bukti yang tersedia. **Paket 5 original PAPER end-to-end tetap OPEN**.
+
+## Bukti VPS PR#327: audit M09 5/15m natural TMG/DRX (23 November 2026)
+
+Owner original VPS telah fast-forward main hingga commit `145e7ef5fe8edba657bf72d174e409b806918842`; targeted regression `tests.test_m09_ws3_watch_price_outcomes_readonly`, `tests.test_m09_04_original_virtual_paper` dan `tests.test_m04_ws3_indexed_observation_nonlive` **45/45 PASS**. Auditor asli untuk capture privat `runtime/m09_ws3_watch_capture_VlyEYT38.json` melaporkan `LOCAL_CAPTURE_COVERAGE_RESEARCH_ONLY`, **2 kandidat, 4 horizon selesai, 1 observed, 3 unknown, observed coverage 25%**, `EXECUTION_ALLOWED=False`. BTC public WS service, M03 timer dan M05 Telegram service semuanya **active**.
+
+Rincian **berdasarkan keadaan saat audit**, bukan hasil akhir semua horizon:
+
+| Pair | Horizon | On-target ±30 detik (hanya [target, target+30s]) | Nearby ±120 detik | Hasil |
+|---|---|---:|---:|---|
+| TMG/IDR | 5m | 0 | 0 | UNKNOWN, no local price nearby |
+| TMG/IDR | 15m | 0 | 1 | UNKNOWN, nearby-only |
+| DRX/IDR | 5m | 1 | 4 | OBSERVED gross **+0.2986359595%**, bukan ROI bersih |
+| DRX/IDR | 15m | 0 | 2 | UNKNOWN, nearby-only |
+
+Kedua horizon 30m/60m untuk masing-masing pasangan masih **NOT_YET_MATURED** ketika audit berjalan, jadi penyebut coverage hanya **4**, bukan 8. Temuan nearby-only di 15m **belum membuktikan** penyebab jeda sampel dan **bukan** alasan mengganti jendela 30 detik. Perlu membaca `exchange_epoch`, `recorded_epoch`, dan selisih terhadap target untuk membedakan arrival lag vs sparse timestamps, lalu mengevaluasi kembali file capture yang sama setelah seluruh horizon matang. Pengujian code/CI dan audit natural dianggap **PASS terbatas**; kelengkapan harga dan original PAPER lengkap tetap **OPEN**. Tidak ada GO AI, G1, order, virtual fill maupun perubahan service.
