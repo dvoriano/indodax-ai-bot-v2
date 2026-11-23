@@ -586,8 +586,20 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
             capture_file=saved, source_db=self.ws,
             evaluation_epoch=OBS+3700, fetch_public_ohlcv=True, fetcher=feed)
         self.assertEqual(result["candle_references_observed"], 0)
-        self.assertEqual(result["observations"][0]["horizons"]["5m"]
-                         ["candle_status"], "CANDLE_ZERO_VOLUME_UNVERIFIED")
+        self.assertEqual(result["candle_minutes_present"], 1)
+        self.assertEqual(result["candle_zero_volume_references"], 1)
+        bar = result["observations"][0]["horizons"]["5m"]
+        self.assertEqual(bar["candle_status"], "CANDLE_ZERO_VOLUME_UNVERIFIED")
+        self.assertTrue(bar["candle_ohlc_returned_and_validated"])
+        self.assertIsNone(bar["candle_close_idr"])
+        self.assertEqual(bar["candle_zero_volume_reference_close_idr"], "101")
+        self.assertEqual(
+            D(bar["candle_zero_volume_reference_gross_price_change_from_original_ws3_baseline_percent"]),
+            D("0"))
+        self.assertTrue(bar["candle_zero_volume_reference_is_not_trade_evidence"])
+        self.assertEqual(bar["ws3_original_coverage_class"],
+                         "NO_LOCAL_PRICE_WITHIN_120S")
+        self.assertFalse(result["execution_allowed"])
         self.assertEqual(result["observations"][0]["horizons"]["15m"]
                          ["candle_status"], "CANDLE_MINUTE_NOT_RETURNED")
 
@@ -672,6 +684,64 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
             fetcher=must_not_fetch)
         self.assertEqual(no_optin["status"],
                          "EXPLICIT_PUBLIC_CANDLE_FETCH_OPT_IN_REQUIRED")
+
+
+
+    def test_eight_zero_volume_candles_preserve_all_ws3_unknowns(self):
+        from scripts.m09_indodax_public_candle_reference_readonly import (
+            compare_m09_with_indodax_candles_readonly,
+        )
+        for pair in ("tmg_idr", "drx_idr"):
+            self.seed(pair)
+        captured = capture_original_ws3_watch_readonly(
+            source_db=self.ws, capture_epoch=NOW)
+        self.assertEqual(captured["candidate_count"], 2)
+        saved = self.root / "two_watch_zero_volume.json"
+        saved.write_text(json.dumps(captured), encoding="utf-8")
+        saved.chmod(0o600)
+        calls = []
+        def history(pair, *, from_epoch, to_epoch):
+            calls.append(pair)
+            return [
+                {
+                    "Time": (OBS + minutes * 60)//60*60,
+                    "Open": "101", "High": "101",
+                    "Low": "101", "Close": "101",
+                    "Volume": "0",
+                }
+                for minutes in (5, 15, 30, 60)
+            ]
+
+        result = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=OBS + 3800,
+            fetch_public_ohlcv=True, fetcher=history)
+        self.assertEqual(set(calls), {"tmg_idr", "drx_idr"})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["public_rest_gets_attempted"], 2)
+        self.assertEqual(result["public_rest_gets_validated"], 2)
+        self.assertEqual(result["original_ws3_unknown_horizons"], 8)
+        self.assertEqual(result["candle_minutes_present"], 8)
+        self.assertEqual(result["candle_zero_volume_references"], 8)
+        self.assertEqual(result["candle_references_observed"], 0)
+        for item in result["observations"]:
+            for horizon in ("5m", "15m", "30m", "60m"):
+                bar = item["horizons"][horizon]
+                self.assertEqual(bar["candle_status"], "CANDLE_ZERO_VOLUME_UNVERIFIED")
+                self.assertEqual(bar["candle_zero_volume_reference_close_idr"], "101")
+                self.assertIsNone(bar["candle_close_idr"])
+                self.assertEqual(bar["ws3_original_coverage_class"],
+                                 "NO_LOCAL_PRICE_WITHIN_120S")
+                self.assertFalse(bar["fee_spread_slippage_or_fill_verified"])
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["paper_fill_created"])
+        self.assertEqual(result["paper_orders_created"], 0)
+        self.assertEqual(result["provider_calls"], 0)
+        self.assertEqual(result["telegram_messages_sent"], 0)
+        with sqlite3.connect(self.paper) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m09_paper_simulated_buys"
+            ).fetchone()[0], 0)
 
 
 
