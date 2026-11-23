@@ -307,5 +307,120 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertFalse(result["execution_allowed"])
 
 
+    def test_capture_coverage_observed_nearby_and_absent_source_are_distinct(self):
+        from scripts.m09_ws3_watch_coverage_audit_readonly import (
+            audit_saved_ws3_watch_coverage_readonly,
+        )
+        self.seed("tmg_idr")
+        self.seed("drx_idr")
+        captured = capture_original_ws3_watch_readonly(
+            source_db=self.ws, capture_epoch=NOW)
+        self.assertEqual(captured["candidate_count"], 2)
+        saved = self.root / "natural-two-watch.json"
+        saved.write_text(json.dumps(captured))
+        saved.chmod(0o600)
+
+        target5 = OBS + 300
+        target15 = OBS + 900
+        self.add_price("drx_idr", target5 + 19, "103.02", receipt=target5 + 20)
+        # A sample AFTER the 30-second matching window is nearby only.
+        self.add_price("drx_idr", target15 + 35, "103.50",
+                       receipt=target15 + 36)
+
+        with patch(
+            "scripts.m09_ws3_watch_price_history_readonly."
+            "inspect_original_ws3_three_role_handoff_readonly",
+            side_effect=AssertionError("NO_RESELECT_OR_HISTORICAL_CAPTURE"),
+        ) as recapture:
+            result = audit_saved_ws3_watch_coverage_readonly(
+                capture_file=saved, source_db=self.ws,
+                evaluation_epoch=target15 + 45)
+        recapture.assert_not_called()
+
+        self.assertEqual(result["status"],
+                         "LOCAL_CAPTURE_COVERAGE_RESEARCH_ONLY")
+        self.assertEqual(result["matured_horizons"], 4)
+        self.assertEqual(result["observed_matured_horizons"], 1)
+        self.assertEqual(result["unknown_matured_horizons"], 3)
+        self.assertEqual(result["observed_coverage_percent"], "25.0")
+        by_pair = {row["pair"]: row for row in result["observations"]}
+        self.assertEqual(set(by_pair), {"drx_idr", "tmg_idr"})
+        drx = by_pair["drx_idr"]["coverage"]
+        tmg = by_pair["tmg_idr"]["coverage"]
+        self.assertEqual(drx["5m"]["coverage_class"],
+                         "OBSERVED_ON_TARGET_PRICE")
+        self.assertEqual(drx["5m"]["exact_horizon_receipts"], 1)
+        self.assertEqual(D(drx["5m"]["observed_gross_price_return_percent"]),
+                         D("2"))
+        self.assertEqual(drx["15m"]["coverage_class"],
+                         "NO_ON_TARGET_WITH_NEARBY_LOCAL_SAMPLES")
+        self.assertEqual(drx["15m"]["exact_horizon_receipts"], 0)
+        self.assertEqual(drx["15m"]["nearby_120s_local_receipts"], 1)
+        self.assertEqual(tmg["5m"]["coverage_class"],
+                         "NO_LOCAL_PRICE_WITHIN_120S")
+        self.assertEqual(tmg["15m"]["coverage_class"],
+                         "NO_LOCAL_PRICE_WITHIN_120S")
+        self.assertEqual(drx["30m"]["coverage_class"], "NOT_YET_MATURED")
+        self.assertEqual(by_pair["drx_idr"]["m04_evidence_digest_sha256"],
+                         next(row["evidence_digest_sha256"] for row in
+                              captured["handoff"]["candidates"]
+                              if row["pair"] == "drx_idr"))
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["paper_fill_created"])
+        self.assertEqual(result["provider_calls"], 0)
+        with sqlite3.connect(self.paper) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m09_paper_simulated_buys").fetchone()[0], 0)
+
+    def test_capture_coverage_no_future_receipt_and_late_arrival(self):
+        from scripts.m09_ws3_watch_coverage_audit_readonly import (
+            audit_saved_ws3_watch_coverage_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        five = OBS + 300
+        self.add_price("drx_idr", five + 10, "103.02", receipt=five + 75)
+
+        early = audit_saved_ws3_watch_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=five + 5)
+        self.assertEqual(early["matured_horizons"], 0)
+        self.assertEqual(early["observations"][0]["coverage"]["5m"]
+                         ["coverage_class"], "HORIZON_30S_WINDOW_STILL_OPEN")
+        pending = audit_saved_ws3_watch_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=five + 40)
+        five_pending = pending["observations"][0]["coverage"]["5m"]
+        self.assertEqual(five_pending["coverage_class"],
+                         "NO_LOCAL_PRICE_WITHIN_120S")
+        self.assertEqual(five_pending["exact_horizon_receipts"], 0)
+        self.assertEqual(five_pending["nearby_120s_local_receipts"], 0)
+        self.assertEqual(pending["observed_matured_horizons"], 0)
+
+        later = audit_saved_ws3_watch_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=five + 76)
+        five_later = later["observations"][0]["coverage"]["5m"]
+        self.assertEqual(five_later["coverage_class"], "OBSERVED_ON_TARGET_PRICE")
+        self.assertEqual(five_later["exact_horizon_receipts"], 1)
+        self.assertEqual(later["observed_coverage_percent"], "100.0")
+
+    def test_capture_coverage_rejects_world_readable_and_tampered_files(self):
+        from scripts.m09_ws3_watch_coverage_audit_readonly import (
+            audit_saved_ws3_watch_coverage_readonly,
+        )
+        saved = self.save_real_capture(pair="vine_idr")
+        saved.chmod(0o644)
+        denied = audit_saved_ws3_watch_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=OBS + 350)
+        self.assertEqual(denied["status"], "CAPTURE_OR_OUTCOMES_CAPTURE_FILE_UNTRUSTED")
+        self.assertEqual(denied["candidate_count"], 0)
+        self.assertFalse(denied["execution_allowed"])
+        saved.chmod(0o600)
+        tampered = json.loads(saved.read_text())
+        tampered["handoff"]["candidates"][0]["evidence_digest_sha256"] = "0" * 64
+        saved.write_text(json.dumps(tampered))
+        denied2 = audit_saved_ws3_watch_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=OBS + 350)
+        self.assertEqual(denied2["candidate_count"], 0)
+        self.assertFalse(denied2["paper_fill_created"])
+
+
 if __name__=="__main__":
     unittest.main()
