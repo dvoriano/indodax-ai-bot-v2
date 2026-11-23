@@ -2254,6 +2254,55 @@ class DailyScalpingOrchestrator:
             "paper_sell_fill_recorded":False,
         }
 
+    def review_m09_ws3_to_paper_admission_readonly_once(
+            self, *, source_db: Path, now_epoch: int) -> dict:
+        """Original M03→M04→M09 no-fill handoff on existing read-only data.
+
+        M04 uncalled WATCH/WAIT is not a qualified signed/role-reviewed
+        decision. Reuse the original M09 review-required admission guard;
+        NEVER convert a ranked WATCH into a synthetic entry or receipt.
+        """
+        from .m04_radar_three_role_handoff_readonly import (
+            inspect_original_ws3_three_role_handoff_readonly,
+        )
+        self.settings.require_m01_safety()
+        if (type(now_epoch) is not int or now_epoch<=0
+                or self._ai_role_caller is not None
+                or self._source_verifier is not None
+                or self._owner_control is not None):
+            raise ValueError("M09_WS3_PAPER_READONLY_SOURCE_REQUIRED")
+        m04=inspect_original_ws3_three_role_handoff_readonly(
+            db_path=source_db,now_epoch=now_epoch,
+        )
+        ready=m04.get("candidate_review_readiness")
+        # Original M09 candidate selection accepts ONLY a separately
+        # qualified SYNTHETIC three-role SHADOW outcome. This uncalled
+        # public WS3 readiness must always fail its existing gate.
+        result=self.discover_m09_paper_entry_reference_once(
+            now_epoch=now_epoch,source_db=source_db,
+            require_m04_review=True,m04_shadow_decision=ready,
+        )
+        if (result.get("status") not in (
+                "M09_PAPER_M04_RESCAN_REQUIRED",
+                "M09_PAPER_MONITOR_EXISTING_POSITION",
+            ) or result.get("paper_entry_reference") is not None
+                or result.get("paper_buy_fill_recorded") is not False
+                or result.get("execution_allowed") is not False):
+            raise ValueError("M09_WS3_PAPER_UNCALLED_AUTHORITY_CROSSING")
+        return {
+            "stage":"M09_ORIGINAL_WS3_M04_TO_PAPER_GATE_READONLY",
+            "m04_status":m04.get("status"),
+            "m04_watch_candidate_count":m04.get("candidate_count",0),
+            "m04_uncalled_readiness":ready,
+            "m09_status":result["status"],
+            "paper_entry_reference":None,
+            "paper_fill_created":False,
+            "model_calls_observed":0,
+            "owner_order_final":None,
+            "execution_allowed":False,
+            "order_sent":False,
+        }
+
     def discover_m09_paper_entry_reference_once(self, *,
             now_epoch: int | None = None, source_db=None,
             require_m04_review: bool = False,
