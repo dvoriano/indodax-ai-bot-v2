@@ -130,7 +130,7 @@ class OriginalM07SellOwnershipGuardTests(unittest.TestCase):
             self.review(symbol="FLOKIIDR")
         with self.assertRaisesRegex(ValueError,"M07_SYMBOL_NOT_ADMITTED"):
             self.review(symbol="PEPEIDR")
-        with self.assertRaisesRegex(ValueError,"M07_SYMBOL_NOT_ADMITTED"):
+        with self.assertRaisesRegex(OwnershipConflict,"M07_SELL_REVIEW_INPUT_INVALID"):
             self.review(symbol="USDTIDR")
 
     def test_corrupted_referenced_local_fill_fails_closed(self):
