@@ -361,6 +361,14 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 # an unverified missing interval as complete data.
                 if (failed_trade_channels and not pending_unsubscribe
                         and not subscribe_started):
+                    for missing in tuple(failed_trade_channels):
+                        if missing in micro_channels and missing not in micro_active:
+                            permanently_rejected.add(micro_channels[missing][0])
+                            indexed_pairs.discard(micro_channels[missing][0])
+                            healing_pairs.discard(micro_channels[missing][0])
+                            micro_channels.pop(missing,None)
+                            failed_trade_channels.discard(missing)
+                            trade_failure_reasons.pop(missing,None)
                     channel=next((ch for ch in sorted(failed_trade_channels)
                                   if ch in micro_channels and ch in micro_active),None)
                     if channel is not None:
@@ -502,7 +510,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             failed_trade_channels.add(channel)
                             trade_failure_reasons[channel]="WS3_RECOVERY_ACK_INVALID"
                         else:
-                            if pair in healing_pairs:
+                            if pair in healing_pairs and channel not in failed_trade_channels:
                                 healing_pairs.discard(pair)
                                 isolated_cursor_repairs+=1
                     if (isinstance(ack, dict)
