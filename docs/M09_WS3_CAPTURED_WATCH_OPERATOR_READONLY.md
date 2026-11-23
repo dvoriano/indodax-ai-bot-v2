@@ -110,8 +110,8 @@ claim all horizon coverage from this evidence.
 
 The first natural TMG/DRX 23 November 2026 capture is **already saved**.
 For *that same* private 0600 original WATCH, the optional research-only tool
-measures **retained** local prices with both \`exchange_epoch <= captured_epoch\`
-and \`recorded_epoch <= captured_epoch\`. It reports 5m/15m counts,
+measures **retained** local prices with both `exchange_epoch <= captured_epoch`
+and `recorded_epoch <= captured_epoch`. It reports 5m/15m counts,
 latest observed age, largest observed *inter-sample* gap, and worst receipt
 lag. All are source-availability diagnostics, not evidence of liquidity or
 MARKET/RISK/STRATEGY qualification.
@@ -133,7 +133,7 @@ upsert and pruning. Its current rows with recorded timestamps <= capture
 are NOT cryptographic, immutable proof of the complete SQLite state at
 the earlier historical capture. An overwritten historical row could no
 longer be present. Therefore this is correctly labeled
-\`RETAINED_PRECAPTURE_SOURCE_RESEARCH_ONLY\`, not independently verified
+`RETAINED_PRECAPTURE_SOURCE_RESEARCH_ONLY`, not independently verified
 *as-of* coverage. Future at-WATCH evidence needs to be captured
 contemporaneously if it will ever be used for a real decision. The
 existing M04 WATCH selection, digests, and 3 uncalled role inputs are
