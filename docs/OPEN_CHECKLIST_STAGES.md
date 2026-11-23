@@ -175,3 +175,23 @@ Timestamp awal/akhir **identik antar kedua tabel untuk masing-masing pair**, dan
 **Audit mekanisme source GitHub main:** fungsi `persist_ws3_summary_watch` pada `indodax_ai_bot/m03_ws_summary_live_watch.py` memakai `PRIMARY KEY(pair,minute_epoch)` dan `INSERT OR IGNORE`, mempertahankan hanya observasi pertama dalam satu menit, dengan retensi 2 jam. Fungsi `persist_dense_ws3_prices` memakai `PRIMARY KEY(pair,bucket_epoch)` untuk bucket 5 detik dari frame summary aktual; tidak menginterpolasi atau menciptakan sampel otomatis. Data dense hanya diisi dari frame summary yang memenuhi kriteria source/freshness dan saat continuous+indexed-trade path aktif; retensi indeks dense 8 jam. Karena grain dan aturan deduplikasi berlainan, count summary dan dense **tidak boleh dianggap jumlah packet WS3** atau rasio keberhasilan penerimaan.
 
 **Langkah diagnosis berikut:** lihat ringkasan `M03_WS3_CONTINUOUS_CHECKPOINT` pada original service journal di jendela yang sama, tanpa mengekspor raw log/sumber sensitif atau restart. Ukur frekuensi checkpoint, `dense_price_rows_saved`, dan `indexed_trade_channels_failed`; data checkpoint tetap agregat lintas pasangan sehingga tidak cukup untuk memastikan sebab kekosongan TMG/DRX. Tetap gunakan audit M09 capture original untuk horizon 60m ketika matang. M04 role AI/G1, PAPER lifecycle dan real execution masih OPEN (NO/NO/DRY_RUN).
+
+## Bukti VPS: M03 continuous checkpoint agregat pada jendela source TMG/DRX (23 November 2026)
+
+Operator memeriksa hanya baris JSON `status=M03_WS3_CONTINUOUS_CHECKPOINT` pada unit original `indodax-v2-m03-mainpath.service` untuk epoch **1795408620–1795411020** (2.400 detik), via journalctl user read-only. Output yang diverifikasi:
+
+| Metrik | Nilai |
+|---|---:|
+| CHECKPOINT_COUNT | **60** |
+| DENSE_ROW_COUNTS_REPORTED | 60 |
+| REPORTED_DENSE_ROWS_TOTAL | **1.339** |
+| CHECKPOINTS_WITH_ZERO_DENSE | **0** |
+| MAX_DENSE_ROWS_PER_CHECKPOINT | **34** |
+| CHECKPOINTS_WITH_TRADE_CHANNEL_FAILURE | **0** |
+| FIRST_CHECKPOINT | 1795408637 |
+| LAST_CHECKPOINT | 1795411019 |
+| EXECUTION_ALLOWED | False |
+
+**Makna terbatas:** M03 continuous checkpoint hidup di jendela yang sama, melaporkan baris indeks harga pada seluruh 60 checkpoint, rata-rata 1339/60 ≈ 22,32 baris dilaporkan/checkpoint secara agregat lintas pair, tanpa failure trade-channel yang dilaporkan. Ini **tidak** membuktikan tidak ada offset/frame/pair gap, dan angka laporan bukan jumlah baris harga unik untuk pasangan TMG/DRX atau per-tick bukti lengkap. Kontras dengan source DB pada jendela 40m yang sama: TMG summary **5**, dense **6**; DRX summary **21**, dense **23**. Hipotesis yang kini lebih spesifik adalah **cakupan per-pair atau eligibility frame dari `market:summary-24h`**, bukan service M03 mati secara umum. Belum membuktikan penyebab pasti seperti absence upstream pair, freshness/turnover filter, atau deduplikasi.
+
+**Langkah audit berikut read-only:** bandingkan jumlah pair lain dan distribusi interval `exchange_epoch` pada indeks dense untuk 40m sama, serta periksa beberapa checkpoint bertanggal untuk `fresh_liquid_pairs`, `dense_price_rows_saved`, tanpa menampilkan payload mentah/credential. Hindari menambahkan auto-fill, interpolasi, jendela horizon lebih longgar, second socket, scanner paralel atau restart service sampai atribusi penyebab dibuktikan. M09 60m, G1 independen, respons AI tiga role, serta PAPER lifecycle tetap OPEN.
