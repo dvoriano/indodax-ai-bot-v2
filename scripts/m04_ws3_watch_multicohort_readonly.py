@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
-from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -164,7 +163,7 @@ def _validate_report(r: dict) -> tuple[int, tuple, list[dict]]:
                 or type(digest) is not str or not _SHA.fullmatch(digest)
                 or type(source_epoch) is not int
                 or not 0 <= epoch - source_epoch <= 150
-                or membership not in _MEMBERSHIPS
+                or not (membership is True or membership is False or membership is None)
                 or row.get("checkpoint_request_evidence_status") !=
                    _MEMBERSHIPS[membership]
                 or ((membership is None) != (checkpoint_count == 0))
