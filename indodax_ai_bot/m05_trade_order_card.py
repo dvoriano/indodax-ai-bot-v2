@@ -39,6 +39,8 @@ def render_m05_trade_order_card(
     draft: M07OrderDraft, *,
     mode: Literal["MANUAL", "AUTO"],
     expected_buy_total_idr: Decimal | None = None,
+    modeled_sell_vwap_reference_idr: Decimal | None = None,
+    public_quote_age_seconds: int | None = None,
     allocated_bot_owned_buy_cost_idr: Decimal | None = None,
     expected_net_sell_proceeds_idr: Decimal | None = None,
 ) -> str:
@@ -88,8 +90,37 @@ def render_m05_trade_order_card(
             f"Estimated BUY amount: {_idr(buy_total)}",
             f"Estimated tokens received: {qty} {token}",
         ))
+        if modeled_sell_vwap_reference_idr is not None:
+            vwap = modeled_sell_vwap_reference_idr
+            if (expected_buy_total_idr is None
+                    or type(vwap) is not Decimal or not vwap.is_finite()
+                    or vwap <= draft.price or vwap.adjusted() > 20):
+                raise ValueError("M05_BUY_CARD_NET_REFERENCE_INVALID")
+            policy = ScalpingPolicy()
+            summary.append(
+                f"Modeled SELL VWAP for net target: {_idr(vwap)}"
+            )
+            summary.append(
+                "Normal net target: at least "
+                + _idr(policy.min_net_profit_idr)
+                + " AND " + _format_number(policy.min_net_roi_percent) + "%"
+            )
+            summary.append(
+                "Public cost model only; actual net, slippage and fill "
+                "liquidity UNKNOWN."
+            )
+        if public_quote_age_seconds is not None:
+            if (type(public_quote_age_seconds) is not int
+                    or not 0 <= public_quote_age_seconds <= 30):
+                raise ValueError("M05_BUY_CARD_PUBLIC_AGE_INVALID")
+            summary.append(
+                f"Public quote age at preview: {public_quote_age_seconds}s; "
+                "fresh quote required before any real decision."
+            )
     else:
-        if expected_buy_total_idr is not None:
+        if (expected_buy_total_idr is not None
+                or modeled_sell_vwap_reference_idr is not None
+                or public_quote_age_seconds is not None):
             raise ValueError("M05_SELL_CARD_BUY_COST_FIELD_INVALID")
         projected_total = (
             expected_net_sell_proceeds_idr

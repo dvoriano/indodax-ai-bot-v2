@@ -107,6 +107,12 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
         self.assertIn("BTCIDR", card["message_text"])
         self.assertIn("Estimated BUY amount: Rp", card["message_text"])
         self.assertIn("Estimated tokens received: ", card["message_text"])
+        self.assertIn("Modeled SELL VWAP for net target: Rp", card["message_text"])
+        self.assertIn("Normal net target: at least Rp10.000 AND 2%", card["message_text"])
+        self.assertIn("Public cost model only; actual net", card["message_text"])
+        self.assertIn("Public quote age at preview: 10s", card["message_text"])
+        self.assertEqual(report["public_quote_age_seconds"],10)
+        self.assertGreater(D(report["future_sell_vwap_idr_reference"]),price)
         self.assertNotIn("fee", card["message_text"].lower())
         self.assertNotIn("pajak", card["message_text"].lower())
         self.assertIn("Trading OFF", card["message_text"])
@@ -119,6 +125,37 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
             self.assertEqual(db.execute(
                 "SELECT COUNT(*) FROM m08_position_settled_idr_events",
             ).fetchone()[0], 0)
+
+    def test_owner_manual_net_reference_invalid_never_queues_card(self):
+        from indodax_ai_bot.m07_order_adapter import M07OrderDraft
+        baseline=dict(
+            user_id=OWNER, chat_id=OWNER,
+            account_fingerprint=FINGERPRINT,
+            draft=M07OrderDraft(
+                "BTCIDR","BUY","LIMIT","m07invalidnetreference",
+                price=D("100"),quantity=D("100")),
+            now_epoch=NOW,
+            expected_buy_total_idr=D("10100"),
+        )
+        invalid=(
+            {"modeled_sell_vwap_reference_idr":D("100"),
+             "public_quote_age_seconds":10},
+            {"modeled_sell_vwap_reference_idr":D("NaN"),
+             "public_quote_age_seconds":10},
+            {"modeled_sell_vwap_reference_idr":D("120"),
+             "public_quote_age_seconds":31},
+            {"modeled_sell_vwap_reference_idr":D("120"),
+             "public_quote_age_seconds":True},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs):
+                report=self.bot.queue_m07_owner_manual_telegram_preview_offline(
+                    **baseline,**kwargs)
+                self.assertFalse(report["accepted"])
+                self.assertFalse(report["execution_allowed"])
+                self.assertFalse(report.get("order_sent",False))
+        self.assertIsNone(
+            self.owner.claim_manual_trade_preview_delivery(now_epoch=NOW))
 
     def test_original_m03_scanner_includes_eligible_stablecoin_idr_pair(self):
         from unittest.mock import MagicMock
