@@ -628,6 +628,102 @@ class M03WSLiveWatchTests(unittest.TestCase):
             self.assertEqual(provider.sock.sent[4]["params"]["channel"],"market:trade-activity-bbidr")
             self.assertEqual(provider.sock.sent[5]["params"]["channel"],"market:trade-activity-ccidr")
 
+    def test_one_cursor_gap_rebaselines_only_failed_channel_in_existing_socket(self):
+        from unittest.mock import patch
+        from indodax_ai_bot.trade_stream import PublicTradeStreamJournal
+
+        def summary(offset):
+            return {"result": {"channel": "market:summary-24h",
+                "data": {"offset": offset, "data": [
+                    ["btcidr", NOW, 100, 90, 120, 95, "700000000", "2"],
+                    ["vineidr", NOW, 100, 90, 120, 95, "500000000", "2"],
+                ]}}}
+
+        class RecoveringSocket(Socket):
+            def __init__(self):
+                super().__init__([
+                    {"id": 1, "result": {"client": "synthetic-offline-client"}},
+                    {"id": 2, "result": {"recoverable": True, "epoch": "1", "offset": 10}},
+                    summary(124),
+                    {"id": 3, "result": {"recoverable": True, "epoch": "2", "offset": 40}},
+                    # VINE was persisted on epoch 1; this ACK proves an
+                    # unrecoverable epoch mismatch, not recovered history.
+                    {"id": 4, "result": {"recoverable": True, "epoch": "2", "offset": 45}},
+                ])
+                self.repair_subscribe_seen = False
+
+            def send(self, data):
+                import json
+                super().send(data)
+                msg = json.loads(data)
+                params = msg.get("params", {})
+                if (msg.get("method") == 2 and
+                        params.get("channel") == "market:trade-activity-vineidr"):
+                    self.frames.append({"id": msg["id"], "result": {}})
+                if (msg.get("method") == 1 and
+                        params.get("channel") == "market:trade-activity-vineidr"
+                        and "recover" not in params and msg["id"] != 4):
+                    self.repair_subscribe_seen = True
+                    self.frames.extend([
+                        {"id": msg["id"], "result": {
+                            "recoverable": True, "epoch": "2", "offset": 50}},
+                        summary(125),
+                        {"result": {"channel": "market:trade-activity-vineidr",
+                           "data": {"offset": 51, "data": [
+                               ["vineidr", NOW, 1, "buy", 100, "10000", "100"]
+                           ]}}},
+                    ])
+
+        class Provider:
+            WebSocketTimeoutException = FakeTimeout
+            def __init__(self):
+                self.sock = RecoveringSocket()
+            def create_connection(self, url, **kwargs):
+                return self.sock
+
+        class SlowClock:
+            def __init__(self):
+                self.value=0
+            def __call__(self):
+                self.value+=0.25
+                return self.value
+
+        with TemporaryDirectory() as tmp, patch("indodax_ai_bot.trade_stream.time.time",return_value=NOW):
+            journal=PublicTradeStreamJournal(Path(tmp)/"decisions.sqlite3",
+                                            index_m03_samples=True)
+            journal.acknowledge("vine_idr", {"id": 2, "result": {
+                "recoverable": True, "epoch": "1", "offset": 40}})
+            provider=Provider()
+            views=[]
+            def on_checkpoint(snapshot):
+                views.append(snapshot)
+                if snapshot["indexed_trade_cursor_repairs"] == 1:
+                    raise M03WSWatchError("TEST_STOP_AFTER_ISOLATED_REPAIR")
+            with self.assertRaisesRegex(M03WSWatchError,
+                                        "TEST_STOP_AFTER_ISOLATED_REPAIR"):
+                collect_ws3_market_summary_once(
+                    ws_module=provider,monotonic=SlowClock(),
+                    epoch_fn=lambda: NOW,observe_seconds=3,
+                    trade_journal=journal,checkpoint=on_checkpoint)
+            self.assertTrue(provider.sock.repair_subscribe_seen)
+            self.assertTrue(provider.sock.closed)
+            self.assertGreaterEqual(len(views),2)
+            self.assertEqual(views[0]["indexed_trade_channels_failed"],1)
+            self.assertEqual(views[0]["indexed_trade_failures"],[
+                {"pair":"vine_idr","reason":"WS3_RECOVERY_GAP"}])
+            self.assertEqual(views[-1]["indexed_trade_channels_failed"],0)
+            self.assertEqual(views[-1]["indexed_trade_channels_acknowledged"],2)
+            self.assertEqual(views[-1]["indexed_trade_cursor_repairs"],1)
+            self.assertEqual(journal.status("vine_idr")["stream_status"],
+                             "CONTIGUOUS_OBSERVED")
+            self.assertEqual(journal.status("vine_idr")["last_publication_offset"],51)
+            self.assertEqual(journal.status("btc_idr")["last_publication_offset"],40)
+            self.assertEqual(journal.status("vine_idr")[
+                "unrecoverable_gap_rebaseline_count"],1)
+            self.assertEqual(len([
+                x for x in provider.sock.sent if x.get("method")==2
+            ]),1)
+
     def test_dense_summary_and_trade_edge_returns_enrich_original_timeframes(self):
         from decimal import Decimal
         from indodax_ai_bot.m03_ws_summary_live_watch import persist_dense_ws3_prices
