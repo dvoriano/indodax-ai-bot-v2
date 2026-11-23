@@ -59,6 +59,7 @@ on:
       - "tests/test_m09_ws3_watch_price_outcomes_readonly.py"
       - "scripts/m09_ws3_watch_price_history_readonly.py"
       - "scripts/m09_ws3_watch_coverage_audit_readonly.py"
+      - "scripts/m04_ws3_precapture_coverage_audit_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   push:
     branches: [main]
@@ -119,6 +120,7 @@ on:
       - "tests/test_m09_ws3_watch_price_outcomes_readonly.py"
       - "scripts/m09_ws3_watch_price_history_readonly.py"
       - "scripts/m09_ws3_watch_coverage_audit_readonly.py"
+      - "scripts/m04_ws3_precapture_coverage_audit_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   workflow_dispatch:
 
