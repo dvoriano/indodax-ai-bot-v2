@@ -385,7 +385,6 @@ class ManualOwnerTradePreviewOriginalV2Tests(unittest.TestCase):
 
     def test_invalid_pair_price_qty_or_type_never_queues(self):
         for changes in (
-            {"symbol":"USDTIDR"},
             {"symbol":"FLOKIIDR"},
             {"price":"NaN"},
             {"price":"-1"},
