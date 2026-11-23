@@ -205,3 +205,20 @@ Dua original M04 WATCH yang dicapture sebelumnya: **TMG/IDR rank 39 dari 53, 6 b
 **Diagnosa terbatas:** M03 checkpoint tetap aktif lintas pair, namun bukti harga untuk kandidat yang sedang dipelajari lebih jarang daripada sejumlah pasangan lain. Ini **tidak** membuktikan TMG/DRX tidak likuid, tidak membuktikan M04 salah memilih, tidak membuktikan frame dibuang, dan tidak memberi izin BUY. Audit kepadatan setelah WATCH bersifat **retrospektif**; memakai data masa depan untuk filter/seleksi M04 akan menimbulkan lookahead bias.
 
 **Usulan pekerjaan berikut, belum accepted:** rancangkan *pre-decision local source coverage label* pada M04 dari sampel yang diketahui **sebelum** snapshot WATCH, dengan indikator jumlah exchange timestamps asli pada jendela pendek, inter-sample gaps, freshness, dan recorded-epoch cutoff; label WATCH/LOW_COVERAGE/UNKNOWN hanya untuk analisis, bukan G1 atau keputusan AI. Validasi dengan data multi-WATCH terlebih dahulu sebelum menetapkan threshold atau mengubah produksi. Evaluasi 60m capture TMG/DRX tetap menunggu kematangan; PAPER end-to-end dan role AI tetap OPEN.
+
+## M04 retained local price source audit at capture time (23 November 2026)
+
+Owner original VPS ran an explicit read-only cutoff at natural M04 capture epoch **1795408713** on the 5s-bucket local index, with both \`exchange_epoch <= cutoff\` and \`recorded_epoch <= cutoff\`. Operator output:
+
+| Measure | TMG/IDR | DRX/IDR |
+|---|---:|---:|
+| 5m retained rows | **3** | **4** |
+| 15m retained rows | **3** | **13** |
+| Largest inter-sample gap in 5m | **35s** | **101s** |
+| Age of last retained price at capture | **54s** | **30s** |
+
+The 5m cohort of DRX is notably sparser than its 15m cohort; TMG's 15m rows all belong to its last 5m. These findings concern the *retained locally indexed data*, not exchange activity, real liquidity, complete trade tape, book depth, account permissions, or predictive signal win rate. A 5m largest inter-sample gap does not include the gap from the last sample to capture (separately reported as age).
+
+On a separate branch, a nonlive diagnostic \`scripts/m04_ws3_precapture_coverage_audit_readonly.py\` derives 5/15m retained source ages and counts for the **existing** original M04 captured WATCH and source digest, without modifying ranking or M04-3role inputs and with explicit receipt/exchange cutoff. Added tests assert delayed receipts and future exchange timestamps cannot leak into the report, and that no PAPER/real fill is created.
+
+**Important caveat:** this report is retrospective, not a guaranteed reconstruction of an immutable original as-of source state. \`m03_ws3_price_samples_5s\` has upsert and pruning: rows originally available may later disappear or change. Even if surviving rows have \`recorded_epoch <= capture_epoch\`, present-day SQLite cannot prove complete historical availability. Do not convert this report into a production freshness gate, automatic AI qualified decision, or PAPER fill. For a future decision-quality signal, source quality must be captured **at the time of WATCH** and independently verified before promoted to eligibility. Continue owner 60m M09 capture evidence and research; M09 end-to-end PAPER, G1, genuine roles still OPEN.
