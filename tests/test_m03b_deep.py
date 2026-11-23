@@ -112,20 +112,24 @@ class M03BDeepTest(unittest.TestCase):
             self.assertEqual(result.deep["deep_examined_count"],2)
             self.assertEqual(app.journal.count(),1)
 
-    def test_main_excludes_pepe_floki_usdt_usdc(self):
+    def test_main_excludes_only_pepe_floki_stablecoins_are_watch_candidates(self):
         from test_m03a_scanner import FakeIndodaxAll
         f=FakeIndodaxAll()
-        self.assertTrue({"pepe_idr","floki_idr","usdt_idr","usdc_idr"}.issubset(MAIN_EXCLUDED_PAIRS))
-        for p in MAIN_EXCLUDED_PAIRS:
+        self.assertEqual(MAIN_EXCLUDED_PAIRS,
+                         frozenset({"pepe_idr", "floki_idr"}))
+        for p in ("pepe_idr", "floki_idr", "usdt_idr", "usdc_idr"):
             f.pairs.append({"ticker_id":p,"id":p.replace("_",""),
                             "symbol":p.replace("_","").upper(),"base_currency":"idr"})
             f.tickers[p]={"server_time":f.now-1,"buy":"100","sell":"101",
                           "last":"100","low":"99","high":"101","vol_idr":"9999999999999"}
         rank=DailyPairScanner(f.client()).scan()
         self.assertEqual(rank.all_idr_pairs,49)
-        self.assertEqual(rank.excluded_pairs,4)
-        self.assertEqual(rank.watchlist[0].pair,"m000_idr")
-        self.assertTrue(all(x.pair not in MAIN_EXCLUDED_PAIRS for x in rank.shortlist))
+        self.assertEqual(rank.excluded_pairs,2)
+        self.assertEqual([x.pair for x in rank.watchlist],
+                         ["usdc_idr", "usdt_idr"])
+        self.assertFalse(rank.g1_verified)
+        self.assertTrue(all(x.pair not in MAIN_EXCLUDED_PAIRS
+                            for x in rank.shortlist))
 
 
 if __name__=="__main__":
