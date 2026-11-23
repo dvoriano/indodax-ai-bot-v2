@@ -136,3 +136,16 @@ Operator melakukan read-only SQL langsung pada `m03_ws3_price_samples_5s`, memba
 | DRX/IDR | 11:52:03 | 11:53:12 | 11:53:13 | +69 dtk | 1 dtk | 23.241046 |
 
 **Interpretasi terbatas:** tiga sampel terdekat diterima lokal cepat (lag masing-masing 1 detik), tetapi `exchange_epoch` tidak jatuh pada jendela evaluator resmi `[target_epoch, target_epoch + 30s]`; maka kedua outcome 15m tetap `UNKNOWN_NO_LOCAL_PRICE_NEAR_HORIZON`. Bukti ini menunjukkan *sampling-gap di sekitar target*, bukan membuktikan latensi provider buruk, WebSocket terputus, collector rusak, atau market tanpa transaksi. Jangan mengubah toleransi 30 detik secara otomatis, menyisipkan harga di luar jendela sebagai return official, atau merekonstruksi keputusan AI. Selanjutnya nilai cakupan 30/60m setelah benar-benar matang dari capture yang sama, lalu jika gap berulang audit log/index collector **READ ONLY** secara terpisah. Semua transaksi, PAPER fill, G1, dan tiga role tetap tidak diotorisasi.
+
+## Bukti VPS kepadatan indeks harga M03 WS3, 20 menit TMG/DRX (23 November 2026)
+
+Operator query read-only langsung pada tabel original `m03_ws3_price_samples_5s` di source DB original, jendela 1.200 detik sekitar target horizon 15m, hanya `recorded_epoch` sampai waktu query. Hasil:
+
+| Pair | Sampel lokal selama 1.200 detik | Jeda antarsampel >30 detik | Jeda antarsampel terbesar | Receipt lag maksimum sampel tersimpan |
+|---|---:|---:|---:|---:|
+| TMG/IDR | 2 | 1 dari 1 | 517 detik | 1 detik |
+| DRX/IDR | 15 | 14 dari 14 | 143 detik | 1 detik |
+
+Ini menguatkan bahwa sumber observasi harga *sparse* di jendela tersebut. Receipt lag rendah untuk **sampel yang berhasil tersimpan**, tetapi tidak membuktikan semua WS3 frames diterima, tidak membuktikan seluruh perdagangan exchange teramati, dan bukan bukti independen G1.
+
+**Verifikasi kode sumber original:** `indodax_ai_bot/m03_ws_summary_live_watch.py` membentuk `dense_price_rows` dengan kunci `(pair, exchange_epoch // 5 * 5)` **hanya dari frame `market:summary-24h` aktual** yang berisi sampel pasangan, pada callback checkpoint continuous, dan hanya saat kriteria source/turnover/freshness terpenuhi. `persist_dense_ws3_prices` menyimpan bucket yang ada (upsert atas pair+bucket), bukan membuat heartbeat/snapshot sintetis tiap 5 detik. Original persistence juga bergantung pada pengaktifan continuous + trade-index opt-in. Dengan demikian, suffix `5s` adalah **resolusi bucket**, bukan janji interval per-pair 5 detik. Jeda lokal panjang konsisten dengan sifat data ini, tetapi penyebab spesifik tiap missing frame belum dibuktikan melalui log upstream. Jangan ubah source data 30s evaluator atau fill-in candle; lanjutkan pemeriksaan jam checkpoint/service dan matang 30/60m dari capture asli, lalu ukur coverage longitudinal sebelum memutuskan apakah ada perubahan arsitektur. 3 role AI/G1/M09 PAPER BUY/SELL tetap OPEN dan `NO/NO/DRY_RUN`.
