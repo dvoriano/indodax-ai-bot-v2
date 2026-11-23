@@ -208,7 +208,7 @@ Dua original M04 WATCH yang dicapture sebelumnya: **TMG/IDR rank 39 dari 53, 6 b
 
 ## M04 retained local price source audit at capture time (23 November 2026)
 
-Owner original VPS ran an explicit read-only cutoff at natural M04 capture epoch **1795408713** on the 5s-bucket local index, with both \`exchange_epoch <= cutoff\` and \`recorded_epoch <= cutoff\`. Operator output:
+Owner original VPS ran an explicit read-only cutoff at natural M04 capture epoch **1795408713** on the 5s-bucket local index, with both `exchange_epoch <= cutoff` and `recorded_epoch <= cutoff`. Operator output:
 
 | Measure | TMG/IDR | DRX/IDR |
 |---|---:|---:|
@@ -219,6 +219,6 @@ Owner original VPS ran an explicit read-only cutoff at natural M04 capture epoch
 
 The 5m cohort of DRX is notably sparser than its 15m cohort; TMG's 15m rows all belong to its last 5m. These findings concern the *retained locally indexed data*, not exchange activity, real liquidity, complete trade tape, book depth, account permissions, or predictive signal win rate. A 5m largest inter-sample gap does not include the gap from the last sample to capture (separately reported as age).
 
-On a separate branch, a nonlive diagnostic \`scripts/m04_ws3_precapture_coverage_audit_readonly.py\` derives 5/15m retained source ages and counts for the **existing** original M04 captured WATCH and source digest, without modifying ranking or M04-3role inputs and with explicit receipt/exchange cutoff. Added tests assert delayed receipts and future exchange timestamps cannot leak into the report, and that no PAPER/real fill is created.
+On a separate branch, a nonlive diagnostic `scripts/m04_ws3_precapture_coverage_audit_readonly.py` derives 5/15m retained source ages and counts for the **existing** original M04 captured WATCH and source digest, without modifying ranking or M04-3role inputs and with explicit receipt/exchange cutoff. Added tests assert delayed receipts and future exchange timestamps cannot leak into the report, and that no PAPER/real fill is created.
 
-**Important caveat:** this report is retrospective, not a guaranteed reconstruction of an immutable original as-of source state. \`m03_ws3_price_samples_5s\` has upsert and pruning: rows originally available may later disappear or change. Even if surviving rows have \`recorded_epoch <= capture_epoch\`, present-day SQLite cannot prove complete historical availability. Do not convert this report into a production freshness gate, automatic AI qualified decision, or PAPER fill. For a future decision-quality signal, source quality must be captured **at the time of WATCH** and independently verified before promoted to eligibility. Continue owner 60m M09 capture evidence and research; M09 end-to-end PAPER, G1, genuine roles still OPEN.
+**Important caveat:** this report is retrospective, not a guaranteed reconstruction of an immutable original as-of source state. `m03_ws3_price_samples_5s` has upsert and pruning: rows originally available may later disappear or change. Even if surviving rows have `recorded_epoch <= capture_epoch`, present-day SQLite cannot prove complete historical availability. Do not convert this report into a production freshness gate, automatic AI qualified decision, or PAPER fill. For a future decision-quality signal, source quality must be captured **at the time of WATCH** and independently verified before promoted to eligibility. Continue owner 60m M09 capture evidence and research; M09 end-to-end PAPER, G1, genuine roles still OPEN.
