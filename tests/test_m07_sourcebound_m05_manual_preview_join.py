@@ -120,6 +120,33 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM m08_position_settled_idr_events",
             ).fetchone()[0], 0)
 
+    def test_original_m03_scanner_includes_eligible_stablecoin_idr_pair(self):
+        from unittest.mock import MagicMock
+        from indodax_ai_bot.scanner import DailyPairScanner
+        market = MagicMock()
+        pairs = ("btc_idr", "usdt_idr", "usdc_idr",
+                 "floki_idr", "pepe_idr")
+        market.idr_pairs.return_value = pairs
+        market._clock.return_value = NOW
+        market.public_maintenance_pairs = frozenset()
+        market.public_pair_rule_fields = {}
+        ticker = lambda pair: {
+            "server_time": NOW,
+            "buy": "99", "sell": "100", "last": "100",
+            "vol_idr": "500000000", "high": "110", "low": "90",
+        }
+        market._get.side_effect = lambda path: (
+            {"server_time": NOW} if path == "/api/server_time"
+            else {"tickers": {pair: ticker(pair) for pair in pairs}}
+        )
+        result = DailyPairScanner(market).scan()
+        observed = {row.pair for row in result.shortlist}
+        self.assertEqual(observed, {"btc_idr", "usdt_idr", "usdc_idr"})
+        self.assertFalse(result.g1_verified)
+        self.assertEqual(result.watchlist[0].pair, "btc_idr")
+        self.assertTrue(all(row.spread_bps <= D("500")
+                            for row in result.universe))
+
     def test_current_main_idr_policy_stablecoins_reach_same_source_manual_preview(self):
         # Strict public boundary, source freshness, 2-GET account, M07
         # precision/fee/spread, and original M05 owner ledger remain required.
