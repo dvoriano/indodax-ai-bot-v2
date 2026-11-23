@@ -126,7 +126,7 @@ def audit_saved_ws3_watch_coverage_readonly(
                         WHERE pair=? AND exchange_epoch BETWEEN ? AND ?
                           AND recorded_epoch BETWEEN ? AND ?
                     """, (
-                        pair, target, target + _WINDOW_SECONDS,
+                        pair, target, min(target + _WINDOW_SECONDS, evaluation_epoch),
                         target, evaluation_epoch,
                     )).fetchone()[0]
                     nearby = db.execute("""
