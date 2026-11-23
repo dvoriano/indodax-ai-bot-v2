@@ -789,8 +789,7 @@ class DailyScalpingOrchestrator:
                                 "M07_SAME_CANDIDATE_PUBLIC_PREFLIGHT"
                             or public.get("candidate_pair") != pair
                             or public.get("observed_pair") != pair
-                            or pair[:-4].upper() in
-                                ("FLOKI", "PEPE", "USDT", "USDC")
+                            or pair in MAIN_EXCLUDED_PAIRS
                             or public.get("same_candidate_and_closed_minute") is not True
                             or public.get("public_fee_source_only") is not True
                             or public.get("per_account_fee_verified") is not False
@@ -1096,7 +1095,7 @@ class DailyScalpingOrchestrator:
         pair = public_candidate.get("candidate_pair")
         if (type(pair) is not str or pair != public_candidate.get("observed_pair")
                 or not re.fullmatch(r"[a-z0-9]{2,20}_idr", pair)
-                or pair[:-4].upper() in ("FLOKI", "PEPE", "USDT", "USDC")
+                or pair in MAIN_EXCLUDED_PAIRS
                 or account_snapshot.get("all_pair_open_orders_observed") != 0):
             return dict(blocked, status="M07_MAIN_SOURCE_PAIR_OR_ACCOUNT_MISMATCH")
         try:
