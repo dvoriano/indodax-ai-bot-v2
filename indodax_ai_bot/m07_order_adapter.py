@@ -22,7 +22,7 @@ class M07Hardlocked(RuntimeError):
 _SYMBOL = re.compile(r"[A-Z0-9]{2,20}IDR\Z")
 _CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,36}\Z")
 _ENDPOINT = "/api/v2/order"
-_FORBIDDEN_BASE = frozenset(("PEPE", "FLOKI", "USDT", "USDC"))
+_FORBIDDEN_BASE = frozenset(("PEPE", "FLOKI"))
 
 
 def _symbol(symbol: str) -> str:
