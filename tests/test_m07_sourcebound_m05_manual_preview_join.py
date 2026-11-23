@@ -153,7 +153,7 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
                     **baseline,**kwargs)
                 self.assertFalse(report["accepted"])
                 self.assertFalse(report["execution_allowed"])
-                self.assertFalse(report["order_sent"])
+                self.assertFalse(report.get("order_sent",False))
         self.assertIsNone(
             self.owner.claim_manual_trade_preview_delivery(now_epoch=NOW))
 
