@@ -149,3 +149,14 @@ Operator query read-only langsung pada tabel original `m03_ws3_price_samples_5s`
 Ini menguatkan bahwa sumber observasi harga *sparse* di jendela tersebut. Receipt lag rendah untuk **sampel yang berhasil tersimpan**, tetapi tidak membuktikan semua WS3 frames diterima, tidak membuktikan seluruh perdagangan exchange teramati, dan bukan bukti independen G1.
 
 **Verifikasi kode sumber original:** `indodax_ai_bot/m03_ws_summary_live_watch.py` membentuk `dense_price_rows` dengan kunci `(pair, exchange_epoch // 5 * 5)` **hanya dari frame `market:summary-24h` aktual** yang berisi sampel pasangan, pada callback checkpoint continuous, dan hanya saat kriteria source/turnover/freshness terpenuhi. `persist_dense_ws3_prices` menyimpan bucket yang ada (upsert atas pair+bucket), bukan membuat heartbeat/snapshot sintetis tiap 5 detik. Original persistence juga bergantung pada pengaktifan continuous + trade-index opt-in. Dengan demikian, suffix `5s` adalah **resolusi bucket**, bukan janji interval per-pair 5 detik. Jeda lokal panjang konsisten dengan sifat data ini, tetapi penyebab spesifik tiap missing frame belum dibuktikan melalui log upstream. Jangan ubah source data 30s evaluator atau fill-in candle; lanjutkan pemeriksaan jam checkpoint/service dan matang 30/60m dari capture asli, lalu ukur coverage longitudinal sebelum memutuskan apakah ada perubahan arsitektur. 3 role AI/G1/M09 PAPER BUY/SELL tetap OPEN dan `NO/NO/DRY_RUN`.
+
+## Bukti natural VPS M09 evaluasi horizon 30 menit (23 November 2026)
+
+Owner menjalankan `audit_saved_ws3_watch_coverage_readonly` dengan capture asli TMG/DRX, `LOCAL_CAPTURE_COVERAGE_RESEARCH_ONLY`, `execution_allowed=False`. Kini **6 horizon matang** (dua pair × 5/15/30 menit): **1 observed, 5 unknown; observed coverage 16,67%**. Rincian tepat dari output operator:
+
+| Pair | 5m | 15m | 30m | 60m |
+|---|---|---|---|---|
+| TMG/IDR | NO_LOCAL_PRICE_WITHIN_120S (exact 0, nearby 0) | NO_ON_TARGET_WITH_NEARBY_LOCAL_SAMPLES (exact 0, nearby 1) | NO_LOCAL_PRICE_WITHIN_120S (exact 0, nearby 0) | NOT_YET_MATURED |
+| DRX/IDR | OBSERVED_ON_TARGET_PRICE (exact 1, nearby 4), gross +0,2986359595% | NO_ON_TARGET_WITH_NEARBY_LOCAL_SAMPLES (exact 0, nearby 2) | NO_ON_TARGET_WITH_NEARBY_LOCAL_SAMPLES (exact 0, nearby 1) | NOT_YET_MATURED |
+
+Tabel ini hanya memperlihatkan **kelengkapan indeks harga lokal** dalam waktu observasi; bukan bukti harga flat, loss, profit bersih, order fill, G1, keputusan AI atau kegagalan scanner. Tidak melakukan extrapolation/interpolation dari sampel nearby. Setelah target 60m+30 detik (sekitar 12:38 WIB), ulangi audit pada **capture sama**. Evaluasi masalah collector memerlukan log asal/checkpoint secara terpisah bila gaps berulang; jangan mengubah service tanpa pembuktian. Paket 5 PAPER/G1/role decision tetap OPEN.
