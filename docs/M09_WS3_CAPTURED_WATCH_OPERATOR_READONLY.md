@@ -105,3 +105,39 @@ conditions exist.
 These are **observational** results only. No buy, provider response, PAPER
 fill, net ROI or G1 proof is recorded. Do not publish private capture JSON or
 claim all horizon coverage from this evidence.
+
+## M04 retained pre-capture price coverage (separate diagnostic, READ ONLY)
+
+The first natural TMG/DRX 23 November 2026 capture is **already saved**.
+For *that same* private 0600 original WATCH, the optional research-only tool
+measures **retained** local prices with both \`exchange_epoch <= captured_epoch\`
+and \`recorded_epoch <= captured_epoch\`. It reports 5m/15m counts,
+latest observed age, largest observed *inter-sample* gap, and worst receipt
+lag. All are source-availability diagnostics, not evidence of liquidity or
+MARKET/RISK/STRATEGY qualification.
+
+~~~bash
+cd "$HOME/indodax-ai-bot-v2"
+export INDODAX_TRADING_ENABLED=NO
+export INDODAX_ALLOW_LIVE_EXECUTION=NO
+export INDODAX_EXECUTION_MODE=DRY_RUN
+
+.venv/bin/python -B -m scripts.m04_ws3_precapture_coverage_audit_readonly \
+  --source-db "$PWD/runtime/decisions.sqlite3" \
+  --audit-capture \
+  "$PWD/runtime/m09_ws3_watch_capture_VlyEYT38.json"
+~~~
+
+**Critical retrospective limitation:** existing local price index uses SQLite
+upsert and pruning. Its current rows with recorded timestamps <= capture
+are NOT cryptographic, immutable proof of the complete SQLite state at
+the earlier historical capture. An overwritten historical row could no
+longer be present. Therefore this is correctly labeled
+\`RETAINED_PRECAPTURE_SOURCE_RESEARCH_ONLY\`, not independently verified
+*as-of* coverage. Future at-WATCH evidence needs to be captured
+contemporaneously if it will ever be used for a real decision. The
+existing M04 WATCH selection, digests, and 3 uncalled role inputs are
+preserved, not reselected. No coverage threshold or trading gate is
+created; zero rows means no retained rows, **not** zero price movement.
+Do not call this an AI win-rate, fill model, G1 issuer, execution
+eligibility check, or complete upstream WS3 coverage.
