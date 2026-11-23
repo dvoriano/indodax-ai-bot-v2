@@ -497,5 +497,181 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertEqual(denied["role_decisions_observed"], 0)
 
 
+    def test_public_closed_1m_candle_reference_keeps_original_ws3_unknown(self):
+        from scripts.m09_indodax_public_candle_reference_readonly import (
+            compare_m09_with_indodax_candles_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        def feed(pair, *, from_epoch, to_epoch):
+            self.assertEqual(pair, "drx_idr")
+            self.assertLessEqual(from_epoch, to_epoch)
+            return [
+                {"Time": (OBS + minutes*60)//60*60,
+                 "Open": "101", "High": "105", "Low": "100",
+                 "Close": "103.02", "Volume": "150"}
+                for minutes in (5, 15, 30, 60)
+            ]
+        with patch(
+            "scripts.m09_ws3_watch_price_history_readonly."
+            "inspect_original_ws3_three_role_handoff_readonly",
+            side_effect=AssertionError("NO_RECONSTRUCTED_WATCH"),
+        ) as rescan:
+            result = compare_m09_with_indodax_candles_readonly(
+                capture_file=saved, source_db=self.ws, evaluation_epoch=OBS+3700,
+                fetch_public_ohlcv=True, fetcher=feed)
+        rescan.assert_not_called()
+        self.assertEqual(result["status"],
+                         "PUBLIC_1M_CANDLE_REFERENCE_RESEARCH_ONLY")
+        self.assertEqual(result["original_ws3_unknown_horizons"], 4)
+        self.assertEqual(result["candle_references_observed"], 4)
+        self.assertFalse(result["original_ws3_results_preserved"] is False)
+        self.assertFalse(result["historical_candle_immutability_verified"])
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["paper_fill_created"])
+        self.assertEqual(result["provider_calls"], 0)
+        pair = result["observations"][0]
+        self.assertEqual(pair["api_symbol"], "DRXIDR")
+        for h in ("5m", "15m", "30m", "60m"):
+            row = pair["horizons"][h]
+            self.assertEqual(row["ws3_original_coverage_class"],
+                             "NO_LOCAL_PRICE_WITHIN_120S")
+            self.assertEqual(row["candle_status"],
+                             "CLOSED_1M_CANDLE_REFERENCE_OBSERVED")
+            self.assertEqual(
+                D(row["candle_close_gross_price_change_from_original_ws3_baseline_percent"]),
+                D("2"),
+            )
+            self.assertEqual(row["candle_minute_close_epoch"],
+                             row["candle_minute_open_epoch"]+60)
+            self.assertFalse(row["candle_is_quote_at_exact_target_second"])
+        with sqlite3.connect(self.paper) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m09_paper_simulated_buys").fetchone()[0], 0)
+
+    def test_public_candle_reference_one_minute_must_close_before_use(self):
+        from scripts.m09_indodax_public_candle_reference_readonly import (
+            compare_m09_with_indodax_candles_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        minute = (OBS+300)//60*60
+        def feed(pair, *, from_epoch, to_epoch):
+            return [{"Time": minute, "Open": "100", "High": "110",
+                     "Low": "99", "Close": "108", "Volume": "10"}]
+        before = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=minute+59, fetch_public_ohlcv=True, fetcher=feed)
+        self.assertEqual(before["observations"][0]["horizons"]["5m"]
+                         ["candle_status"], "CANDLE_MINUTE_NOT_YET_CLOSED")
+        self.assertEqual(before["candle_references_observed"], 0)
+        after = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=minute+60, fetch_public_ohlcv=True, fetcher=feed)
+        self.assertEqual(after["observations"][0]["horizons"]["5m"]
+                         ["candle_status"], "CLOSED_1M_CANDLE_REFERENCE_OBSERVED")
+        self.assertEqual(after["candle_references_observed"], 1)
+        self.assertFalse(after["execution_allowed"])
+
+    def test_public_zero_volume_and_missing_are_not_confirmed_trade_price(self):
+        from scripts.m09_indodax_public_candle_reference_readonly import (
+            compare_m09_with_indodax_candles_readonly,
+        )
+        saved = self.save_real_capture(pair="tmg_idr")
+        minute = (OBS+300)//60*60
+        def feed(pair, *, from_epoch, to_epoch):
+            return [{"Time": minute, "Open": "101", "High": "101",
+                     "Low": "101", "Close": "101", "Volume": "0"}]
+        result = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=OBS+3700, fetch_public_ohlcv=True, fetcher=feed)
+        self.assertEqual(result["candle_references_observed"], 0)
+        self.assertEqual(result["observations"][0]["horizons"]["5m"]
+                         ["candle_status"], "CANDLE_ZERO_VOLUME_UNVERIFIED")
+        self.assertEqual(result["observations"][0]["horizons"]["15m"]
+                         ["candle_status"], "CANDLE_MINUTE_NOT_RETURNED")
+
+    def test_public_malformed_candle_duplicate_and_network_failure_are_unknown(self):
+        from scripts.m09_indodax_public_candle_reference_readonly import (
+            compare_m09_with_indodax_candles_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        minute = (OBS+300)//60*60
+        candle = {"Time": minute, "Open": "101", "High": "101",
+                  "Low": "101", "Close": "101", "Volume": "1"}
+        def duplicate(pair, *, from_epoch, to_epoch):
+            return [candle, dict(candle)]
+        bad = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=OBS+3700, fetch_public_ohlcv=True, fetcher=duplicate)
+        self.assertEqual(bad["observations"][0]["fetch_status"],
+                         "PUBLIC_CANDLES_UNAVAILABLE_OR_INVALID")
+        self.assertEqual(bad["candle_references_observed"], 0)
+        def unavailable(pair, *, from_epoch, to_epoch):
+            raise OSError("AUTHORIZATION_DENIED")
+        down = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=OBS+3700, fetch_public_ohlcv=True, fetcher=unavailable)
+        self.assertEqual(down["observations"][0]["fetch_status"],
+                         "PUBLIC_CANDLES_UNAVAILABLE_OR_INVALID")
+        self.assertFalse(down["execution_allowed"])
+
+    def test_public_candle_http_is_fixed_get_and_invalid_capture_never_fetches(self):
+        from scripts.m09_indodax_public_candle_reference_readonly import (
+            compare_m09_with_indodax_candles_readonly,
+            fetch_indodax_public_1m_candles,
+        )
+        from urllib.parse import urlsplit, parse_qs
+        saved = self.save_real_capture(pair="drx_idr")
+        minute = (OBS+300)//60*60
+        candle = {"Time": minute, "Open": "101", "High": "101",
+                  "Low": "101", "Close": "101", "Volume": "1"}
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *_): return None
+            def read(self, size=-1):
+                self_size = size
+                if self_size <= 0:
+                    raise AssertionError("BOUNDED_RESPONSE_REQUIRED")
+                return json.dumps([candle]).encode()
+        def fake_urlopen(request, *, timeout):
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(timeout, 10)
+            u = urlsplit(request.full_url)
+            self.assertEqual(u.scheme, "https")
+            self.assertEqual(u.hostname, "indodax.com")
+            self.assertEqual(u.path, "/tradingview/history_v2")
+            params = parse_qs(u.query)
+            self.assertEqual(params["symbol"], ["DRXIDR"])
+            self.assertEqual(params["tf"], ["1"])
+            self.assertTrue("Key" not in request.headers)
+            return Response()
+        with patch(
+            "scripts.m09_indodax_public_candle_reference_readonly.urlopen",
+            side_effect=fake_urlopen
+        ) as wire:
+            payload = fetch_indodax_public_1m_candles(
+                "drx_idr", from_epoch=minute, to_epoch=minute)
+        self.assertEqual(len(payload), 1)
+        wire.assert_called_once()
+
+        saved.chmod(0o644)
+        def must_not_fetch(*args, **kwargs):
+            raise AssertionError("NO_NETWORK_FOR_INVALID_CAPTURE")
+        denied = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=OBS+3700,
+            fetch_public_ohlcv=True, fetcher=must_not_fetch)
+        self.assertTrue(denied["status"].startswith("ORIGINAL_WS3_"))
+        self.assertEqual(denied["candidate_count"], 0)
+        self.assertFalse(denied["execution_allowed"])
+        no_optin = compare_m09_with_indodax_candles_readonly(
+            capture_file=saved, source_db=self.ws,
+            evaluation_epoch=OBS+3700, fetch_public_ohlcv=False,
+            fetcher=must_not_fetch)
+        self.assertEqual(no_optin["status"],
+                         "EXPLICIT_PUBLIC_CANDLE_FETCH_OPT_IN_REQUIRED")
+
+
+
 if __name__=="__main__":
     unittest.main()
