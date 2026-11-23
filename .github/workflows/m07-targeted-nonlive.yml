@@ -57,6 +57,7 @@ on:
       - "tests/test_m09_03_original_recovery_shadow.py"
       - "tests/test_m09_04_original_virtual_paper.py"
       - "tests/test_m09_ws3_watch_price_outcomes_readonly.py"
+      - "scripts/m09_ws3_watch_price_history_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   push:
     branches: [main]
@@ -115,6 +116,7 @@ on:
       - "tests/test_m09_03_original_recovery_shadow.py"
       - "tests/test_m09_04_original_virtual_paper.py"
       - "tests/test_m09_ws3_watch_price_outcomes_readonly.py"
+      - "scripts/m09_ws3_watch_price_history_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
   workflow_dispatch:
 
