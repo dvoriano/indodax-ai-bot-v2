@@ -233,9 +233,8 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
             with self.subTest(extra=extra):
                 out = self.queue(
                     client="m07stablecoinbad01",
-                    public_candidate=public,
                     funding=current,
-                    **extra,
+                    **{"public_candidate": public, **extra},
                 )
                 self.assertFalse(out["owner_card_queued"])
                 self.assertFalse(out["execution_allowed"])
