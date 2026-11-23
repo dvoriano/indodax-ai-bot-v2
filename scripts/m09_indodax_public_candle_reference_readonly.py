@@ -176,6 +176,8 @@ def compare_m09_with_indodax_candles_readonly(
         "original_ws3_unknown_horizons": original["unknown_matured_horizons"],
         "original_ws3_coverage_percent": original["observed_coverage_percent"],
         "candle_references_observed": 0,
+        "public_rest_gets_attempted": 0,
+        "public_rest_gets_validated": 0,
         "observations": [],
         "paper_fill_created": False,
         "paper_orders_created": 0,
@@ -205,10 +207,12 @@ def compare_m09_with_indodax_candles_readonly(
         fetch_status = "PUBLIC_CANDLES_NOT_REQUESTED_YET"
         candles = {}
         if to_epoch >= from_epoch:
+            result["public_rest_gets_attempted"] += 1
             try:
                 payload = request(pair, from_epoch=from_epoch, to_epoch=to_epoch)
                 candles = _parse_candles(payload, from_epoch=from_epoch,
                                          to_epoch=to_epoch)
+                result["public_rest_gets_validated"] += 1
                 fetch_status = "PUBLIC_CANDLES_RETRIEVED_AND_VALIDATED"
             except (HTTPError, URLError, OSError, ValueError, TypeError,
                     TimeoutError, UnicodeError, json.JSONDecodeError):
