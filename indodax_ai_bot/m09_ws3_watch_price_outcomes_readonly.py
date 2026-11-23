@@ -121,10 +121,10 @@ def inspect_m09_ws3_watch_price_outcomes_readonly(
                         found=db.execute("""SELECT exchange_epoch,last_idr,
                             recorded_epoch FROM m03_ws3_price_samples_5s
                             WHERE pair=? AND exchange_epoch BETWEEN ? AND ?
-                            AND recorded_epoch<=? ORDER BY exchange_epoch ASC
-                            LIMIT 1""",(
+                            AND recorded_epoch BETWEEN ? AND ?
+                            ORDER BY exchange_epoch ASC LIMIT 1""",(
                             pair,horizon,min(evaluation_epoch,horizon+_MAX_DELAY_SECONDS),
-                            evaluation_epoch,
+                            horizon,evaluation_epoch,
                         )).fetchone()
                         if found:
                             timestamp,raw,receipt=found
