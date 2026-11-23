@@ -50,6 +50,9 @@ _MISSING_FACTS = (
     "independent_g1_issuer_receipt",
 )
 _ROLE_DISPATCH = "NOT_CALLED_G1_UNVERIFIED_AND_OWNER_PAID_AI_GO_ABSENT"
+# Original M03 WS3 trade-channel selection uses >=400m rolling 24h IDR.
+# Keep the M05 ticker WATCH floor untouched; match only M04 WS3 handoff.
+_WS3_TRADE_CHANNEL_TURNOVER_FLOOR_IDR = Decimal("400000000")
 
 
 def _blocked(reason: str) -> dict[str, Any]:
@@ -334,6 +337,7 @@ def prepare_ws3_three_role_watch_handoff_readonly(
         return _blocked("M04_WS3_UNTRUSTED_SOURCE")
     validated = []
     seen = set()
+    below_trade_channel_floor = 0
     for row in snapshot["candidates"]:
         try:
             pair, observed, reference = (
@@ -361,6 +365,13 @@ def prepare_ws3_three_role_watch_handoff_readonly(
             turnover = _positive_decimal(row["volume_24h_idr"])
             if turnover < MIN_TURNOVER_IDR:
                 raise ValueError("M04_WS3_LOW_TURNOVER")
+            # A 150m-400m M05 ticker WATCH is valid public price data,
+            # but not eligible for M03's >=400m indexed trade channel.
+            # Skip just this M04 handoff candidate, not the full WATCH.
+            if turnover < _WS3_TRADE_CHANNEL_TURNOVER_FLOOR_IDR:
+                below_trade_channel_floor += 1
+                seen.add(pair)
+                continue
             rise = _positive_decimal(row["observed_rise_pct"])
             if abs((after / before - 1) * 100 - rise) > Decimal("0.02"):
                 raise ValueError("M04_WS3_PRICE_CHANGED")
@@ -513,6 +524,12 @@ def prepare_ws3_three_role_watch_handoff_readonly(
         "NOT_PREDICTED_ROI_OR_FINAL_AI"
     )
     result["real_trade_book_data_can_be_partial"] = True
+    result["m04_ws3_handoff_min_rolling_24h_idr"] = str(
+        _WS3_TRADE_CHANNEL_TURNOVER_FLOOR_IDR)
+    result["source_watches_below_400m_excluded_from_m04_handoff"] = (
+        below_trade_channel_floor)
+    result["source_watch_price_observation_is_not_deleted"] = True
+    result["m03_trade_channel_allocator_unchanged"] = True
     return result
 
 
