@@ -326,3 +326,24 @@ Built a separate operator-only script `scripts/m04_ws3_watch_channel_coverage_re
 **Test and acceptance boundary:** mocked/fixture regressions for one/two natural WATCH candidates, requested vs not listed vs no checkpoint, corrupt original 0600 capture, delayed/future trade samples excluded, and conflicting checkpoint timestamps failing closed. No automated runtime hook, HTTP request, subscription, Telegram, paid AI, database mutation, or order; original live M03/WS/BTC/M05 services untouched. **CI and owner VPS evidence not yet accepted** until their explicit results are recorded. Formal per-pair ACK, independent G1 15m+1h completeness, genuine three-role AI and M09 virtual PAPER remain OPEN. Historical OHLCV 8/8 price-reference availability remains VALID and separate.
 
 Operator usage: [M09_WS3_CAPTURED_WATCH_OPERATOR_READONLY.md](M09_WS3_CAPTURED_WATCH_OPERATOR_READONLY.md).
+
+
+## M04 WATCH channel provenance, owner VPS acceptance (23 Nov 2026)
+
+Original owner synced original V2 `main` to commit `6ed88d86b64146c370324051a62320a68ddc6125` and executed targeted original M09/M04 regression: **59 tests passed in 5.389s**. New operator-only module `scripts/m04_ws3_watch_channel_coverage_readonly.py` reported `M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY`, `SAVED_CAPTURE_RETROSPECTIVE`, **3 M03 checkpoints**, `JOURNAL_READ_OK`, `PAIR_ACK_VERIFIED=False`, `G1_VERIFIED=False`, `EXECUTION_ALLOWED=False` for original TMG/DRX capture.
+
+| Evidence at/before original WATCH capture | TMG/IDR | DRX/IDR |
+|---|---:|---:|
+| Latest recent M03 request-membership checkpoint | LISTED | NOT LISTED |
+| Local retained trade rows 1m | **1** | **0** |
+| Local retained trade rows 15m | **4** | **0** |
+| Local retained trade rows 60m | **23** | **0** |
+| Local 60m trade publication receipts | **14** | **0** |
+| Recorded 60m stream discontinuities | **0** | **0** |
+| Pair-specific ACK in available checkpoint | UNAVAILABLE | UNAVAILABLE |
+
+**Interpretation and cutoff:** this query is anchored at the *original capture time*, not at future 5/15/30/60m horizon times. Thus TMG **23 earlier local trades** and **14 later local trades** reported in preceding separate audit are from distinct time windows, not contradictory counts. `indexed_trade_pairs` means a requested subscription appeared in the checkpoint, **not** verified pair-specific ACK or full tape; retrospective read remains from mutable/prunable local source, not immutable historical authenticity. TMG has pre-WATCH source-trade evidence. DRX has no trade-channel evidence in these snapshots, but its public Indodax candle price reference was independently available. Zero recorded discontinuities for DRX does not establish continuity of a channel it did not observe.
+
+**Accepted:** operator diagnostic code+tests, M07/M01 CI and 59 focused VPS tests. No source/ranking/slot change made to original WS services; 8/8 official 1m OHLCV price references remain valid in the earlier two-candidate cohort; M09 PAPER/real 3-role AI/G1 issuer remain OPEN.
+
+**Next experiment:** gather several **new, genuine current M04 WATCH** captures (operator invoked; do not fabricate historical M04 selection) and use bounded read-only log/reference diagnostics to determine whether absent trade index arises from source freshness, position outside original ranked 40 trade-channel list, channel rejection, or ACK issue. Current checkpoint does not log pair-specific historical rank or ACK, so those causes cannot be assigned retrospectively from this report alone. Before proposing an M03 allocator revision, establish repeated misses vs representative WATCHs; if further instrumentation is ever designed, keep it nonlive and separate until owner approval and evidence-backed regressions.
