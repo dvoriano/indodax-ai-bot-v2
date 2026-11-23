@@ -6,6 +6,7 @@ Telegram, real order, real fill, or spendable IDR.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from decimal import Decimal as D
 from pathlib import Path
 import sqlite3
@@ -21,6 +22,10 @@ from indodax_ai_bot.m04_radar_three_role_handoff_readonly import (
 )
 from indodax_ai_bot.m09_ws3_watch_price_outcomes_readonly import (
     inspect_m09_ws3_watch_price_outcomes_readonly,
+)
+from scripts.m09_ws3_watch_price_history_readonly import (
+    capture_original_ws3_watch_readonly,
+    evaluate_saved_ws3_watch_readonly,
 )
 
 NOW=1794330000
@@ -207,6 +212,99 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
                             "buy_qty":D("1"),"buy_price_idr":D("10000"),
                             "buy_all_in_fee_idr":D("20"),"buy_epoch":OBS,
                         })
+
+
+    def save_real_capture(self, *, pair="humanity_idr"):
+        self.seed(pair)
+        captured=capture_original_ws3_watch_readonly(
+            source_db=self.ws,capture_epoch=NOW)
+        self.assertEqual(captured["status"],"LOCAL_UNCALLED_WATCH_CAPTURED")
+        path=self.root/"captured-watch.json"
+        path.write_text(json.dumps(captured),encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def test_one_shot_capture_to_observed_horizon_no_paper_or_model(self):
+        saved=self.save_real_capture()
+        self.add_price("humanity_idr",OBS+300+5,"103.02")
+        # A later look at the *same* stored original packet, not replayed
+        # with future prices during a fabricated historical M04 selection.
+        with patch(
+            "scripts.m09_ws3_watch_price_history_readonly."
+            "inspect_original_ws3_three_role_handoff_readonly",
+            side_effect=AssertionError("NO_HISTORICAL_M04_RECONSTRUCTION")
+        ) as recapture:
+            observed=evaluate_saved_ws3_watch_readonly(
+                capture_file=saved,source_db=self.ws,
+                evaluation_epoch=OBS+306)
+        recapture.assert_not_called()
+        self.assertEqual(observed["status"],
+                         "LOCAL_CAPTURED_WATCH_PRICE_RESEARCH_ONLY")
+        price=observed["observations"][0]["observed_outcomes"]
+        self.assertEqual(price["5m"]["status"],
+                         "OBSERVED_LOCAL_GROSS_PRICE_CHANGE_ONLY")
+        self.assertEqual(D(price["5m"]["observed_gross_price_return_percent"]),D("2"))
+        self.assertEqual(price["15m"]["status"],"NOT_YET_MATURED")
+        self.assertFalse(observed["net_profit_or_fills_inferred"])
+        self.assertFalse(observed["execution_allowed"])
+        with sqlite3.connect(self.paper) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m09_paper_simulated_buys").fetchone()[0],0)
+
+    def test_capture_evaluation_unknown_for_late_and_missing_prices(self):
+        saved=self.save_real_capture(pair="ace_idr")
+        self.add_price("ace_idr",OBS+300+35,"120")
+        result=evaluate_saved_ws3_watch_readonly(
+            capture_file=saved,source_db=self.ws,
+            evaluation_epoch=OBS+300+50)
+        self.assertEqual(result["status"],
+                         "LOCAL_CAPTURED_WATCH_PRICE_RESEARCH_ONLY")
+        self.assertEqual(result["observations"][0]["observed_outcomes"]["5m"]["status"],
+                         "UNKNOWN_NO_LOCAL_PRICE_NEAR_HORIZON")
+        self.assertFalse(result["paper_fill_created"])
+
+    def test_capture_privacy_clock_and_tamper_fail_closed(self):
+        saved=self.save_real_capture(pair="vine_idr")
+        original=json.loads(saved.read_text())
+        tests=("mode","source","clock","digest","role","future","duplicate")
+        for how in tests:
+            with self.subTest(how=how):
+                data=deepcopy(original)
+                if how=="source":
+                    data["source_db_path"]="/unrelated/source.sqlite3"
+                elif how=="clock":
+                    data["captured_epoch"]=OBS-500
+                elif how=="future":
+                    data["captured_epoch"]=OBS+350
+                elif how=="digest":
+                    data["handoff"]["candidates"][0]["evidence_digest_sha256"]="0"*64
+                elif how=="role":
+                    data["handoff"]["candidates"][0]["role_slots"][0]["model_output"]={"BUY":True}
+                elif how=="duplicate":
+                    saved.write_text('{"stage":"a","stage":"b"}')
+                if how!="duplicate":
+                    saved.write_text(json.dumps(data))
+                saved.chmod(0o644 if how=="mode" else 0o600)
+                result=evaluate_saved_ws3_watch_readonly(
+                    capture_file=saved,source_db=self.ws,
+                    evaluation_epoch=OBS+301)
+                self.assertNotEqual(result["status"],
+                                    "LOCAL_CAPTURED_WATCH_PRICE_RESEARCH_ONLY")
+                self.assertFalse(result["execution_allowed"])
+        saved.write_text(json.dumps(original))
+        saved.chmod(0o600)
+        linked=self.root/"capture-link.json"
+        linked.symlink_to(saved)
+        result=evaluate_saved_ws3_watch_readonly(
+            capture_file=linked,source_db=self.ws,
+            evaluation_epoch=OBS+301)
+        self.assertEqual(result["status"],"CAPTURE_FILE_UNTRUSTED")
+
+    def test_no_watch_cannot_be_captured_as_historical_fact(self):
+        result=capture_original_ws3_watch_readonly(
+            source_db=self.ws,capture_epoch=NOW)
+        self.assertEqual(result["status"],"NO_ELIGIBLE_UNCALLED_WATCH")
+        self.assertFalse(result["execution_allowed"])
 
 
 if __name__=="__main__":
