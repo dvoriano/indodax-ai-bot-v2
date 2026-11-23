@@ -259,3 +259,18 @@ An isolated diagnostic patch reports zero-volume OHLC **Close reference** in a s
 **Permintaan owner:** data harga candle INDODAX yang tersedia jangan ditampilkan sebagai "UNKNOWN" global. Paket ini menambahkan `price_reference_status=PRICE_REFERENCE_AVAILABLE` dan harga close + perubahan bruto referensi candle target-minute **termasuk volume=0**, dengan agregat `price_reference_available_horizons`, `price_reference_unknown_horizons`, `price_reference_pending_horizons`, dan persentase cakupan khusus harga referensi. Tidak ada close valid jika candle belum tutup / respons tidak ada / OHLCV rusak, dan tidak mengambil nilai dari sumber lain secara spekulatif.
 
 **Klarifikasi sumber:** untuk natural TMG/DRX delapan horizon, respons API Indodax asli mempunyai 8 candle valid (1 volume positif, 7 volume nol). Maka penelitian harga referensi historis diharapkan **8/8 available, 0/8 unknown** setelah kode baru diuji pada sumber sama. Hal ini tetap **bukan** 8/8 harga persis detik horizon atau 8/8 transaksi. Audit WS3 sebelumnya **1/8 observed, 7/8 UNKNOWN** tetap sah sebagai pengukuran granularitas WS3 saja. Jangan abaikan perbedaan waktu close candle, kemungkinan zero-volume carry-forward, keterlambatan data, spread dan slippage. PAPER/G1/role AI/LIVE tetap BLOCKED. Validasi VPS atas agregat baru masih diperlukan.
+
+## VPS acceptance 23 November 2026: Indodax 1m candle reference 8/8 tersedia, WS3 tetap 1/8
+
+Original operator VPS melakukan fast-forward `main` hingga commit **`4a5533387d9b4094edeab0aade9160ee39aa2342`**. Tiga test suite targeted (M09 original WATCH outcomes, M09 virtual PAPER nonlive, M04 indexed observation) **54/54 PASS**, tanpa mengubah service. `compare_m09_with_indodax_candles_readonly` di original private capture `m09_ws3_watch_capture_VlyEYT38.json` mengembalikan `PUBLIC_1M_CANDLE_REFERENCE_RESEARCH_ONLY`, **2 kandidat**, dan dua `PUBLIC_CANDLES_RETRIEVED_AND_VALIDATED`.
+
+**Output hasil riil (persentase bruto Close candle vs baseline original WATCH; bukan fill/ROI bersih):**
+
+| Pair | 5m | 15m | 30m | 60m |
+|---|---|---|---|---|
+| TMG/IDR (baseline 14) | Close 14; 0%; volume 0 | Close 14; 0%; volume 0 | Close 13; −7.142857%; volume 0 | Close 14; 0%; volume 0 |
+| DRX/IDR (baseline 23.576866) | Close 23.647275; +0.298636%; volume 25372 | Close 23.474316; −0.434960%; volume 0 | Close 23.238483; −1.435233%; volume 0 | Close 23.42384; −0.649051%; volume 0 |
+
+**Final acceptance per-source:** `PRICE_AVAILABLE=8`, `PRICE_UNKNOWN=0`, `PRICE_COVERAGE%=100.0`, `ZERO_VOLUME_CANDLES=7`, `WS3_ORIGINAL_UNKNOWN=7`, `EXECUTION_ALLOWED=False`. Ini **PASS untuk ketersediaan OHLCV harga referensi historis** pada cohort tunggal, *bukan* 100% granularitas harga tepat detik horizon dan *bukan* 100% trade-tape/fill coverage. WS3 original tetap **1/8 on-target, 7/8 UNKNOWN**, karena pertanyaan WS3 berbeda. Zero-volume candle yang memiliki Close berubah **tidak otomatis membuktikan transaksi di menit tersebut**, demikian pula tidak membuktikan sumber pasti false. Perlu cek kualitas candle terhadap trade tape timestamped per menit dan status coverage independen G1. Jangan memakai nilai Close zero-volume untuk keputusan BUY/SELL, PAPER fill, atau menghitung profit bersih.
+
+**NEXT belum selesai:** inspeksi jumlah trade-tape yang *tersimpan lokal* di target minute masing-masing pair, dengan penanda cakupan G1 yang masih unverified, serta evaluasi multi-cohort. Data trade kosong di lokal tidak membuktikan tidak ada trade exchange, dan ketidaksesuaian volume sebaiknya diuji terhadap dokumentasi satuan volume serta kelengkapan sumber sebelum menuduh API salah. Original BTC/M03/M05 services untouched, no paid AI/order.
