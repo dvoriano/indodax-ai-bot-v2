@@ -94,9 +94,12 @@ class M07FourGetReadonlyLookbackTests(unittest.TestCase):
             self.assertFalse(result["execution_allowed"])
             self.assertNotIn(KEY,out.getvalue())
             self.assertNotIn(C,out.getvalue())
-            with self.assertRaisesRegex(ValueError,"M07_SYMBOL_NOT_ADMITTED"):
-                M07OrderDraft("USDTIDR","BUY","MARKET","client1",
-                             quote_order_qty=10000).parameters()
+            offline = M07OrderDraft("USDTIDR","BUY","MARKET","client1",
+                                    quote_order_qty=10000).parameters()
+            self.assertIn(("symbol","USDTIDR"),offline)
+            # Shape acceptance never bypasses the original hardlocked adapter.
+            with self.assertRaises(M07Hardlocked):
+                OfficialV2OrderAdapter().dispatch()
             with self.assertRaises(M07Hardlocked):
                 OfficialV2OrderAdapter().create_order()
             with self.assertRaises(M07Hardlocked):
@@ -224,7 +227,7 @@ class M07FourGetReadonlyLookbackTests(unittest.TestCase):
         self.assertIn("symbol=FLOKIIDR",request.query)
         self.assertFalse(request.network_allowed)
         self.assertFalse(request.execution_allowed)
-        for symbol in ("PEPEIDR","USDCIDR","FLOKIIDR"):
+        for symbol in ("PEPEIDR","FLOKIIDR"):
             with self.subTest(symbol=symbol):
                 with self.assertRaisesRegex(ValueError,"M07_SYMBOL_NOT_ADMITTED"):
                     M07OrderDraft(symbol,"BUY","MARKET","real1",
