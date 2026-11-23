@@ -37,6 +37,7 @@ on:
       - "indodax_ai_bot/m05_radar_momentum_nonlive.py"
       - "tests/test_m04_m05_ack_risk_handoff_nonlive.py"
       - "tests/test_m04_g1_15m_1h_source_inventory_nonlive.py"
+      - "tests/test_m04_ws3_indexed_observation_nonlive.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
       - "scripts/m05_ws3_asof_quality_readonly.py"
       - "scripts/m04_g1_15m_1h_source_inventory_readonly.py"
@@ -93,6 +94,7 @@ on:
       - "indodax_ai_bot/m05_radar_momentum_nonlive.py"
       - "tests/test_m04_m05_ack_risk_handoff_nonlive.py"
       - "tests/test_m04_g1_15m_1h_source_inventory_nonlive.py"
+      - "tests/test_m04_ws3_indexed_observation_nonlive.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
       - "scripts/m05_ws3_asof_quality_readonly.py"
       - "scripts/m04_g1_15m_1h_source_inventory_readonly.py"
@@ -165,6 +167,7 @@ jobs:
             tests.test_m05_ws3_radar_bridge_nonlive \
             tests.test_m04_m05_ack_risk_handoff_nonlive \
             tests.test_m04_g1_15m_1h_source_inventory_nonlive \
+            tests.test_m04_ws3_indexed_observation_nonlive \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
             tests.test_m08_original_sell_preflight \
