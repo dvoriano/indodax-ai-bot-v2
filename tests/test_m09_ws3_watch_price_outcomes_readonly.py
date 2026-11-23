@@ -524,6 +524,8 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
                          "PUBLIC_1M_CANDLE_REFERENCE_RESEARCH_ONLY")
         self.assertEqual(result["original_ws3_unknown_horizons"], 4)
         self.assertEqual(result["candle_references_observed"], 4)
+        self.assertEqual(result["public_rest_gets_attempted"], 1)
+        self.assertEqual(result["public_rest_gets_validated"], 1)
         self.assertFalse(result["original_ws3_results_preserved"] is False)
         self.assertFalse(result["historical_candle_immutability_verified"])
         self.assertFalse(result["execution_allowed"])
