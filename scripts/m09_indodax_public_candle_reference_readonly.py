@@ -178,6 +178,12 @@ def compare_m09_with_indodax_candles_readonly(
         "candle_references_observed": 0,
         "candle_minutes_present": 0,
         "candle_zero_volume_references": 0,
+        "price_reference_available_horizons": 0,
+        "price_reference_unknown_horizons": 0,
+        "price_reference_pending_horizons": 0,
+        "price_reference_coverage_percent": None,
+        "reference_price_is_not_exact_target_second": True,
+        "reference_price_is_not_executable": True,
         "public_rest_gets_attempted": 0,
         "public_rest_gets_validated": 0,
         "observations": [],
@@ -238,6 +244,16 @@ def compare_m09_with_indodax_candles_readonly(
                 "candle_close_idr": None,
                 "candle_volume_units": None,
                 "candle_ohlc_returned_and_validated": False,
+                # Source-agnostic historical *reference* availability.
+                # This is NOT the WS3 on-target match used by M09 PAPER.
+                "price_reference_status": "PRICE_REFERENCE_UNKNOWN",
+                "price_reference_source": None,
+                "price_reference_close_idr": None,
+                "price_reference_gross_change_from_ws3_baseline_percent": None,
+                "price_reference_volume_zero": None,
+                "price_reference_is_not_exact_target_second": True,
+                "price_reference_is_not_executable": True,
+                "price_reference_trade_verified": False,
                 "candle_zero_volume_reference_close_idr": None,
                 "candle_zero_volume_reference_gross_price_change_from_original_ws3_baseline_percent": None,
                 "candle_zero_volume_reference_is_not_trade_evidence": True,
@@ -255,6 +271,15 @@ def compare_m09_with_indodax_candles_readonly(
                 close, volume = candles[minute]
                 report["candle_ohlc_returned_and_validated"] = True
                 report["candle_volume_units"] = str(volume)
+                # Available OHLC close is a legitimate historical *price
+                # reference* even when volume=0. It cannot certify a trade,
+                # target-second quote, or executable fill.
+                report["price_reference_status"] = "PRICE_REFERENCE_AVAILABLE"
+                report["price_reference_source"] = "INDODAX_CLOSED_1M_CANDLE_CLOSE"
+                report["price_reference_close_idr"] = str(close)
+                report["price_reference_gross_change_from_ws3_baseline_percent"] = (
+                    str((close / baseline - 1) * Decimal(100)))
+                report["price_reference_volume_zero"] = volume == 0
                 result["candle_minutes_present"] += 1
                 if volume == 0:
                     # Zero-volume OHLCV can carry forward a historical price.
@@ -271,6 +296,13 @@ def compare_m09_with_indodax_candles_readonly(
                     report["candle_close_gross_price_change_from_original_ws3_baseline_percent"] = (
                         str((close / baseline - 1) * Decimal(100)))
                     result["candle_references_observed"] += 1
+            if report["price_reference_status"] == "PRICE_REFERENCE_AVAILABLE":
+                result["price_reference_available_horizons"] += 1
+            elif evaluation_epoch < closed:
+                result["price_reference_pending_horizons"] += 1
+                report["price_reference_status"] = "PRICE_REFERENCE_PENDING_CANDLE_CLOSE"
+            else:
+                result["price_reference_unknown_horizons"] += 1
             window_reports[h] = report
         result["observations"].append({
             "pair": pair,
@@ -282,6 +314,11 @@ def compare_m09_with_indodax_candles_readonly(
             "horizons": window_reports,
             "market_decision_or_execution_authorized": False,
         })
+    total_closed = (result["price_reference_available_horizons"] +
+                    result["price_reference_unknown_horizons"])
+    if total_closed:
+        result["price_reference_coverage_percent"] = str(round(
+            100 * result["price_reference_available_horizons"] / total_closed, 2))
     return result
 
 
