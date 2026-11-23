@@ -46,3 +46,62 @@ For a different existing source path, pass identical `--source-db` in both calls
 - **Source/test/CI:** prove actual current M04 input can be saved and re-evaluated without a second historical selection, forged role/digest, source path mismatch, world-readable file, symlink, lookahead, trade creation or provider call.
 - **VPS evidence pending:** owner runs capture of a natural 1–2 candidate WATCH, records outcome after the relevant horizons and verifies M03/M05/BTC remain active. No guarantee all horizons have samples.
 - **Still OPEN:** actual MARKET/RISK/STRATEGY responses, verified G1, quantified executable spread/fees/depth, M05 MANUAL owner callback, PAPER entry/position lifecycle, exchange fills/settled IDR and LIVE release. Preserve NO/NO/DRY_RUN.
+
+## M09 natural WATCH coverage diagnostics (independent read-only operator)
+
+Run this *additional* analysis on the **same** owner-only (0600) capture and
+the **same** original source DB after (or during) any horizon; it does not
+recapture M04 or run another scanner. Example with the original 23 November
+TMG/DRX observation:
+
+~~~bash
+(
+  set -euo pipefail
+  cd "$HOME/indodax-ai-bot-v2"
+  export INDODAX_TRADING_ENABLED=NO
+  export INDODAX_ALLOW_LIVE_EXECUTION=NO
+  export INDODAX_EXECUTION_MODE=DRY_RUN
+
+  .venv/bin/python -B -m scripts.m09_ws3_watch_coverage_audit_readonly \
+    --source-db "$PWD/runtime/decisions.sqlite3" \
+    --audit-capture \
+    "$PWD/runtime/m09_ws3_watch_capture_VlyEYT38.json"
+)
+~~~
+
+The JSON attaches each candidate to its original M04 evidence digest and
+shows, per 5/15/30/60m horizon:
+
+- Original M09 outcome, including observed *gross* price percentage or null.
+- Local price receipts inside the original horizon [target,target+30s],
+  known by the evaluation time.
+- Nearby receipts within ±120 seconds, also limited to data received by
+  evaluation time. These are **diagnostic only**, never substitute for a
+  missing exact-horizon price.
+- A separate classification for on-target observed, before horizon, window
+  still open, invalid on-target price, nearby-only, and no nearby receipts.
+- Ratio of observed windows only among horizons whose 30-second exchange
+  window is closed. A late-arriving indexed sample can still update the
+  research result later. A missing window never becomes a 0% return.
+
+This helps isolate **where** local coverage is missing but cannot determine
+**why**: no conclusion about exchange inactivity, a broken collector, full
+tape completeness, liquidity, or stale orderbook can be drawn just from these
+counts. It does not change M04 WAIT, call paid MARKET/RISK/STRATEGY, or
+authorize a PAPER/real fill. Original M09 PAPER lifecycle simulations remain
+separate until a genuine qualified review and owner-authorized source
+conditions exist.
+
+### First natural VPS evidence, 23 November 2026
+
+- DRX/IDR captured WATCH 11:37:03 WIB at IDR 23.576866. Five-minute
+  local exchange timestamp 11:42:22, receipt 11:42:23 (1-second
+  receipt lag), observed IDR 23.647275, gross +0.2986359595%.
+- TMG/IDR baseline IDR 14; no 5-minute horizon receipt in the original
+  lookup window, UNKNOWN rather than a losing trade.
+- At the 15-minute check, neither pair had an on-target local price.
+  The 30/60-minute horizons were not yet mature at that check.
+
+These are **observational** results only. No buy, provider response, PAPER
+fill, net ROI or G1 proof is recorded. Do not publish private capture JSON or
+claim all horizon coverage from this evidence.
