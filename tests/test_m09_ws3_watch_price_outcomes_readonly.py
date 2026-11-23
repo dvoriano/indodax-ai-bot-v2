@@ -401,6 +401,15 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertEqual(five_later["exact_horizon_receipts"], 1)
         self.assertEqual(later["observed_coverage_percent"], "100.0")
 
+        # Adversarial skew: a future exchange time must never appear in
+        # an earlier as-of coverage query, even if its recorded time is old.
+        self.add_price("drx_idr", five + 25, "120", receipt=five + 2)
+        skewed = audit_saved_ws3_watch_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=five + 5)
+        sample = skewed["observations"][0]["coverage"]["5m"]
+        self.assertEqual(sample["exact_horizon_receipts"], 0)
+        self.assertEqual(sample["nearby_120s_local_receipts"], 0)
+
     def test_capture_coverage_rejects_world_readable_and_tampered_files(self):
         from scripts.m09_ws3_watch_coverage_audit_readonly import (
             audit_saved_ws3_watch_coverage_readonly,
