@@ -177,3 +177,43 @@ Original VPS operator updated to `c3c4b43d` and ran 52/52 focused regression PAS
 Official INDODAX documentation explicitly includes a valid OHLC example with `Volume: "0"`, so a present OHLC candle is **not proof of a trade in that minute**. Minute volume and rolling 24h volume have distinct windows. It is not yet proven whether the seven zero-volume responses represent no matched trades in those minutes versus exchange-history placeholder/aggregation semantics. Never silently turn `Volume=0` into a trade, rank, price at target second, paper fill or net-profit estimate.
 
 A follow-on diagnostic exposes `candle_zero_volume_reference_close_idr` and its separately named proxy change for zero-volume candles, retaining `CANDLE_ZERO_VOLUME_UNVERIFIED`, `candle_close_idr=None` in the trade-observed slot, and the untouched WS3 `UNKNOWN`. It counts `candle_minutes_present` and `candle_zero_volume_references` independently of `candle_references_observed`, making source delivery visible without claiming price execution. To confirm actual trade activity in a zero-volume minute, use original timestamped trade-tape evidence with completeness/gap checks (independent G1 remains OPEN), not rolling 24h turnover or OHLC alone.
+
+## Available candle prices are NOT UNKNOWN in the unified historical reference report
+
+The original WS3 outcome evaluator remains byte-for-byte unchanged: original TMG/DRX
+capture had 1/8 on-target WS3 observations and seven `UNKNOWN` WS3-specific
+statuses. This is a **WS3 source coverage measurement**, not evidence that
+Indodax's historical candles are unavailable.
+
+The public candle research report now also exposes a **distinct price
+availability layer**. If a fully closed 1-minute Indodax candle is present
+and valid, `price_reference_status=PRICE_REFERENCE_AVAILABLE`,
+`price_reference_close_idr` and
+`price_reference_gross_change_from_ws3_baseline_percent` are always
+populated, **including when the official Volume is 0**. The last is a
+close-of-target-minute gross change relative to original M04 baseline,
+not a price quotation at the exact target second, not a strategy outcome,
+not net executable ROI. `price_reference_volume_zero` reports the
+source volume condition. The per-pair field `candle_status` continues
+to say `CANDLE_ZERO_VOLUME_UNVERIFIED` for zero-volume candles to avoid
+pretending a matched trade was independently proven.
+
+At the report level:
+- `price_reference_available_horizons` counts validated closed candles regardless of Volume
+- `price_reference_unknown_horizons` counts closed target minutes whose candle price could **not** be validated/retrieved
+- `price_reference_pending_horizons` counts target-minute candles not yet closed
+- `price_reference_coverage_percent` counts available / (available + unknown) closed bars, which **must not** be conflated with original WS3 30s coverage, liquidity or fill reliability
+
+For the actual TMG/DRX VPS source response received 23 November 2026, **all eight
+target-minute OHLCV rows were returned and parsed, including seven Volume=0**.
+Therefore the available *candle price reference* count is expected to be
+**8/8** when that same response remains available; seven WS3 unknowns remain
+**7/8** as the result of that specific WS3 evaluation method. Price is not
+missing, but accurate target-second trade confirmation is missing.
+
+All API calls are opt-in public GETs; no runtime worker, no original M04
+candidate/ranking change, no automatic order, and no inference of PAPER
+fills/profits. The original M09 source index has finite retention, so
+the same retrospective evaluation may produce a changed WS3 diagnostic
+if its underlying rows have expired. This report is not a deterministic
+historical trading replay.
