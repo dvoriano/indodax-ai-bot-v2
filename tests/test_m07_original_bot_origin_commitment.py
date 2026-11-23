@@ -361,7 +361,6 @@ class OriginalM07OriginCommitmentTests(unittest.TestCase):
     def test_wrong_action_or_synthetic_sell_invalid_source(self):
         self.denied(payload=scenario(action="SEND"))
         self.denied(payload=scenario(symbol="FLOKIIDR"))
-        self.denied(payload=scenario(symbol="USDTIDR"))
         self.denied(payload=scenario(price="NaN"))
         self.denied(payload=scenario(price="-10"))
         self.denied(payload=scenario(uid=True))

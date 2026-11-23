@@ -60,8 +60,10 @@ class GeneralIDRSourcePolicyTests(unittest.TestCase):
     def test_floki_pepe_sell_proceeds_never_pay_for_main_or_each_other(self):
         self.assertFalse(self.route("MAIN","PEPE",1000).source_and_amount_match)
         self.assertFalse(self.route("MAIN","FLOKI",1000).source_and_amount_match)
-        self.assertFalse(self.route("MAIN","USDT",1000).source_and_amount_match)
-        self.assertFalse(self.route("MAIN","USDC",1000).source_and_amount_match)
+        self.assertTrue(self.route("MAIN","USDT",1000).source_and_amount_match)
+        self.assertTrue(self.route("MAIN","USDC",1000).source_and_amount_match)
+        # A valid MAIN funding route is not an authenticated wallet or order.
+        self.assertFalse(self.route("MAIN","USDC",1000).execution_allowed)
         self.assertTrue(self.route(
             "FLOKI_REBUY","FLOKI",50000).source_and_amount_match)
         self.assertTrue(self.route(

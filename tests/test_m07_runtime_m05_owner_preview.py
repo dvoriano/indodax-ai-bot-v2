@@ -129,6 +129,64 @@ class M07RuntimeOwnerCardTests(unittest.TestCase):
             self.journal.m07_offline_intent_summary()["manual_sender_nonlive_holds"], 0,
         )
 
+    def test_owner_current_main_only_funding_usdc_source_to_original_m05(self):
+        original = replace(public_observation(), pair_rule_fields=dict(RULES))
+        pair = "usdc_idr"
+        observation = replace(
+            original, pair=pair,
+            snapshot=replace(
+                original.snapshot,
+                source=replace(original.snapshot.source, pair=pair),
+            ),
+        )
+        with patch.object(
+            self.journal, "record_and_compare_public_wall",
+            return_value={"status":"UNATTESTED"},
+        ):
+            candidate = self.app._attach_public_wall_experience(
+                DeepCandidate(pair, 75, "PUBLIC_REVIEW", None), observation,
+            )
+        row = candidate.summary()
+        self.assertEqual(
+            row["m07_same_candidate_public_preflight"]["status"],
+            "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY",
+        )
+        bulk = dict(self.bulk.bulk)
+        bulk["eligible_cohort"] = {
+            "status":"ALIGNED_PUBLIC_UNATTESTED",
+            "eligible_pair_ids":[pair],
+            "provisional_watchlist_preview":[pair],
+            "provisional_quality_reviews":[
+                {"pair":pair,"clear_of_provisional_cautions":True}
+            ],
+        }
+        bulk["provisional_market_evidence"]=[row]
+        bulk["ranked_diagnostics_top10"]=[row]
+        self.funding={
+            "commitments_not_locked_idr":D("1000"),
+            "max_spread_bps":D("150"),
+        }
+        out, scanner, viewonly = self.run_once(
+            bulk=CycleResult("once",None,"PUBLIC_UNVERIFIED",bulk=bulk),
+        )
+        scanner.assert_called_once()
+        viewonly.assert_called_once()
+        sized=out["m07_main_sizing"]
+        self.assertEqual(sized["main_idr_pool_scenario"],"919147")
+        self.assertEqual(sized["funding_policy"],"MAIN_IDR_ONLY")
+        self.assertEqual(out["candidate_pair"],pair)
+        preview=out["m07_owner_preview"]
+        self.assertEqual(preview["pair"],pair)
+        self.assertTrue(preview["owner_card_queued"])
+        self.assertFalse(preview["execution_allowed"])
+        self.assertFalse(preview["order_sent"])
+        self.assertFalse(out["execution_allowed"])
+        card=self.owner.claim_manual_trade_preview_delivery(now_epoch=NOW)
+        self.assertIn("USDCIDR",card["message_text"])
+        self.assertIn("NO ORDER",card["message_text"])
+        self.assertEqual(self.journal.m07_offline_intent_summary()[
+            "manual_sender_nonlive_holds"],0)
+
     def test_caution_only_ranked_candidate_does_not_emit_order_card(self):
         modified = dict(self.bulk.bulk)
         cohort = dict(modified["eligible_cohort"])

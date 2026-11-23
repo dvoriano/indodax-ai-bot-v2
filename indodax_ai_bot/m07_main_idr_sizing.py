@@ -13,6 +13,7 @@ from .m07_limit_preflight import (
     M07PreflightBlocked, assess_m07_limit_buy_preflight_offline,
 )
 from .m07_order_adapter import M07OrderDraft
+from .scanner import MAIN_EXCLUDED_PAIRS
 
 
 CURRENT_MAIN_FUNDING_KEYS = frozenset(("commitments_not_locked_idr", "max_spread_bps"))
@@ -93,7 +94,7 @@ def assess_m07_owner_main_idr_sizing_offline(*,
             or p.get("per_account_fee_verified") is not False
             or p.get("observed_pair") != pair
             or type(pair) is not str or not pair.endswith("_idr")
-            or pair[:-4].upper() in ("PEPE", "FLOKI", "USDT", "USDC")
+            or pair in MAIN_EXCLUDED_PAIRS
             or type(public_epoch) is not int
             or type(p.get("closed_1m_epoch")) is not int
             or not 0 <= public_epoch - p["closed_1m_epoch"] <= 120

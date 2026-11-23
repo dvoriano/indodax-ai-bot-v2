@@ -13,6 +13,7 @@ from typing import Any
 
 from .m07_limit_preflight import M07PreflightBlocked, _rule
 from .public_market import PublicObservation
+from .scanner import MAIN_EXCLUDED_PAIRS
 
 
 
@@ -93,7 +94,7 @@ def assess_m07_same_candidate_public_boundary(*,
                 "trade_min_base_currency", "trade_min_traded_currency",
                 "is_market_suspended", "is_maintenance")
     if (type(rules) is not dict or any(k not in rules for k in required)
-            or candidate_pair[:-4].upper() in ("FLOKI","PEPE","USDT","USDC")):
+            or candidate_pair in MAIN_EXCLUDED_PAIRS):
         values["status"] = "M07_PUBLIC_PAIR_RULES_MISSING_OR_EXCLUDED"
         return values
     values["same_observation_public_rule_batch"] = True
