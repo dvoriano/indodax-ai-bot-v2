@@ -124,3 +124,15 @@ Rincian **berdasarkan keadaan saat audit**, bukan hasil akhir semua horizon:
 | DRX/IDR | 15m | 0 | 2 | UNKNOWN, nearby-only |
 
 Kedua horizon 30m/60m untuk masing-masing pasangan masih **NOT_YET_MATURED** ketika audit berjalan, jadi penyebut coverage hanya **4**, bukan 8. Temuan nearby-only di 15m **belum membuktikan** penyebab jeda sampel dan **bukan** alasan mengganti jendela 30 detik. Perlu membaca `exchange_epoch`, `recorded_epoch`, dan selisih terhadap target untuk membedakan arrival lag vs sparse timestamps, lalu mengevaluasi kembali file capture yang sama setelah seluruh horizon matang. Pengujian code/CI dan audit natural dianggap **PASS terbatas**; kelengkapan harga dan original PAPER lengkap tetap **OPEN**. Tidak ada GO AI, G1, order, virtual fill maupun perubahan service.
+
+## Bukti VPS audit receipt timestamp 15m natural TMG/DRX (23 November 2026)
+
+Operator melakukan read-only SQL langsung pada `m03_ws3_price_samples_5s`, membatasi pasangan ke source capture asli, sampel exchange dalam ±120 detik dari horizon 15m, dan recorded timestamp sampai waktu pemeriksaan. Bukti konkret:
+
+| Pair | 15m target WIB | Local exchange WIB | Recorded WIB | Exchange offset dari target | Receipt lag | Harga sample IDR |
+|---|---|---|---|---:|---:|---:|
+| TMG/IDR | 11:52:07 | 11:53:17 | 11:53:18 | +70 dtk | 1 dtk | 13 |
+| DRX/IDR | 11:52:03 | 11:50:49 | 11:50:50 | -74 dtk | 1 dtk | 23.474316 |
+| DRX/IDR | 11:52:03 | 11:53:12 | 11:53:13 | +69 dtk | 1 dtk | 23.241046 |
+
+**Interpretasi terbatas:** tiga sampel terdekat diterima lokal cepat (lag masing-masing 1 detik), tetapi `exchange_epoch` tidak jatuh pada jendela evaluator resmi `[target_epoch, target_epoch + 30s]`; maka kedua outcome 15m tetap `UNKNOWN_NO_LOCAL_PRICE_NEAR_HORIZON`. Bukti ini menunjukkan *sampling-gap di sekitar target*, bukan membuktikan latensi provider buruk, WebSocket terputus, collector rusak, atau market tanpa transaksi. Jangan mengubah toleransi 30 detik secara otomatis, menyisipkan harga di luar jendela sebagai return official, atau merekonstruksi keputusan AI. Selanjutnya nilai cakupan 30/60m setelah benar-benar matang dari capture yang sama, lalu jika gap berulang audit log/index collector **READ ONLY** secara terpisah. Semua transaksi, PAPER fill, G1, dan tiga role tetap tidak diotorisasi.
