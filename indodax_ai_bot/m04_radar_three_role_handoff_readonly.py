@@ -596,6 +596,14 @@ def inspect_original_ws3_three_role_handoff_readonly(
                     slot["evidence_digest_sha256"] = digest
             report["indexed_asof_candidates_attached"] = len(report["candidates"])
             report["indexed_trade_source_is_complete"] = False
+    # No model was called. Record only WAIT/RESCAN readiness over the
+    # same immutable original WS3 source-bound role slots, not a BUY/PAPER.
+    from .m04_ws3_candidate_review_nonlive import (
+        assess_uncalled_ws3_candidate_loop,
+    )
+    report["candidate_review_readiness"] = assess_uncalled_ws3_candidate_loop(
+        handoff=report, now_epoch=now,
+    )
     return report
 
 
