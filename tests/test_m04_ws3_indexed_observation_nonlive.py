@@ -4,7 +4,11 @@ Offline synthetic SQLite only. No network, Telegram, paid AI, G1 or orders.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from decimal import Decimal as D
+from indodax_ai_bot.m04_ws3_candidate_review_nonlive import (
+    assess_uncalled_ws3_candidate_loop,
+)
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -148,6 +152,85 @@ class OriginalWS3M04IndexedAsOfTests(unittest.TestCase):
                          "INDEX_NOT_INSTALLED_OR_NOT_READABLE")
         self.assertNotIn("indexed_trade_window_evidence",
                          report["candidates"][0]["public_evidence"])
+
+    def test_no_watch_returns_rescan_not_a_model_reject(self):
+        self.install_index()
+        report=inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db,now_epoch=NOW)
+        ready=report["candidate_review_readiness"]
+        self.assertEqual(ready["status"],"RESCAN_NO_CURRENT_WATCH")
+        self.assertEqual(ready["watch_candidate_count"],0)
+        self.assertEqual(ready["qualified_role_decision_count"],0)
+        self.assertIsNone(ready["selected_pair"])
+        self.assertFalse(ready["paper_fill_authorized"])
+        self.assertFalse(ready["execution_allowed"])
+
+    def test_one_real_watch_with_one_sample_waits_without_fake_ai(self):
+        self.seed("vine_idr")
+        self.install_index()
+        close=OBS//60*60
+        self.add_trade("vine_idr",close-30,1,"101","95248")
+        report=inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db,now_epoch=NOW)
+        ready=report["candidate_review_readiness"]
+        self.assertEqual(ready["status"],"WAIT_ONE_WATCH_NO_QUALIFIED_AI_REVIEW")
+        self.assertEqual(ready["watch_candidate_count"],1)
+        self.assertEqual(ready["candidate_reviews"][0]["pair"],"vine_idr")
+        self.assertEqual(ready["candidate_reviews"][0]["observed_trades_1m"],1)
+        self.assertEqual(ready["candidate_reviews"][0]["observed_quote_5m_idr_only"],"95248")
+        self.assertEqual(ready["candidate_reviews"][0]["reason"],
+                         "WAIT_SPARSE_OBSERVED_1M_TRADES")
+        self.assertEqual(ready["candidate_reviews"][0]["role_outputs_missing"],
+                         ["MARKET","RISK","STRATEGY"])
+        self.assertEqual(ready["role_calls_observed"],0)
+        self.assertFalse(ready["telegram_trade_preview_authorized"])
+        self.assertFalse(ready["paper_fill_authorized"])
+
+    def test_two_watch_inputs_never_claim_qualified_risk_comparison(self):
+        self.seed("uai_idr")
+        self.seed("cst_idr")
+        self.install_index()
+        close=OBS//60*60
+        self.add_trade("uai_idr",close-30,1,"100","1000")
+        self.add_trade("uai_idr",close-10,2,"101","1200")
+        self.add_trade("cst_idr",close-30,1,"NaN","700")
+        report=inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db,now_epoch=NOW)
+        ready=report["candidate_review_readiness"]
+        self.assertEqual(ready["status"],
+                         "WAIT_TWO_WATCHES_NO_COMPARABLE_AI_REVIEWS")
+        by_pair={r["pair"]:r for r in ready["candidate_reviews"]}
+        self.assertEqual(by_pair["uai_idr"]["reason"],
+                         "WAIT_PARTIAL_SOURCE_AND_UNCALLED_ROLES")
+        self.assertEqual(by_pair["cst_idr"]["reason"],
+                         "WAIT_CORRUPT_LOCAL_INDEX")
+        self.assertIsNone(ready["selected_pair"])
+        self.assertEqual(ready["qualified_role_decision_count"],0)
+        self.assertEqual(ready["provider_calls"],0)
+        self.assertFalse(ready["execution_allowed"])
+
+    def test_mutated_source_digest_or_role_slot_cannot_be_reviewed(self):
+        self.seed("uai_idr")
+        self.install_index()
+        original=inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db,now_epoch=NOW)
+        for mutation in ("digest","slot","g1","expired"):
+            with self.subTest(mutation=mutation):
+                changed=deepcopy(original)
+                if mutation=="digest":
+                    changed["candidates"][0]["evidence_digest_sha256"]="0"*64
+                if mutation=="slot":
+                    changed["candidates"][0]["role_slots"][0]["model_output"]={"BUY":True}
+                if mutation=="g1":
+                    changed["g1_independent_issuer_verified"]=True
+                seen=assess_uncalled_ws3_candidate_loop(
+                    handoff=changed,
+                    now_epoch=NOW+200 if mutation=="expired" else NOW)
+                self.assertEqual(seen["watch_candidate_count"],0)
+                self.assertIsNone(seen["selected_pair"])
+                self.assertFalse(seen["execution_allowed"])
+                self.assertFalse(seen["paper_fill_authorized"])
+                self.assertTrue(seen["status"].startswith("RESCAN_"))
 
     def test_bad_scope_fails_closed_no_snapshot_or_writes(self):
         self.seed("uai_idr")
