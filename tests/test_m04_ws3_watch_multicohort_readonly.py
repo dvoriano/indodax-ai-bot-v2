@@ -117,7 +117,7 @@ class OriginalWatchChannelMultiCohortResearchTests(unittest.TestCase):
             _report(EPOCH+180, ("tmg_idr", self._digest("TMG-B"), True, 2),
                     ("drx_idr", self._digest("DRX-B"), False, 0)),
             _report(EPOCH+360, ("tmg_idr", self._digest("TMG-C"), None, 0),
-                    ("drx_idr", self._digest("DRX-C"), False, 0)),
+                    ("drx_idr", self._digest("DRX-C"), None, 0)),
         ]
         result = summarize_original_current_watch_reports_readonly(
             evidence_files=[self._file(r) for r in reports])
@@ -130,7 +130,8 @@ class OriginalWatchChannelMultiCohortResearchTests(unittest.TestCase):
         self.assertEqual(set(rows), {"tmg_idr", "drx_idr"})
         self.assertEqual(rows["tmg_idr"]["request_listed"], 2)
         self.assertEqual(rows["tmg_idr"]["checkpoint_unavailable"], 1)
-        self.assertEqual(rows["drx_idr"]["not_listed_latest_checkpoint"], 3)
+        self.assertEqual(rows["drx_idr"]["not_listed_latest_checkpoint"], 2)
+        self.assertEqual(rows["drx_idr"]["checkpoint_unavailable"], 1)
         self.assertEqual(rows["drx_idr"]["without_retained_local_trades_60m"], 3)
         self.assertEqual(rows["tmg_idr"]["with_retained_local_trades_1m"], 2)
         for field in ("pair_specific_ack_verified", "independent_g1_verified",
