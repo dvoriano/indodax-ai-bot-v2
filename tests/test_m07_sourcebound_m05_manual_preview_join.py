@@ -120,6 +120,102 @@ class M07SameSourceToM05ManualPreviewTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM m08_position_settled_idr_events",
             ).fetchone()[0], 0)
 
+    def test_current_main_idr_policy_stablecoins_reach_same_source_manual_preview(self):
+        # Strict public boundary, source freshness, 2-GET account, M07
+        # precision/fee/spread, and original M05 owner ledger remain required.
+        from indodax_ai_bot.scanner import MAIN_EXCLUDED_PAIRS
+        from indodax_ai_bot.m07_same_candidate_public import (
+            assess_m07_same_candidate_public_boundary,
+        )
+        from indodax_ai_bot.deep_analysis import observe_public_quote_friction
+
+        self.assertEqual(MAIN_EXCLUDED_PAIRS,
+                         frozenset(("floki_idr", "pepe_idr")))
+        for pair in ("usdt_idr", "usdc_idr"):
+            with self.subTest(pair=pair):
+                original = replace(public_observation(),
+                                   pair_rule_fields=dict(RULES))
+                obs = replace(
+                    original,
+                    pair=pair,
+                    snapshot=replace(
+                        original.snapshot,
+                        source=replace(original.snapshot.source, pair=pair),
+                    ),
+                )
+                public = assess_m07_same_candidate_public_boundary(
+                    candidate_pair=pair, observation=obs,
+                    observed_friction=observe_public_quote_friction(obs),
+                )
+                self.assertEqual(
+                    public["status"],
+                    "M07_PUBLIC_SOURCE_BOUND_RULES_REFERENCE_ONLY",
+                )
+                sized = self.bot.review_m07_owner_main_idr_sizing_offline(
+                    public_candidate=public, account_snapshot=self.account,
+                    owner_main_source_classified=True,
+                    commitments_not_locked_idr=D("1000"),
+                    max_spread_bps=D("150"), now_epoch=NOW,
+                )
+                self.assertEqual(sized["funding_policy"], "MAIN_IDR_ONLY")
+                self.assertEqual(sized["main_idr_pool_scenario"], "919147")
+                self.assertEqual(
+                    sized["status"],
+                    "M07_MAIN_SIZING_RULES_MATCH_REFERENCE_ONLY",
+                )
+                self.assertIsNone(sized["requested_ticket_ceiling_idr"])
+                self.assertFalse(sized["execution_allowed"])
+                self.assertFalse(sized["order_sent"])
+                # Independently evaluate each policy-equivalent IDR market;
+                # do not leak a M05 pending card between pair scenarios.
+                if pair == "usdt_idr":
+                    out = self.queue(
+                        client="m07stablecoinusdt001",
+                        public_candidate=public,
+                        funding={
+                            "commitments_not_locked_idr": D("1000"),
+                            "max_spread_bps": D("150"),
+                        },
+                    )
+                    self.assertEqual(out["pair"], pair)
+                    self.assertTrue(out["owner_card_queued"])
+                    self.assertFalse(out["execution_allowed"])
+                    self.assertFalse(out["order_sent"])
+                    card = self.owner.claim_manual_trade_preview_delivery(
+                        now_epoch=NOW,
+                    )
+                    self.assertIn("USDTIDR", card["message_text"])
+                    self.assertIn("NO ORDER", card["message_text"])
+
+    def test_stablecoin_no_special_exemption_from_stale_fees_and_open_orders(self):
+        public = dict(self.public, candidate_pair="usdc_idr",
+                      observed_pair="usdc_idr")
+        current = {
+            "commitments_not_locked_idr": D("0"),
+            "max_spread_bps": D("150"),
+        }
+        for extra in (
+            {"public_candidate": {**public, "observed_epoch": NOW-50}},
+            {"public_candidate": {**public,
+                                  "public_pair_rules_reference": {}}},
+            {"public_candidate": {**public,
+                                  "all_in_buy_taker_bps_public_reference_only": "9999"}},
+            {"account_snapshot": {**self.account,
+                                  "all_pair_open_orders_observed": 1}},
+        ):
+            with self.subTest(extra=extra):
+                out = self.queue(
+                    client="m07stablecoinbad01",
+                    public_candidate=public,
+                    funding=current,
+                    **extra,
+                )
+                self.assertFalse(out["owner_card_queued"])
+                self.assertFalse(out["execution_allowed"])
+        self.assertIsNone(
+            self.owner.claim_manual_trade_preview_delivery(now_epoch=NOW),
+        )
+
     def test_repeat_same_client_id_and_pending_card_never_duplicate(self):
         a = self.queue()
         self.assertTrue(a["owner_card_queued"])
