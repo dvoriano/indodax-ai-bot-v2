@@ -553,6 +553,8 @@ class OwnerDecisionLedger:
             account_fingerprint: str, draft, now_epoch: int,
             chat_type: str = "private",
             expected_buy_total_idr: Decimal | None = None,
+            modeled_sell_vwap_reference_idr: Decimal | None = None,
+            public_quote_age_seconds: int | None = None,
             ) -> dict[str, Any]:
         """Original M07 draft → MANUAL owner Telegram preview, NO trade.
 
@@ -589,6 +591,8 @@ class OwnerDecisionLedger:
             text = render_m05_trade_order_card(
                 draft, mode="MANUAL",
                 expected_buy_total_idr=expected_buy_total_idr,
+                modeled_sell_vwap_reference_idr=modeled_sell_vwap_reference_idr,
+                public_quote_age_seconds=public_quote_age_seconds,
             )
         except (ValueError, TypeError, ArithmeticError):
             return _blocked("M05_MANUAL_TRADE_FINANCIAL_CARD_INVALID")
