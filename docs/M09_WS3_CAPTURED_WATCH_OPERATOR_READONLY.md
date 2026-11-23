@@ -141,3 +141,31 @@ preserved, not reselected. No coverage threshold or trading gate is
 created; zero rows means no retained rows, **not** zero price movement.
 Do not call this an AI win-rate, fill model, G1 issuer, execution
 eligibility check, or complete upstream WS3 coverage.
+
+## Compare original WS3 UNKNOWN with official INDODAX 1m public OHLCV (optional, operator only)
+
+The official INDODAX Public REST API documents a 1-minute history endpoint:
+
+- `GET https://indodax.com/tradingview/history_v2?from=<unix>&symbol=BTCIDR&tf=1&to=<unix>`
+- Required request fields: `from`, `to`, `symbol`, `tf`; response uses `Time`, `Open`, `High`, `Low`, `Close`, `Volume`.
+- Source: https://github.com/btcid/indodax-official-api-docs/blob/master/Public-RestAPI.md#ohlc-history
+
+The separate script `scripts/m09_indodax_public_candle_reference_readonly.py` **never runs in M03, M04, Telegram, or M09 PAPER runtime**. Its default is **NO NETWORK**. It only issues a maximum of two bounded unauthenticated public HTTPS GET requests when the operator explicitly supplies `--fetch-public-ohlcv`. It validates the same owner-only original M04 capture, uses only the official fixed INDODAX host, strips raw API payloads from stdout, caps body, bars and time span, and needs **no API key**.
+
+~~~bash
+(
+  set -euo pipefail
+  cd "$HOME/indodax-ai-bot-v2"
+  export INDODAX_TRADING_ENABLED=NO
+  export INDODAX_ALLOW_LIVE_EXECUTION=NO
+  export INDODAX_EXECUTION_MODE=DRY_RUN
+  .venv/bin/python -B -m unittest -q     tests.test_m09_ws3_watch_price_outcomes_readonly     tests.test_m09_04_original_virtual_paper     tests.test_m04_ws3_indexed_observation_nonlive
+  .venv/bin/python -B -m scripts.m09_indodax_public_candle_reference_readonly     --source-db "$PWD/runtime/decisions.sqlite3"     --audit-capture "$PWD/runtime/m09_ws3_watch_capture_VlyEYT38.json"     --fetch-public-ohlcv
+)
+~~~
+
+If the VPS public REST is blocked, the report will state `PUBLIC_CANDLES_UNAVAILABLE_OR_INVALID` for that pair; **do not fabricate candle values** or bypass security policy. It is not a reason to restart M03. If Indodax does not return TMGIDR/DRXIDR bars for those times, each missing horizon is `CANDLE_MINUTE_NOT_RETURNED`; other pairs' candles must not substitute.
+
+For a given target second, the script selects the **closed 1-minute bar containing that target second**, with `candle_minute_open_epoch = floor(target / 60) * 60` and `candle_minute_close_epoch = open + 60`. A candle is reference-observed **only** if the entire minute has closed by `evaluation_epoch`, OHLCV is valid, volume is strictly positive and INDODAX actually returned that exact minute. A zero-volume bar is `CANDLE_ZERO_VOLUME_UNVERIFIED`, never a confirmed trade. The close may occur up to 59 seconds after the exact M09 target second; it is **not an observed price at that second**.
+
+The report preserves `ws3_original_outcome_status` and original 30-second `coverage_class`. It reports a separate `CLOSED_1M_CANDLE_REFERENCE_OBSERVED` and a separately named **gross candle-close proxy change from original M04 WS3 baseline**, NOT official 5m/15m/30m/60m WS3 outcome, fill, net ROI, win rate or G1/AI proof. A later public response also does not prove that an historical candle was immutable at its original close. No modifications to exchange credentials, public WS, original M03/M04 ranking, order adapter, timers or running services.
