@@ -176,6 +176,8 @@ def compare_m09_with_indodax_candles_readonly(
         "original_ws3_unknown_horizons": original["unknown_matured_horizons"],
         "original_ws3_coverage_percent": original["observed_coverage_percent"],
         "candle_references_observed": 0,
+        "candle_minutes_present": 0,
+        "candle_zero_volume_references": 0,
         "public_rest_gets_attempted": 0,
         "public_rest_gets_validated": 0,
         "observations": [],
@@ -235,6 +237,10 @@ def compare_m09_with_indodax_candles_readonly(
                 "candle_status": None,
                 "candle_close_idr": None,
                 "candle_volume_units": None,
+                "candle_ohlc_returned_and_validated": False,
+                "candle_zero_volume_reference_close_idr": None,
+                "candle_zero_volume_reference_gross_price_change_from_original_ws3_baseline_percent": None,
+                "candle_zero_volume_reference_is_not_trade_evidence": True,
                 "candle_close_gross_price_change_from_original_ws3_baseline_percent": None,
                 "candle_is_quote_at_exact_target_second": False,
                 "fee_spread_slippage_or_fill_verified": False,
@@ -247,11 +253,18 @@ def compare_m09_with_indodax_candles_readonly(
                 report["candle_status"] = "CANDLE_MINUTE_NOT_RETURNED"
             else:
                 close, volume = candles[minute]
+                report["candle_ohlc_returned_and_validated"] = True
                 report["candle_volume_units"] = str(volume)
+                result["candle_minutes_present"] += 1
                 if volume == 0:
-                    # Some history feeds provide zero-volume forward-filled
-                    # candles: a close is not evidence of a contemporaneous trade.
+                    # Zero-volume OHLCV can carry forward a historical price.
+                    # Show this source value, but NEVER promote it to an
+                    # observed trade, timed WS3 price, PAPER fill, or net ROI.
                     report["candle_status"] = "CANDLE_ZERO_VOLUME_UNVERIFIED"
+                    report["candle_zero_volume_reference_close_idr"] = str(close)
+                    report["candle_zero_volume_reference_gross_price_change_from_original_ws3_baseline_percent"] = (
+                        str((close / baseline - 1) * Decimal(100)))
+                    result["candle_zero_volume_references"] += 1
                 else:
                     report["candle_status"] = "CLOSED_1M_CANDLE_REFERENCE_OBSERVED"
                     report["candle_close_idr"] = str(close)
