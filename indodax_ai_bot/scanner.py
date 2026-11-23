@@ -11,9 +11,10 @@ from decimal import Decimal
 
 from .public_market import IndodaxPublicMarket, PublicDataError, PublicScanContext, _number, _seconds
 
-# MAIN wallet must never use FLOKI/PEPE reserved-strategy buckets; stablecoins
-# are settlement/quote instruments, not intended MAIN daily momentum scalps.
-MAIN_EXCLUDED_PAIRS = frozenset({"floki_idr", "pepe_idr", "usdt_idr", "usdc_idr"})
+# Owner MAIN-only policy: FLOKI and PEPE are manual holdings, never bot-owned.
+# USDT/IDR and USDC/IDR are ordinary IDR-quoted candidates, not automatic
+# buys: source freshness, liquidity, spread and net-edge checks still apply.
+MAIN_EXCLUDED_PAIRS = frozenset({"floki_idr", "pepe_idr"})
 
 
 @dataclass(frozen=True)
