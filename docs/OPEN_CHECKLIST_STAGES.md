@@ -160,3 +160,18 @@ Owner menjalankan `audit_saved_ws3_watch_coverage_readonly` dengan capture asli 
 | DRX/IDR | OBSERVED_ON_TARGET_PRICE (exact 1, nearby 4), gross +0,2986359595% | NO_ON_TARGET_WITH_NEARBY_LOCAL_SAMPLES (exact 0, nearby 2) | NO_ON_TARGET_WITH_NEARBY_LOCAL_SAMPLES (exact 0, nearby 1) | NOT_YET_MATURED |
 
 Tabel ini hanya memperlihatkan **kelengkapan indeks harga lokal** dalam waktu observasi; bukan bukti harga flat, loss, profit bersih, order fill, G1, keputusan AI atau kegagalan scanner. Tidak melakukan extrapolation/interpolation dari sampel nearby. Setelah target 60m+30 detik (sekitar 12:38 WIB), ulangi audit pada **capture sama**. Evaluasi masalah collector memerlukan log asal/checkpoint secara terpisah bila gaps berulang; jangan mengubah service tanpa pembuktian. Paket 5 PAPER/G1/role decision tetap OPEN.
+
+## Bukti VPS: perbandingan source summary vs dense price TMG/DRX (23 November 2026)
+
+Query operator read-only pada original `runtime/decisions.sqlite3`, jendela `exchange_epoch BETWEEN 1795408620 AND 1795411020` (**40 menit**), menghasilkan:
+
+| Pair | `m03_ws_summary_watch_minute` | `m03_ws3_price_samples_5s` | Exchange epoch pertama | Exchange epoch terakhir |
+|---|---:|---:|---:|---:|
+| TMG/IDR | 5 baris | 6 baris | 1795408627 | 1795410602 |
+| DRX/IDR | 21 baris | 23 baris | 1795408623 | 1795410804 |
+
+Timestamp awal/akhir **identik antar kedua tabel untuk masing-masing pair**, dan selisih jumlah baris kecil (1 TMG, 2 DRX). Ini membuktikan cakupan waktu simpanan kedua tabel mirip pada jendela itu, **bukan** membuktikan tingkat pengiriman semua frame upstream sama, tidak ada frame yang hilang, atau collector bebas cacat.
+
+**Audit mekanisme source GitHub main:** fungsi `persist_ws3_summary_watch` pada `indodax_ai_bot/m03_ws_summary_live_watch.py` memakai `PRIMARY KEY(pair,minute_epoch)` dan `INSERT OR IGNORE`, mempertahankan hanya observasi pertama dalam satu menit, dengan retensi 2 jam. Fungsi `persist_dense_ws3_prices` memakai `PRIMARY KEY(pair,bucket_epoch)` untuk bucket 5 detik dari frame summary aktual; tidak menginterpolasi atau menciptakan sampel otomatis. Data dense hanya diisi dari frame summary yang memenuhi kriteria source/freshness dan saat continuous+indexed-trade path aktif; retensi indeks dense 8 jam. Karena grain dan aturan deduplikasi berlainan, count summary dan dense **tidak boleh dianggap jumlah packet WS3** atau rasio keberhasilan penerimaan.
+
+**Langkah diagnosis berikut:** lihat ringkasan `M03_WS3_CONTINUOUS_CHECKPOINT` pada original service journal di jendela yang sama, tanpa mengekspor raw log/sumber sensitif atau restart. Ukur frekuensi checkpoint, `dense_price_rows_saved`, dan `indexed_trade_channels_failed`; data checkpoint tetap agregat lintas pasangan sehingga tidak cukup untuk memastikan sebab kekosongan TMG/DRX. Tetap gunakan audit M09 capture original untuk horizon 60m ketika matang. M04 role AI/G1, PAPER lifecycle dan real execution masih OPEN (NO/NO/DRY_RUN).
