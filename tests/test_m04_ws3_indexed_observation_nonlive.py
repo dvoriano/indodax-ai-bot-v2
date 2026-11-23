@@ -244,5 +244,89 @@ class OriginalWS3M04IndexedAsOfTests(unittest.TestCase):
                 now_epoch=NOW)
 
 
+    def _set_turnover_pair(self, pair, *, previous, latest):
+        with sqlite3.connect(self.db) as con:
+            con.execute("""
+                UPDATE m03_ws_summary_watch_minute
+                SET rolling_24h_idr=?
+                WHERE pair=? AND minute_epoch=?
+            """, (str(previous), pair, NOW-120))
+            con.execute("""
+                UPDATE m03_ws_summary_watch_minute
+                SET rolling_24h_idr=?
+                WHERE pair=? AND minute_epoch=?
+            """, (str(latest), pair, NOW-60))
+
+    def test_below_400m_ws3_ticker_remains_source_but_not_m04_handoff(self):
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_watch_readonly,
+        )
+        self.seed("anoa_idr")
+        self.seed("icnt_idr")
+        self._set_turnover_pair(
+            "anoa_idr", previous=506480736, latest=506356556)
+        self._set_turnover_pair(
+            "icnt_idr", previous=282977955, latest=283015485)
+        source = inspect_original_m03_ws3_watch_readonly(
+            db_path=self.db, now_epoch=NOW)
+        self.assertIn("icnt_idr", {
+            c["pair"] for c in source["ranked_review_shortlist_top40"]})
+        self.assertIn("anoa_idr", {
+            c["pair"] for c in source["ranked_review_shortlist_top40"]})
+
+        handoff = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db, now_epoch=NOW)
+        self.assertEqual(
+            handoff["status"], "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED")
+        self.assertEqual(handoff["candidate_count"], 1)
+        self.assertEqual(handoff["candidates"][0]["pair"], "anoa_idr")
+        self.assertEqual(handoff["m04_ws3_handoff_min_rolling_24h_idr"],
+                         "400000000")
+        self.assertEqual(
+            handoff["source_watches_below_400m_excluded_from_m04_handoff"], 1)
+        self.assertTrue(handoff["source_watch_price_observation_is_not_deleted"])
+        self.assertTrue(handoff["m03_trade_channel_allocator_unchanged"])
+        self.assertTrue(handoff["m05_original_telegram_top5_unchanged"])
+        self.assertEqual(handoff["actual_three_role_ai_calls"], 0)
+        self.assertFalse(handoff["execution_allowed"])
+        self.assertFalse(handoff["g1_independent_issuer_verified"])
+
+    def test_400m_exact_boundary_is_allowed_in_m04_ws3_handoff(self):
+        self.seed("boundary_idr")
+        self._set_turnover_pair(
+            "boundary_idr", previous=390000000, latest=400000000)
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db, now_epoch=NOW)
+        self.assertEqual(report["status"], "M04_WS3_HANDOFF_ROLE_INPUTS_PREPARED")
+        self.assertEqual(report["candidate_count"], 1)
+        self.assertEqual(report["candidates"][0]["pair"], "boundary_idr")
+        self.assertEqual(report[
+            "source_watches_below_400m_excluded_from_m04_handoff"], 0)
+        self.assertFalse(report["execution_allowed"])
+
+    def test_below_400m_only_original_watch_is_not_global_data_unknown(self):
+        from indodax_ai_bot.m05_radar_momentum_nonlive import (
+            inspect_original_m03_ws3_watch_readonly,
+        )
+        self.seed("icnt_idr")
+        self._set_turnover_pair(
+            "icnt_idr", previous=282977955, latest=283015485)
+        original = inspect_original_m03_ws3_watch_readonly(
+            db_path=self.db, now_epoch=NOW)
+        self.assertEqual(
+            original["ranked_review_shortlist_top40"][0]["pair"], "icnt_idr")
+        report = inspect_original_ws3_three_role_handoff_readonly(
+            db_path=self.db, now_epoch=NOW)
+        self.assertEqual(report["status"], "M04_WS3_HANDOFF_NO_CURRENT_WATCH")
+        self.assertEqual(report["candidate_count"], 0)
+        self.assertEqual(
+            report["source_watches_below_400m_excluded_from_m04_handoff"], 1)
+        self.assertTrue(report["source_watch_price_observation_is_not_deleted"])
+        self.assertEqual(report["actual_three_role_ai_calls"], 0)
+        self.assertFalse(report["execution_allowed"])
+        self.assertFalse(report["paper_fill_created"] if
+                         "paper_fill_created" in report else report["order_sent"])
+
+
 if __name__=="__main__":
     unittest.main()
