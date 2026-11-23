@@ -220,7 +220,7 @@ historical trading replay.
 
 ## M04 natural WATCH versus M03 trade-channel requests (operator research)
 
-The independent script \`scripts/m04_ws3_watch_channel_coverage_readonly.py\`
+The independent script `scripts/m04_ws3_watch_channel_coverage_readonly.py`
 correlates **original M04 WATCH candidates and their original digest** with
 recent M03 continuous checkpoints and retained local trade-index rows. It does
 not launch a scanner, open a WS/REST connection, modify a database, send
@@ -228,7 +228,7 @@ Telegram, call a paid model or create PAPER/exchange orders.
 
 Use the **original** saved 0600 capture for a retrospective investigation:
 
-\`\`\`bash
+```bash
 (
   set -euo pipefail
   cd "$HOME/indodax-ai-bot-v2"
@@ -239,13 +239,13 @@ Use the **original** saved 0600 capture for a retrospective investigation:
     --source-db "$PWD/runtime/decisions.sqlite3" \
     --audit-capture "$PWD/runtime/m09_ws3_watch_capture_VlyEYT38.json"
 )
-\`\`\`
+```
 
 The prior capture is *retrospective*: although the original capture is validated
 by the existing M09 validator, the current local SQLite index is mutable and
-pruned (24h trade-index retention). The script enforces \`recorded_epoch <=
-captured_epoch\` and \`exchange_epoch <= captured_epoch\` on retained rows and
-\`observed_epoch <= captured_epoch\` on checkpoints, but cannot prove that
+pruned (24h trade-index retention). The script enforces `recorded_epoch <=
+captured_epoch` and `exchange_epoch <= captured_epoch` on retained rows and
+`observed_epoch <= captured_epoch` on checkpoints, but cannot prove that
 the retained source was **immutable at past WATCH time**. Journal gaps can
 also reflect log retention, not exchange inactivity.
 
@@ -254,7 +254,7 @@ candidate selection from hindsight, run this **only when an original M04
 WATCH is actually current** and save its sanitized output as a local private
 0600 file:
 
-\`\`\`bash
+```bash
 (
   set -euo pipefail
   cd "$HOME/indodax-ai-bot-v2"
@@ -266,10 +266,10 @@ WATCH is actually current** and save its sanitized output as a local private
     --source-db "$PWD/runtime/decisions.sqlite3" \
     --capture-current > "$PWD/runtime/m04_watch_channel_coverage_$(date +%s).json"
 )
-\`\`\`
+```
 
 A valid capture has status
-\`M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY\`; otherwise no eligible
+`M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY`; otherwise no eligible
 fresh original M04 WATCH was available or required source evidence could not be
 validated. This command writes **only its explicitly redirected output file**.
 It does not change original trading services. Inspect the result and retain
@@ -277,25 +277,25 @@ its mode 0600 before using it as operator research evidence.
 
 Read result fields carefully:
 
-- \`checkpoint_request_membership\`: true means the pair appeared in the
-  latest recorded checkpoint \`indexed_trade_pairs\` (within 120s before
+- `checkpoint_request_membership`: true means the pair appeared in the
+  latest recorded checkpoint `indexed_trade_pairs` (within 120s before
   capture). False means not listed **in that checkpoint**. Null means no
   valid recent checkpoint. All are *request-membership observations*, **not**
   a direct pair-specific subscription ACK or proof of full-minute coverage.
-- \`pair_specific_ack_evidence=NOT_AVAILABLE_IN_CHECKPOINT\` is deliberately
-  explicit. Current source \`ws_stream_state\` has a per-pair cursor status,
+- `pair_specific_ack_evidence=NOT_AVAILABLE_IN_CHECKPOINT` is deliberately
+  explicit. Current source `ws_stream_state` has a per-pair cursor status,
   but lacks the timestamped ACK provenance needed to attest active
   subscription at the WATCH instant. On saved retrospective captures even
   this mutable cursor status is omitted.
-- \`source_local_retained_trade_windows\` covers 1m, 15m and 60m **before
+- `source_local_retained_trade_windows` covers 1m, 15m and 60m **before
   capture**, excluding receipts recorded after capture. Count zero does
   **not** mean the exchange had no trades.
-- \`local_trade_publications_60m_by_receipt\` counts local receipt epochs,
+- `local_trade_publications_60m_by_receipt` counts local receipt epochs,
   whereas trade sample counts use exchange epochs. They are not equivalent.
-- \`recorded_discontinuities_60m=0\` means zero *recorded* gaps, not verified
-  continuity. \`pair_specific_ack_verified=False\`,
-  \`historical_source_immutability_verified=False\`,
-  \`independent_g1_verified=False\`, and \`execution_allowed=False\`
+- `recorded_discontinuities_60m=0` means zero *recorded* gaps, not verified
+  continuity. `pair_specific_ack_verified=False`,
+  `historical_source_immutability_verified=False`,
+  `independent_g1_verified=False`, and `execution_allowed=False`
   are intentionally preserved.
 
 This prototype addresses the TMG (requested-index membership, 14 local trades
