@@ -431,5 +431,71 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertFalse(denied2["paper_fill_created"])
 
 
+    def test_precapture_retained_source_counts_do_not_use_future_rows(self):
+        from scripts.m04_ws3_precapture_coverage_audit_readonly import (
+            inspect_m04_retained_precapture_coverage_readonly,
+        )
+        saved = self.save_real_capture(pair="drx_idr")
+        # Historical local rows retained with receipt already before capture.
+        for epoch in (NOW-700, NOW-250, NOW-30):
+            self.add_price("drx_idr", epoch, "103", receipt=epoch+1)
+        # Price from before the capture but received after it is not
+        # evidence that the price was locally available at capture time.
+        self.add_price("drx_idr", NOW-100, "104", receipt=NOW+5)
+        # A future exchange timestamp is excluded even if its receipt
+        # timestamp is artificially earlier than the capture.
+        self.add_price("drx_idr", NOW+10, "105", receipt=NOW-1)
+        with patch(
+            "scripts.m09_ws3_watch_price_history_readonly."
+            "inspect_original_ws3_three_role_handoff_readonly",
+            side_effect=AssertionError("NO_RECONSTRUCTED_M04_WATCH"),
+        ) as rescan:
+            result = inspect_m04_retained_precapture_coverage_readonly(
+                capture_file=saved, source_db=self.ws, evaluation_epoch=NOW+20)
+        rescan.assert_not_called()
+        self.assertEqual(result["status"],
+                         "RETAINED_PRECAPTURE_SOURCE_RESEARCH_ONLY")
+        self.assertFalse(result["historical_db_immutability_verified"])
+        self.assertFalse(result["m04_selection_modified"])
+        self.assertFalse(result["lookahead_rows_included"])
+        self.assertEqual(result["role_decisions_observed"], 0)
+        self.assertFalse(result["execution_allowed"])
+        self.assertFalse(result["paper_fill_created"])
+        self.assertEqual(result["provider_calls"], 0)
+        only = result["observations"][0]
+        self.assertEqual(only["pair"], "drx_idr")
+        windows = only["pre_capture_retained_windows"]
+        self.assertEqual(windows["5m"]["retained_rows_by_capture_cutoff"], 2)
+        self.assertEqual(windows["5m"]["latest_exchange_age_seconds"], 30)
+        self.assertEqual(windows["5m"]["largest_observed_inter_sample_gap_seconds"], 220)
+        self.assertEqual(windows["15m"]["retained_rows_by_capture_cutoff"], 3)
+        self.assertEqual(windows["15m"]["largest_observed_inter_sample_gap_seconds"], 450)
+        self.assertFalse(only["price_coverage_decision_gate"])
+        with sqlite3.connect(self.paper) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM m09_paper_simulated_buys").fetchone()[0], 0)
+
+    def test_precapture_retained_missing_and_invalid_capture_fail_closed(self):
+        from scripts.m04_ws3_precapture_coverage_audit_readonly import (
+            inspect_m04_retained_precapture_coverage_readonly,
+        )
+        saved = self.save_real_capture(pair="tmg_idr")
+        missing = inspect_m04_retained_precapture_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=NOW+2)
+        self.assertEqual(missing["status"],
+                         "RETAINED_PRECAPTURE_SOURCE_RESEARCH_ONLY")
+        for value in missing["observations"][0]["pre_capture_retained_windows"].values():
+            self.assertEqual(value["retained_rows_by_capture_cutoff"], 0)
+            self.assertEqual(value["status"], "NO_RETAINED_LOCAL_PRICE_ROWS")
+            self.assertIsNone(value["latest_exchange_age_seconds"])
+        self.assertFalse(missing["execution_allowed"])
+        saved.chmod(0o644)
+        denied = inspect_m04_retained_precapture_coverage_readonly(
+            capture_file=saved, source_db=self.ws, evaluation_epoch=NOW+2)
+        self.assertEqual(denied["candidate_count"], 0)
+        self.assertFalse(denied["execution_allowed"])
+        self.assertEqual(denied["role_decisions_observed"], 0)
+
+
 if __name__=="__main__":
     unittest.main()
