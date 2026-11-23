@@ -339,8 +339,7 @@ class ScalpingPolicy:
         }
         if funding_source == "MAIN":
             # Trading exclusions remain separate from historical read-only.
-            asset_matches = buy_asset not in (
-                "FLOKI", "PEPE", "USDT", "USDC")
+            asset_matches = buy_asset not in ("FLOKI", "PEPE")
         else:
             asset_matches = (
                 buy_asset == ("FLOKI" if funding_source == "FLOKI_REBUY"
