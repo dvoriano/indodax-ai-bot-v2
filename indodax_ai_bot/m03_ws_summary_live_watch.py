@@ -216,6 +216,10 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         indexed_pairs = set()
         recovery_requests = {}
         failed_trade_channels = set()
+        trade_failure_reasons = {}
+        repair_attempts = {}
+        healing_pairs = set()
+        isolated_cursor_repairs = 0
         last_ping_clock=clock() if checkpoint is not None else None
         last_summary_clock=None
         dense_prices={}
@@ -322,6 +326,12 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 report["indexed_trade_pairs"] = sorted(indexed_pairs)
                 report["dense_price_rows"] = list(dense_prices.values())
                 report["indexed_trade_channels_failed"] = len(failed_trade_channels)
+                report["indexed_trade_failures"] = [
+                    {"pair":micro_channels[ch][0],
+                     "reason":trade_failure_reasons.get(ch,"UNKNOWN_TRADE_CHANNEL_FAILURE")}
+                    for ch in sorted(failed_trade_channels) if ch in micro_channels
+                ]
+                report["indexed_trade_cursor_repairs"] = isolated_cursor_repairs
                 report["indexed_trade_channels_rejected"] = len(permanently_rejected)
                 report["indexed_trade_channels_acknowledged"] = sum(
                     ch in micro_active and ch not in failed_trade_channels
@@ -345,8 +355,33 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 checkpoint(snapshot())
                 # Keep the authenticated connection and cursor, but reset
                 # only the short microstructure observation counters.
-                if failed_trade_channels:
-                    raise M03WSWatchError("M03_WS_INDEXED_TRADE_RECONNECT_REQUIRED")
+                # A bad cursor is isolated to its own trade channel.
+                # Stop that subscription, then rebaseline ONLY if the
+                # original journal explicitly marked GAP. Never relabel
+                # an unverified missing interval as complete data.
+                if (failed_trade_channels and not pending_unsubscribe
+                        and not subscribe_started):
+                    channel=next((ch for ch in sorted(failed_trade_channels)
+                                  if ch in micro_channels and ch in micro_active),None)
+                    if channel is not None:
+                        pair,kind=micro_channels[channel]
+                        state=trade_journal.status(pair)
+                        repair=(state["stream_status"]=="GAP"
+                                and repair_attempts.get(pair,0)<1)
+                        if repair:
+                            repair_attempts[pair]=repair_attempts.get(pair,0)+1
+                            healing_pairs.add(pair)
+                        else:
+                            permanently_rejected.add(pair)
+                            healing_pairs.discard(pair)
+                        next_micro_subscribe_id+=1
+                        pending_unsubscribe[next_micro_subscribe_id]=(
+                            pair,pair if repair else None,channel)
+                        sock.send(json.dumps({
+                            "method":2,"params":{"channel":channel},
+                            "id":next_micro_subscribe_id,
+                        }))
+                        unsubscribe_started=clock()
                 observations.clear()
                 dense_prices.clear()
                 received_frames=0
@@ -436,7 +471,10 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     micro_channels.pop(channel,None)
                     micro_offsets.pop(channel,None)
                     subscribe_started.pop(channel,None)
-                    add_trade(new)
+                    failed_trade_channels.discard(channel)
+                    trade_failure_reasons.pop(channel,None)
+                    if new is not None:
+                        add_trade(new)
                     continue
                 if type(request_id) is int and request_id in micro_ids:
                     pair, kind, channel = micro_ids.pop(request_id)
@@ -446,6 +484,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             and "error" in msg and not isinstance(ack,dict)):
                         recovery_requests.pop(request_id,None)
                         permanently_rejected.add(pair)
+                        healing_pairs.discard(pair)
                         indexed_pairs.discard(pair)
                         micro_channels.pop(channel,None)
                         if pair in micro:
@@ -458,8 +497,14 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                                                            fresh_segment=fresh_segment)
                             if state.get("stream_status")=="GAP":
                                 failed_trade_channels.add(channel)
+                                trade_failure_reasons[channel]="WS3_RECOVERY_GAP"
                         except (StreamEvidenceError,ValueError):
                             failed_trade_channels.add(channel)
+                            trade_failure_reasons[channel]="WS3_RECOVERY_ACK_INVALID"
+                        else:
+                            if pair in healing_pairs:
+                                healing_pairs.discard(pair)
+                                isolated_cursor_repairs+=1
                     if (isinstance(ack, dict)
                             and ack.get("recoverable") is True
                             and type(ack.get("offset")) is int
@@ -477,6 +522,8 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     if channel not in micro_active:
                         continue
                     pair, kind = micro_channels[channel]
+                    if kind=="trade" and channel in failed_trade_channels:
+                        continue
                     # A noisy micro channel must never fabricate metrics or
                     # kill the existing authenticated summary WATCH lane.
                     if pair in micro:
@@ -495,6 +542,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             micro[pair]["source_malformed"] = True
                         if kind=="trade" and trade_journal is not None:
                             failed_trade_channels.add(channel)
+                            trade_failure_reasons[channel]="WS3_TRADE_FRAME_MALFORMED"
                         continue
                     off = parsed["offset"]
                     if kind=="trade" and trade_journal is not None and channel not in failed_trade_channels:
@@ -502,8 +550,10 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                             state=trade_journal.ingest(pair,msg)
                             if state.get("stream_status")=="GAP":
                                 failed_trade_channels.add(channel)
+                                trade_failure_reasons[channel]="WS3_PUBLICATION_OFFSET_GAP"
                         except (StreamEvidenceError,ValueError):
                             failed_trade_channels.add(channel)
+                            trade_failure_reasons[channel]="WS3_PUBLICATION_INVALID"
                     if pair not in micro:
                         continue
                     last = micro_offsets.get(channel)
@@ -1075,6 +1125,8 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
         if trade_journal is not None:
             report["indexed_trade_pairs"]=source.get("indexed_trade_pairs",[])
             report["indexed_trade_channels_failed"]=source.get("indexed_trade_channels_failed",0)
+            report["indexed_trade_failures"]=source.get("indexed_trade_failures",[])
+            report["indexed_trade_cursor_repairs"]=source.get("indexed_trade_cursor_repairs",0)
             report["indexed_trade_channels_rejected"]=source.get("indexed_trade_channels_rejected",0)
             report["dense_price_rows_saved"]=len(source.get("dense_price_rows",[]))
             report["indexed_trade_channels_acknowledged"]=source.get("indexed_trade_channels_acknowledged",0)
@@ -1087,6 +1139,8 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
                           "fresh_liquid_pairs":report["fresh_liquid_main_idr_pairs"],
                           "indexed_trade_pairs":report.get("indexed_trade_pairs",[]),
                           "indexed_trade_channels_failed":report.get("indexed_trade_channels_failed",0),
+                          "indexed_trade_failures":report.get("indexed_trade_failures",[]),
+                          "indexed_trade_cursor_repairs":report.get("indexed_trade_cursor_repairs",0),
                           "indexed_trade_channels_rejected":report.get("indexed_trade_channels_rejected",0),
                           "dense_price_rows_saved":report.get("dense_price_rows_saved",0),
                           "indexed_trade_channels_acknowledged":report.get("indexed_trade_channels_acknowledged",0),
