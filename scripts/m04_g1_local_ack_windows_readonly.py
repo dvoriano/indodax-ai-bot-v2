@@ -93,8 +93,10 @@ def _decode_records(records, end_epoch):
                 or not receipt.isdecimal() or len(receipt) > 20):
             raise ValueError("CHECKPOINT_JOURNAL_RECEIPT_UNKNOWN")
         receipt_epoch = int(receipt) // 1000000
-        if not stamp <= receipt_epoch < end_epoch:
-            raise ValueError("CHECKPOINT_JOURNAL_RECEIPT_OUTSIDE_CUTOFF")
+        if receipt_epoch < stamp:
+            raise ValueError("CHECKPOINT_JOURNAL_RECEIPT_PRECEDES_OBSERVATION")
+        if receipt_epoch >= end_epoch:
+            continue  # Not available by this closed-window cutoff.
         if stamp in seen and seen[stamp] != row:
             raise ValueError("CHECKPOINT_TIMESTAMP_CONFLICT")
         seen[stamp] = row
@@ -173,7 +175,7 @@ def _journal_read(end_epoch):
     cmd = [
         "journalctl", "--user", "-u", _UNIT, "--no-pager", "-o", "json",
         "--output-fields=MESSAGE,_PID,_SYSTEMD_INVOCATION_ID,__REALTIME_TIMESTAMP",
-        "--since", "@"+str(end_epoch-3600), "--until", "@"+str(end_epoch-1),
+        "--since", "@"+str(end_epoch-3600), "--until", "@"+str(end_epoch),
         "-n", str(_MAX_RECORDS+1),
     ]
     completed = subprocess.run(cmd, capture_output=True, timeout=20, check=True)
