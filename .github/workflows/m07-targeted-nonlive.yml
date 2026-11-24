@@ -40,6 +40,8 @@ on:
       - "tests/test_m04_g1_15m_1h_source_inventory_nonlive.py"
       - "tests/test_m04_g1_local_receipt_reconciliation_nonlive.py"
       - "scripts/m04_g1_local_ack_windows_readonly.py"
+      - "scripts/m04_g1_public_chart_activity_crosscheck_readonly.py"
+      - "tests/test_m04_g1_public_chart_activity_crosscheck_readonly.py"
       - "tests/test_m04_g1_local_ack_windows_readonly.py"
       - "tests/test_m04_ws3_indexed_observation_nonlive.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
@@ -113,6 +115,8 @@ on:
       - "tests/test_m04_g1_15m_1h_source_inventory_nonlive.py"
       - "tests/test_m04_g1_local_receipt_reconciliation_nonlive.py"
       - "scripts/m04_g1_local_ack_windows_readonly.py"
+      - "scripts/m04_g1_public_chart_activity_crosscheck_readonly.py"
+      - "tests/test_m04_g1_public_chart_activity_crosscheck_readonly.py"
       - "tests/test_m04_g1_local_ack_windows_readonly.py"
       - "tests/test_m04_ws3_indexed_observation_nonlive.py"
       - "scripts/m05_strategy_a_asof_micro_risk_readonly.py"
@@ -202,6 +206,7 @@ jobs:
             tests.test_m03_ws_summary_live_watch \
             tests.test_m04_g1_local_receipt_reconciliation_nonlive \
             tests.test_m04_g1_local_ack_windows_readonly \
+            tests.test_m04_g1_public_chart_activity_crosscheck_readonly \
             tests.test_m04_ws3_indexed_observation_nonlive \
             tests.test_m08_original_net_tier_exit \
             tests.test_m08_original_trade_time \
