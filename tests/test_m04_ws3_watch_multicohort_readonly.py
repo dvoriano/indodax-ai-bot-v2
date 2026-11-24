@@ -246,5 +246,33 @@ class OriginalWatchChannelMultiCohortResearchTests(unittest.TestCase):
         self.assertFalse(result["enough_distinct_packet_fingerprints_for_repeat_pattern"])
 
 
+    def test_local_pair_ack_summary_distinguishes_legacy_and_rejects_authority(self):
+        first = _report(EPOCH, ("tmg_idr", self._digest("ack"), True, 3))
+        first["observations"][0]["local_checkpoint_pair_acknowledged"] = True
+        second = _report(EPOCH+180, ("tmg_idr", self._digest("pending"), True, 0))
+        second["observations"][0]["local_checkpoint_pair_acknowledged"] = False
+        third = _report(EPOCH+360, ("tmg_idr", self._digest("legacy"), True, 1))
+        report = summarize_original_current_watch_reports_readonly(
+            evidence_files=[self._file(r) for r in (first, second, third)])
+        self.assertEqual(report["status"], "M04_CURRENT_WATCH_MULTICOHORT_RESEARCH_ONLY")
+        row = report["pair_summaries"][0]
+        self.assertEqual(row["local_checkpoint_ack_listed"], 1)
+        self.assertEqual(row["local_checkpoint_ack_not_listed"], 1)
+        self.assertEqual(row["local_checkpoint_ack_unknown"], 1)
+        self.assertFalse(report["pair_specific_ack_verified"])
+        self.assertFalse(report["independent_g1_verified"])
+        for change in (
+            {"local_checkpoint_pair_acknowledged": 1},
+            {"local_checkpoint_pair_ack_is_independent_proof": True},
+            {"local_checkpoint_epoch_is_exact_ack_arrival": True},
+        ):
+            invalid = deepcopy(first)
+            invalid["observations"][0].update(change)
+            blocked = summarize_original_current_watch_reports_readonly(
+                evidence_files=[self._file(invalid)])
+            self.assertEqual(blocked["status"], "M04_MULTICOHORT_INPUT_BLOCKED")
+
+
+
 if __name__ == "__main__":
     unittest.main()
