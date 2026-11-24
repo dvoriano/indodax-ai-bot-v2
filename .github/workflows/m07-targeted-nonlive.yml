@@ -63,6 +63,9 @@ on:
       - "scripts/m04_ws3_precapture_coverage_audit_readonly.py"
       - "scripts/m04_ws3_watch_channel_coverage_readonly.py"
       - "scripts/m04_ws3_watch_multicohort_readonly.py"
+      - "scripts/m04_ws3_watch_post400_collector_nonlive.py"
+      - "tests/test_m04_ws3_watch_post400_collector_nonlive.py"
+      - "systemd/user/indodax-v2-m04-watch-post400-research.*"
       - "scripts/m04_ws3_watch_cohort_capture_once.sh"
       - "tests/test_m04_ws3_watch_multicohort_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
@@ -129,6 +132,9 @@ on:
       - "scripts/m04_ws3_precapture_coverage_audit_readonly.py"
       - "scripts/m04_ws3_watch_channel_coverage_readonly.py"
       - "scripts/m04_ws3_watch_multicohort_readonly.py"
+      - "scripts/m04_ws3_watch_post400_collector_nonlive.py"
+      - "tests/test_m04_ws3_watch_post400_collector_nonlive.py"
+      - "systemd/user/indodax-v2-m04-watch-post400-research.*"
       - "scripts/m04_ws3_watch_cohort_capture_once.sh"
       - "tests/test_m04_ws3_watch_multicohort_readonly.py"
       - ".github/workflows/m07-targeted-nonlive.yml"
@@ -196,6 +202,7 @@ jobs:
             tests.test_m09_04_original_virtual_paper \
             tests.test_m09_ws3_watch_price_outcomes_readonly \
             tests.test_m04_ws3_watch_multicohort_readonly \
+            tests.test_m04_ws3_watch_post400_collector_nonlive \
             tests.test_m07_readonly_runner_contract \
             tests.test_m07_main_idr_sourcebound_sizing_original \
             tests.test_m07_m06_m05_last_moment_mainpath
