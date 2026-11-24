@@ -95,14 +95,26 @@ def _validated_checkpoints(
                        for p in pairs)
                 or len(pairs) != len(set(pairs))):
             continue
-        # Duplicate timestamp with conflicting membership cannot prove state.
-        if epoch in by_epoch and by_epoch[epoch] != pairs:
+        row = {"observed_epoch": epoch, "indexed_trade_pairs": pairs}
+        # Optional new local ACK snapshot. Old checkpoints remain unknown.
+        # Never infer a pair-specific result from an aggregate count.
+        ack_key = "indexed_trade_pairs_acknowledged"
+        if ack_key in record:
+            ack = record[ack_key]
+            total = record.get("indexed_trade_channels_acknowledged")
+            if (type(ack) is not list or len(ack) > 40
+                    or any(type(p) is not str or not _PAIR.fullmatch(p)
+                           for p in ack)
+                    or len(ack) != len(set(ack))
+                    or not set(ack).issubset(pairs)
+                    or type(total) is not int or total != len(ack)):
+                raise ValueError("CHECKPOINT_PAIR_ACK_STATE_INVALID")
+            row[ack_key] = sorted(ack)
+        # Duplicate timestamp with conflicting evidence cannot prove state.
+        if epoch in by_epoch and by_epoch[epoch] != row:
             raise ValueError("CHECKPOINT_TIMESTAMP_CONFLICT")
-        by_epoch[epoch] = pairs
-    return [
-        {"observed_epoch": epoch, "indexed_trade_pairs": pairs}
-        for epoch, pairs in sorted(by_epoch.items())
-    ]
+        by_epoch[epoch] = row
+    return [row for _, row in sorted(by_epoch.items())]
 
 
 def _seeds_from_current_capture(source_db: Path, epoch: int) -> tuple[dict, list]:
@@ -293,7 +305,16 @@ def inspect_m04_watch_trade_channels_readonly(
                         "NOT_LISTED_IN_LATEST_RECENT_CHECKPOINT"
                         if membership is False else
                         "RECENT_CHECKPOINT_UNAVAILABLE"),
+                    # Legacy independent/exact-receipt evidence remains
+                    # unavailable. The new observation is only local state
+                    # at the checkpoint, NOT the instant the ACK arrived.
                     "pair_specific_ack_evidence": "NOT_AVAILABLE_IN_CHECKPOINT",
+                    "local_checkpoint_pair_acknowledged": (
+                        pair in newest["indexed_trade_pairs_acknowledged"]
+                        if newest and "indexed_trade_pairs_acknowledged" in newest
+                        else None),
+                    "local_checkpoint_pair_ack_is_independent_proof": False,
+                    "local_checkpoint_epoch_is_exact_ack_arrival": False,
                     "current_cursor_status_not_timestamped_ack":
                         cursor_status,
                     "cursor_status_proves_active_subscription": False,
