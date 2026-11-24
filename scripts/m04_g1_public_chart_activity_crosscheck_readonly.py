@@ -71,21 +71,21 @@ def read_local_rows(source_db, pair, end):
     path = Path(source_db).absolute()
     if not _optional_existing_journal_ok(path):
         raise ValueError("ORIGINAL_LOCAL_INDEX_UNAVAILABLE")
-    with sqlite3.connect(path.as_uri()+"?mode=ro", uri=True, timeout=3) as db:
-        try:
-            db.execute("PRAGMA query_only=ON")
-            db.execute("BEGIN")
-            rows = db.execute("""
-                SELECT exchange_epoch,sequence,price_idr,recorded_epoch
-                FROM m03_ws3_trade_samples
-                WHERE pair=? AND exchange_epoch>=? AND exchange_epoch<?
-                ORDER BY exchange_epoch,sequence LIMIT ?
-            """, (pair,end-3600,end,_MAX_ROWS+1)).fetchall()
-            if len(rows)>_MAX_ROWS:
-                raise ValueError("LOCAL_INDEX_CAP")
-            return rows
-        finally:
-            db.close()
+    db = sqlite3.connect(path.as_uri()+"?mode=ro", uri=True, timeout=3)
+    try:
+        db.execute("PRAGMA query_only=ON")
+        db.execute("BEGIN")
+        rows = db.execute("""
+            SELECT exchange_epoch,sequence,price_idr,recorded_epoch
+            FROM m03_ws3_trade_samples
+            WHERE pair=? AND exchange_epoch>=? AND exchange_epoch<?
+            ORDER BY exchange_epoch,sequence LIMIT ?
+        """, (pair,end-3600,end,_MAX_ROWS+1)).fetchall()
+        if len(rows)>_MAX_ROWS:
+            raise ValueError("LOCAL_INDEX_CAP")
+        return rows
+    finally:
+        db.close()
 
 
 def compare_activity(*, payload, rows, pair, end, now):
