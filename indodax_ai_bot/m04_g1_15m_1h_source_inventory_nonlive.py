@@ -15,6 +15,9 @@ import sqlite3
 from typing import Any
 
 from .trade_stream import _trade_rows, StreamEvidenceError
+from .m04_g1_local_receipt_reconciliation_nonlive import (
+    reconcile_local_trade_windows_nonlive,
+)
 
 _WINDOWS = (("15m", 900), ("1h", 3600))
 _MAX_MICRO_ROWS = 60
@@ -320,6 +323,10 @@ def inventory_g1_windows_nonlive(
             "pair": pair,
             "rotating_micro_archive": micro,
             "separate_existing_trade_journal": journal,
+            "local_publication_index_receipt_reconciliation": (
+                reconcile_local_trade_windows_nonlive(
+                    journal_db, pair=pair, end_epoch=end_epoch)
+            ),
             "independent_g1_source_coverage_verified": False,
             "full_15m_tape_verified": False,
             "full_1h_tape_verified": False,
