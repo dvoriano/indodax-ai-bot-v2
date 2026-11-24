@@ -1,0 +1,11 @@
+[Unit]
+Description=Indodax V2 M04 bounded read-only WATCH evidence sampling
+
+[Timer]
+OnActiveSec=15s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=indodax-v2-m04-watch-post400-research.service
+
+[Install]
+WantedBy=timers.target
