@@ -333,9 +333,27 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 ]
                 report["indexed_trade_cursor_repairs"] = isolated_cursor_repairs
                 report["indexed_trade_channels_rejected"] = len(permanently_rejected)
-                report["indexed_trade_channels_acknowledged"] = sum(
-                    ch in micro_active and ch not in failed_trade_channels
-                    for ch,(pair,kind) in micro_channels.items() if kind=="trade")
+                # Observation only: expose the pair identities behind the
+                # existing aggregate. Active, nonfailed is the same original
+                # predicate; it is NOT an independent exchange receipt or
+                # proof of continuous tape. Timestamp belongs to checkpoint,
+                # not to the instant the ACK arrived.
+                acknowledged_pairs = sorted(
+                    pair for ch,(pair,kind) in micro_channels.items()
+                    if kind=="trade" and ch in micro_active
+                    and ch not in failed_trade_channels)
+                report["indexed_trade_channels_acknowledged"] = len(
+                    acknowledged_pairs)
+                report["indexed_trade_pairs_acknowledged"] = acknowledged_pairs
+                report["indexed_trade_pairs_subscribe_pending"] = sorted(
+                    pair for ch,(pair,kind) in micro_channels.items()
+                    if kind=="trade" and ch in subscribe_started)
+                report["indexed_trade_pairs_unsubscribe_pending"] = sorted(
+                    old for old,_,_ in pending_unsubscribe.values())
+                report["indexed_trade_pairs_rejected_sample"] = sorted(
+                    permanently_rejected)[:256]
+                report["indexed_trade_pairs_rejected_sample_truncated"] = (
+                    len(permanently_rejected)>256)
             return report
 
         while True:
@@ -1138,6 +1156,16 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
             report["indexed_trade_channels_rejected"]=source.get("indexed_trade_channels_rejected",0)
             report["dense_price_rows_saved"]=len(source.get("dense_price_rows",[]))
             report["indexed_trade_channels_acknowledged"]=source.get("indexed_trade_channels_acknowledged",0)
+            for key in (
+                "indexed_trade_pairs_acknowledged",
+                "indexed_trade_pairs_subscribe_pending",
+                "indexed_trade_pairs_unsubscribe_pending",
+                "indexed_trade_pairs_rejected_sample",
+                "indexed_trade_pairs_rejected_sample_truncated",
+            ):
+                # Do not silently convert legacy absent evidence to [].
+                if key in source:
+                    report[key]=source[key]
         return report
 
     def on_checkpoint(source):
@@ -1152,6 +1180,13 @@ def run_m03_ws3_summary_watch_once(db_path: str, *, ws_module=None,
                           "indexed_trade_channels_rejected":report.get("indexed_trade_channels_rejected",0),
                           "dense_price_rows_saved":report.get("dense_price_rows_saved",0),
                           "indexed_trade_channels_acknowledged":report.get("indexed_trade_channels_acknowledged",0),
+                          **{key:report[key] for key in (
+                              "indexed_trade_pairs_acknowledged",
+                              "indexed_trade_pairs_subscribe_pending",
+                              "indexed_trade_pairs_unsubscribe_pending",
+                              "indexed_trade_pairs_rejected_sample",
+                              "indexed_trade_pairs_rejected_sample_truncated",
+                          ) if key in report},
                           "execution_allowed":False},sort_keys=True),flush=True)
 
     source = collect_ws3_market_summary_once(
