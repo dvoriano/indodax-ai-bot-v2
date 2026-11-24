@@ -19,7 +19,7 @@ import sqlite3
 import time
 
 from indodax_ai_bot.public_market import (
-    IndodaxPublicV2RecentTradesResearch, PublicDataError,
+    PublicDataError,
     summarize_v2_trade_page_research,
 )
 from indodax_ai_bot.scanner import MAIN_EXCLUDED_PAIRS
@@ -161,6 +161,11 @@ def compare_page(*, pair, payload, rows, requested_epoch, received_epoch):
 
 
 def run(*, pair, source_db=DEFAULT_DB, market_factory=None, clock=None):
+    # Owner decision 24 Nov 2026: retire this G1 network probe. Preserve
+    # explicitly injected offline fixtures and historical comparison code.
+    # The normal CLI cannot make another REST request.
+    if market_factory is None:
+        return _result("V2_PAGE_G1_RETIRED_BY_OWNER",recent_trade_method_calls=0)
     if not _valid_pair(pair):
         return _result("PAIR_INVALID",recent_trade_method_calls=0)
     if any(os.environ.get(k)!=v for k,v in _LOCKS.items()):
@@ -176,7 +181,7 @@ def run(*, pair, source_db=DEFAULT_DB, market_factory=None, clock=None):
         if requested//60*60!=end or not 0<=requested-start<=10:
             raise ValueError("LOCAL_SNAPSHOT_CUTOFF_CHANGED")
         _validated_local(rows,end=end,read_epoch=requested)
-        market=(market_factory or IndodaxPublicV2RecentTradesResearch)()
+        market=market_factory()
     except (OSError,ValueError,TypeError,OverflowError,sqlite3.Error,InvalidOperation):
         return _result("LOCAL_SOURCE_OR_ADMISSION_SETUP_BLOCKED",recent_trade_method_calls=0)
     try:
