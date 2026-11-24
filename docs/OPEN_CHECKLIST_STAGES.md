@@ -427,3 +427,19 @@ PR #335 merged at `dec77a890334d164c08b56d003c76bbd62d1fe25` after M01 safe foun
 Owner fast-forwarded main from ff0aeae to f13d6d7 (including PR #335 merge dec77a890334d164c08b56d003c76bbd62d1fe25). Focused regression: **81 tests PASS in 5.779s**. One-shot preflight: POST400_NO_VALID_CURRENT_WATCH, saved_reports=0; independent_g1_verified=false, pair_specific_ack_verified=false, execution_allowed=false, provider_calls=0, telegram_messages_sent=0, paper_fill_created=false, order_sent=false. Owner installed the isolated service/timer with no reported unit conflicts or drop-ins. First service run Result=success, ExecMainStatus=0, inactive/dead (expected oneshot completion). Research timer enabled and **active**; next scheduled invocation shown by list-timers. Original BTC public WS (PID 2046837), M03 mainpath (PID 456585), M03 timer and M05 Telegram (PID 242481) reported active/running at acceptance; these are post-install observations, not proof of unchanged PIDs without a before snapshot. Separate post400 summary POST400_NO_SAVED_REPORTS (0 reports). No valid real-market post-change WATCH evidence yet. Periodic timer execution beyond first scheduled invocation still to be observed.
 
 Accepted: source, focused regression, preflight, isolated service installation and first successful oneshot, enabled/active timer. Collector can gather bounded local evidence concurrently with G1 research. No change authorized to original scanner, Telegram, AI dispatch, PAPER or execution. G1 independent 15m/1h completeness and per-pair ACK remain OPEN. Source data remains local partial observation; do not promote a successful collector to G1 proof.
+
+## First automatic post400 WATCH and six-pair G1 inventory (24 Nov 2026, 12:24 WIB closed-window end)
+
+Owner VPS output: post400 summary accepted 1 report, 1 distinct packet, 1 pair/source epoch, no duplicates. UNMD/IDR (capture epoch 1795497774) was listed in the recent M03 request checkpoint and had retained trade rows in each 1m/15m/60m window. This is the first actual automatically collected post-policy WATCH, not proof of improved population coverage; target of 3 distinct packets remains unmet. Timer showed both LAST and NEXT scheduled execution, confirming a subsequent periodic invocation.
+
+G1 inventory window end 1795497840 (24 Nov 2026 12:24 WIB), start 15m 1795496940, start 1h 1795494240. Owner provided these local journal observations:
+| Pair | Local trade rows 15m | Local trade rows 1h | Trade minutes 1h | Retained micro minutes 1h |
+|---|---:|---:|---:|---:|
+| ANOA | 14 | 51 | 48 | 60 |
+| TMG | 0 | 0 | 0 | 0 |
+| CST | 12 | 109 | 49 | 0 |
+| UAI | 7 | 29 | 20 | 0 |
+| ICNT | 12 | 25 | 19 | 0 |
+| DRX | 0 | 0 | 0 | 0 |
+
+ANOA had 15/15 and 60/60 micro minutes, same book observation counts, zero flagged rows in both windows. Journal recorded zero explicit gap markers within the hour for all six and zero observed offset jumps over inspected pair publications; historical gap counts were nonzero. DRX BASELINE_ONLY, no raw publications; TMG retained earlier publications but none with trades in the target hour. ICNT has current-window local data; prior ICNT missing at the November 23 WATCH does not imply it is permanently unindexed or prove its current turnover. The inventory counts exchange-timestamp rows retrospectively, not necessarily rows received by the window end. None of the six has independent G1 or complete 15m/1h tape verification. Next: reconcile raw publication identities/digests with receipt timestamps and indexed rows as of closed-window end, separately flag late and missing evidence, then assess independent source verification. No changes to original runtime services or trading authorization.
