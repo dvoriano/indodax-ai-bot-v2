@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
@@ -192,6 +193,7 @@ def _validate_report(r: dict) -> tuple[int, tuple, list[dict]]:
             raise ValueError("EVIDENCE_PUBLICATION_OR_GAP_INVALID")
         sanitized.append({
             "pair": pair, "digest": digest,
+            "source_epoch": source_epoch,
             "request_membership": membership,
             "local_trades_1m": counts[0],
             "local_trades_15m": counts[1],
@@ -206,7 +208,7 @@ def _validate_report(r: dict) -> tuple[int, tuple, list[dict]]:
 
 
 def summarize_original_current_watch_reports_readonly(
-        *, evidence_files: list[Path]) -> dict:
+        *, evidence_files: list[Path], post400_only: bool = False) -> dict:
     """Strictly metadata-only aggregate; source reports remain untouched."""
     if (type(evidence_files) is not list
             or not 1 <= len(evidence_files) <= _MAX_FILES):
@@ -221,10 +223,24 @@ def summarize_original_current_watch_reports_readonly(
             if resolved in seen_paths:
                 return _blocked("DUPLICATE_EVIDENCE_PATH")
             seen_paths.add(resolved)
-            epoch, key, candidates = _validate_report(_read_private_report(path))
+            report = _read_private_report(path)
+            epoch, key, candidates = _validate_report(report)
+            if post400_only:
+                if report.get("current_m04_ws3_handoff_min_rolling_24h_idr") != "400000000":
+                    return _blocked("POST400_POLICY_MARKER_MISSING")
+                for row in report["observations"]:
+                    value = row.get("current_m04_source_rolling_24h_turnover_idr")
+                    if (type(value) is not str or not 1 <= len(value) <= 64
+                            or not Decimal(value).is_finite()
+                            or Decimal(value) < Decimal("400000000")):
+                        return _blocked("POST400_TURNOVER_INVALID")
+                # A changed local digest can reflect mutable microstructure,
+                # not a new original source observation.
+                key = tuple(sorted((r["pair"], r["source_epoch"])
+                                   for r in candidates))
             checked.append((epoch, key, candidates))
     except (OSError, ValueError, TypeError, UnicodeError,
-            json.JSONDecodeError):
+            json.JSONDecodeError, InvalidOperation):
         return _blocked("EVIDENCE_FILE_OR_CONTRACT_INVALID")
     checked.sort(key=lambda x: (x[0], x[1]))
 
@@ -250,7 +266,8 @@ def summarize_original_current_watch_reports_readonly(
             continue
         seen_packets.add(packet_key)
         for row in rows:
-            identity = row["pair"], row["digest"]
+            identity = (row["pair"], row["source_epoch"] if post400_only
+                        else row["digest"])
             if identity in seen_candidate_keys:
                 duplicates_candidates += 1
                 continue
@@ -280,6 +297,9 @@ def summarize_original_current_watch_reports_readonly(
         "stage": _STAGE,
         "status": "M04_CURRENT_WATCH_MULTICOHORT_RESEARCH_ONLY",
         "accepted_input_reports": len(checked),
+        "post400_policy_only": post400_only,
+        "candidate_identity_basis": ("PAIR_AND_ORIGINAL_SOURCE_EPOCH"
+                                     if post400_only else "PAIR_AND_EVIDENCE_DIGEST"),
         "distinct_watch_packet_fingerprints": distinct,
         "distinct_candidate_evidence": len(seen_candidate_keys),
         "duplicate_watch_packet_reports_ignored": duplicates_packets,
@@ -312,9 +332,10 @@ def main(argv: list[str] | None = None) -> int:
         description="Bounded current M04 WATCH channel provenance cohort summary")
     parser.add_argument("--evidence-file", required=True, type=Path,
                         action="append", metavar="PRIVATE_CURRENT_WATCH_JSON")
+    parser.add_argument("--post400-only", action="store_true")
     args = parser.parse_args(argv)
     report = summarize_original_current_watch_reports_readonly(
-        evidence_files=args.evidence_file)
+        evidence_files=args.evidence_file, post400_only=args.post400_only)
     print(json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
     return 0 if report["status"] == (
         "M04_CURRENT_WATCH_MULTICOHORT_RESEARCH_ONLY") else 2
