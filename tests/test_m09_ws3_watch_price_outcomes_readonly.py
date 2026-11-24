@@ -844,6 +844,11 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
                          "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY")
         self.assertEqual(report["candidate_count"], 2)
         self.assertEqual(report["capture_mode"], "CURRENT_OPERATOR_ONE_SHOT")
+        self.assertEqual(report["current_m04_ws3_handoff_min_rolling_24h_idr"],
+                         "400000000")
+        for row in report["observations"]:
+            self.assertEqual(row["current_m04_source_rolling_24h_turnover_idr"],
+                             "760000000")
         self.assertEqual(report["checkpoint_count"], 1)
         self.assertFalse(report["pair_specific_ack_verified"])
         self.assertFalse(report["historical_source_immutability_verified"])
@@ -893,6 +898,8 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertEqual(report["status"],
                          "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY")
         self.assertEqual(report["capture_mode"], "SAVED_CAPTURE_RETROSPECTIVE")
+        self.assertIsNone(report["current_m04_ws3_handoff_min_rolling_24h_idr"])
+        self.assertIsNone(report["observations"][0]["current_m04_source_rolling_24h_turnover_idr"])
         self.assertEqual(report["checkpoint_count"], 1)
         self.assertEqual(report["latest_checkpoint_age_seconds"], 45)
         item = report["observations"][0]
