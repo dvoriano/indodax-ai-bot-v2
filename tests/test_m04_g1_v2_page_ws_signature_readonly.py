@@ -103,6 +103,13 @@ class SignaturePageTests(unittest.TestCase):
             self.assertEqual(blocked["reason"],"PUBLIC_REST_HTTP_403_FORBIDDEN")
             self.assertFalse(blocked["execution_allowed"])
 
+    def test_retired_normal_entrypoint_never_opens_source_or_transport(self):
+        with patch.object(m,"_local_rows",side_effect=AssertionError("RETIRED")):
+            r=m.run(pair=PAIR)
+        self.assertEqual(r["status"],"V2_PAGE_G1_RETIRED_BY_OWNER")
+        self.assertEqual(r["recent_trade_method_calls"],0)
+        self.assertFalse(r["execution_allowed"])
+
     def test_guard_and_invalid_source_never_construct_transport(self):
         factory=Mock(side_effect=AssertionError("no transport"))
         with patch.dict(os.environ,{},clear=True):
