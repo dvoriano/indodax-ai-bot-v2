@@ -453,3 +453,22 @@ Local raw and index records originate from the SAME M03 collector; even perfect 
 ## G1 receipt reconciliation PR #336 merged, owner validation pending
 
 PR #336 merged at `dec00c5bd4229d25eff7266e0de860d983ac4dc0` after M01 safe foundation (45333576023) and M07 original source join targeted non-live (45333576026) passed. Compare confirmed only the local inventory/reconciliation modules, offline tests, CI and roadmap changed. Owner VPS acceptance requires targeted regression and actual original journal reconciliation at the previously reported closed-window end 1795497840 (if still retained), plus a fresh window including UNMD. Report missing/expired evidence distinctly from zero locally observed rows, and preserve both retrospective exchange-time inventory and as-of receipt counts. Exact agreement of retained local records is not independent G1 completeness; no G1 issuance, AI dispatch, service restart or execution authorized. Automatic post400 WATCH collector remains separate.
+
+## G1 receipt reconciliation owner VPS acceptance; first three post400 WATCHs (24 Nov 2026)
+
+Owner fast-forwarded original V2 to f4a96f6 including PR #336, and ran 72 focused tests PASS in 2.717s. Actual original local raw publication vs index reconciliation succeeded for all seven pairs at two overlapping closed-window ends, 12:32 and 12:24 WIB. Each cell below is raw/index/on-time/matched (all equal); late, unknown receipt, raw-only, index-only, value conflict and receipt difference all zero as reported.
+
+| Pair | 12:32 15m | 12:32 1h | 12:24 15m | 12:24 1h |
+|---|---:|---:|---:|---:|
+| ANOA | 9 | 48 | 14 | 51 |
+| TMG | 0 | 0 | 0 | 0 |
+| CST | 12 | 106 | 12 | 109 |
+| UAI | 9 | 34 | 7 | 29 |
+| ICNT | 9 | 27 | 12 | 25 |
+| DRX | 0 | 0 | 0 | 0 |
+| UNMD | 14 | 72 | 15 | 72 |
+| Sum across pairs | 53 | 287 | 60 | 286 |
+
+The periods overlap; do not sum across periods as unique trades. For TMG/DRX no locally observed trades, not evidence of no exchange activity. All five nonempty pairs show local as-of agreement at both cutoffs; same collector, not independent coverage. G1_VERIFIED=False; EXECUTION_ALLOWED=False. **Accepted:** PR #336 source, regression and local reconciliation.
+
+Post400 timer active. 3 saved reports, 3 distinct source packets, 3 candidate source identities, zero duplicate reports/identities. UNMD (1795497774), ANKR (1795498019), PIPPIN (1795498324) each request-listed and retained local trades in 1m/15m/60m. Initial threshold of three packets met, not independently verified market cohorts or population proof; leave collector running under existing bound. Prior ANOA/ICNT pre-policy evidence stays separate. Next investigate existing independent public REST/WS comparator before adding a duplicate path. No real AI, order, service restart or G1 issuance authorized.
