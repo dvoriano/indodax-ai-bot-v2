@@ -347,3 +347,51 @@ To summarize only owner-private files that were actually saved, use:
 For a repeat pattern, aim for **at least three distinct original WATCH packet fingerprints**, ideally over different naturally observed market intervals, not three rapid repeated samples of a single source observation. The report distinguishes `request_listed`, `not_listed_latest_checkpoint`, `checkpoint_unavailable`, and samples with retained local trade rows. These labels are **never** pair-specific ACKs, proof of rank among the original in-memory M03 40 pair allocator, independent G1 complete trade-tape evidence, or proof that the exchange made zero trades.
 
 The private evidence files are snapshots generated on demand, not cryptographically authenticated/immutable exchange records. No existing TMG/DRX **retrospective** capture is imported into the multi-cohort denominator. TMG/DRX original **8/8 historical candle reference prices** remain separately valid. The capture shell writes only to the dedicated private evidence directory; the summarizer does not write anything.
+
+## Post-400m automatic WATCH evidence collection (optional owner-installed timer)
+
+This is a separate research collector, not a trading daemon. Original M03,
+M05 Telegram, BTC public WS, and historical WATCH files are unchanged.
+A current coverage report must carry the actual original M04 handoff floor
+of 400000000 IDR and each candidate's original observed rolling turnover
+>=400000000. Saved retrospective reports do not receive this marker.
+The new directory is `runtime/m04-watch-cohorts-post400/` (0700; reports 0600).
+The old `runtime/m04-watch-cohorts/` stays separate. Existing pre-policy
+files cannot be inserted into the new collection; missing policy is rejected.
+
+One-shot operator preflight (explicit NO/NO/DRY_RUN, from original repo):
+
+```bash
+export INDODAX_TRADING_ENABLED=NO
+export INDODAX_ALLOW_LIVE_EXECUTION=NO
+export INDODAX_EXECUTION_MODE=DRY_RUN
+.venv/bin/python -B -m scripts.m04_ws3_watch_post400_collector_nonlive --collect-once
+.venv/bin/python -B -m scripts.m04_ws3_watch_post400_collector_nonlive --summarize
+```
+
+The collector invokes the original current M04 WATCH coverage inspector once.
+No eligible valid capture creates no report. A duplicate pair and original
+source timestamp is not counted again even if its digest changes. The lock
+serializes collectors; reports are atomically published in the private directory.
+At 32 reports the collector stops adding reports; it never deletes previous
+evidence. Maximum report size is 256 KiB. The post-policy summarizer separately
+deduplicates overlapping pairs by source epoch. The legacy summarizer remains
+available for older captures. Counts of distinct source packets are not
+independent verified market cohorts. Missing local trades or membership does
+not prove inactivity, ACK, full trade tape or the cause of exclusion.
+
+The new units `systemd/user/indodax-v2-m04-watch-post400-research.service`
+and `.timer` are **not auto-installed**. After source sync, focused tests,
+successful one-shot preflight and owner approval, install only these two user
+units, checking that no different existing file would be overwritten.
+Then run `systemctl --user daemon-reload` and
+`systemctl --user enable --now indodax-v2-m04-watch-post400-research.timer`.
+The timer first invokes a oneshot after 15 seconds, then 60 seconds after
+each service finishes. No restart of an existing service is required.
+Stop/disable only this research timer with
+`systemctl --user disable --now indodax-v2-m04-watch-post400-research.timer`.
+Inspect its status and sanitized journal locally; no raw reports need be shared.
+
+Independent G1 15m/1h, real MARKET/RISK/STRATEGY calls, PAPER fills, and
+exchange execution remain unverified or blocked. This collector is not a
+change to M03 ranking, M04 candidate criteria, or M05 notifications.
