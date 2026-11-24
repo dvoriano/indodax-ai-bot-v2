@@ -9,6 +9,7 @@ subscription REQUEST appeared, not pair-specific ACK or full trade tape.
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal, InvalidOperation
 import json
 import re
 import sqlite3
@@ -165,6 +166,22 @@ def inspect_m04_watch_trade_channels_readonly(
                        or not 0 <= cutoff - observed <= 150
                        for p, d, observed in seeds)):
             return _blocked("ORIGINAL_CAPTURE_INVALID")
+        # Bind the new eligibility policy to the SAME actual current handoff.
+        # Never attach the current policy retroactively to older saved WATCHs.
+        current_turnovers = {}
+        current_floor = None
+        if current:
+            handoff = capture["handoff"]
+            current_floor = handoff.get("m04_ws3_handoff_min_rolling_24h_idr")
+            if current_floor != "400000000":
+                return _blocked("CURRENT_M04_POLICY_UNVERIFIED")
+            for candidate in handoff["candidates"]:
+                value = candidate["public_evidence"]["rolling_24h_turnover_idr"]
+                if (type(value) is not str or not 1 <= len(value) <= 64
+                        or not Decimal(value).is_finite()
+                        or Decimal(value) < Decimal(current_floor)):
+                    return _blocked("CURRENT_M04_TURNOVER_INVALID")
+                current_turnovers[candidate["pair"]] = value
         if checkpoint_records is None:
             raw_checkpoints, journal_status = _journal_checkpoints(cutoff)
         else:
@@ -172,7 +189,7 @@ def inspect_m04_watch_trade_channels_readonly(
                 checkpoint_records, "OPERATOR_SUPPLIED_CHECKPOINT_FIXTURE")
         checkpoints = _validated_checkpoints(
             raw_checkpoints, capture_epoch=cutoff)
-    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error):
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, InvalidOperation):
         return _blocked("ORIGINAL_OR_CHECKPOINT_INVALID")
 
     newest = checkpoints[-1] if checkpoints else None
@@ -183,6 +200,7 @@ def inspect_m04_watch_trade_channels_readonly(
         "evaluated_epoch": evaluation_epoch,
         "capture_mode": ("CURRENT_OPERATOR_ONE_SHOT" if current
                          else "SAVED_CAPTURE_RETROSPECTIVE"),
+        "current_m04_ws3_handoff_min_rolling_24h_idr": current_floor,
         "capture_and_source_db_read_are_atomic": False,
         "historical_source_immutability_verified": False,
         "journal_status": journal_status,
@@ -267,6 +285,7 @@ def inspect_m04_watch_trade_channels_readonly(
                     "pair": pair,
                     "m04_original_evidence_digest_sha256": digest,
                     "m04_source_observed_epoch": source_epoch,
+                    "current_m04_source_rolling_24h_turnover_idr": current_turnovers.get(pair),
                     "checkpoint_request_membership": membership,
                     "checkpoint_request_evidence_status": (
                         "REQUEST_LISTED_IN_LATEST_RECENT_CHECKPOINT"
