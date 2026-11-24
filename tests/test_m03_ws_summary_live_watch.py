@@ -582,9 +582,49 @@ class M03WSLiveWatchTests(unittest.TestCase):
                 collect_ws3_market_summary_once(ws_module=provider,monotonic=SlowClock(),
                     epoch_fn=lambda:NOW,observe_seconds=3,trade_journal=journal,checkpoint=checkpoint)
             self.assertEqual(seen[0]["indexed_trade_pairs"],["btc_idr"])
+            self.assertEqual(seen[0]["indexed_trade_pairs_acknowledged"],["btc_idr"])
+            self.assertEqual(seen[0]["indexed_trade_pairs_subscribe_pending"],[])
+            self.assertEqual(seen[0]["indexed_trade_pairs_unsubscribe_pending"],[])
+            self.assertEqual(seen[0]["indexed_trade_pairs_rejected_sample"],[])
+            self.assertFalse(seen[0]["indexed_trade_pairs_rejected_sample_truncated"])
             self.assertEqual(seen[0]["indexed_trade_channels_failed"],0)
             self.assertTrue(provider.sock.closed)
             self.assertEqual(journal.status("btc_idr")["last_publication_offset"],41)
+
+    def test_continuous_pair_ack_distinguishes_pending_and_rejection(self):
+        from indodax_ai_bot.trade_stream import PublicTradeStreamJournal
+        class SlowClock:
+            def __init__(self): self.value=0
+            def __call__(self):
+                self.value+=.1
+                return self.value
+        for incoming, expected_pending, expected_rejected in (
+            (frames(NOW,100), ["btc_idr"], []),
+            (frames(NOW,100)+[{"id":3,"error":{"code":103}}],
+             [], ["btc_idr"]),
+        ):
+            with self.subTest(rejected=expected_rejected), TemporaryDirectory() as tmp:
+                provider=FakeWS(incoming)
+                journal=PublicTradeStreamJournal(
+                    Path(tmp)/"decisions.sqlite3",index_m03_samples=True)
+                seen=[]
+                def stop(snapshot):
+                    seen.append(snapshot)
+                    raise M03WSWatchError("TEST_STOP_AFTER_CHECKPOINT")
+                with self.assertRaisesRegex(M03WSWatchError,"TEST_STOP_AFTER_CHECKPOINT"):
+                    collect_ws3_market_summary_once(
+                        ws_module=provider,monotonic=SlowClock(),
+                        epoch_fn=lambda:NOW,observe_seconds=3,
+                        trade_journal=journal,checkpoint=stop)
+                report=seen[0]
+                self.assertEqual(report["indexed_trade_pairs_acknowledged"],[])
+                self.assertEqual(report["indexed_trade_channels_acknowledged"],0)
+                self.assertEqual(report["indexed_trade_pairs_subscribe_pending"],
+                                 expected_pending)
+                self.assertEqual(report["indexed_trade_pairs_rejected_sample"],
+                                 expected_rejected)
+                self.assertEqual(report["indexed_trade_channels_rejected"],
+                                 len(expected_rejected))
 
     def test_adaptive_trade_channels_expand_above_eight_and_rotate_on_ack(self):
         from unittest.mock import patch
@@ -612,6 +652,8 @@ class M03WSLiveWatchTests(unittest.TestCase):
                     epoch_fn=lambda:NOW,observe_seconds=3,trade_journal=journal,checkpoint=stop)
             self.assertEqual(len(seen[0]["indexed_trade_pairs"]),12)
             self.assertEqual(seen[0]["indexed_trade_channels_acknowledged"],12)
+            self.assertEqual(seen[0]["indexed_trade_pairs_acknowledged"],
+                             seen[0]["indexed_trade_pairs"])
             self.assertEqual(len(seen[0]["dense_price_rows"]),12)
         with TemporaryDirectory() as tmp, patch("indodax_ai_bot.m03_ws_summary_live_watch._TRADE_CHANNEL_CAP",2):
             journal=PublicTradeStreamJournal(Path(tmp)/"decisions.sqlite3",index_m03_samples=True)
@@ -624,6 +666,8 @@ class M03WSLiveWatchTests(unittest.TestCase):
                     epoch_fn=lambda:NOW,observe_seconds=3,trade_journal=journal,checkpoint=stop)
             self.assertEqual(seen[0]["indexed_trade_pairs"],["aa_idr","cc_idr"])
             self.assertEqual(seen[0]["indexed_trade_channels_acknowledged"],2)
+            self.assertEqual(seen[0]["indexed_trade_pairs_acknowledged"],["aa_idr","cc_idr"])
+            self.assertEqual(seen[0]["indexed_trade_pairs_unsubscribe_pending"],[])
             self.assertEqual(provider.sock.sent[4]["method"],2)
             self.assertEqual(provider.sock.sent[4]["params"]["channel"],"market:trade-activity-bbidr")
             self.assertEqual(provider.sock.sent[5]["params"]["channel"],"market:trade-activity-ccidr")
@@ -709,10 +753,13 @@ class M03WSLiveWatchTests(unittest.TestCase):
             self.assertTrue(provider.sock.closed)
             self.assertGreaterEqual(len(views),2)
             self.assertEqual(views[0]["indexed_trade_channels_failed"],1)
+            self.assertEqual(views[0]["indexed_trade_pairs_acknowledged"],["btc_idr"])
             self.assertEqual(views[0]["indexed_trade_failures"],[
                 {"pair":"vine_idr","reason":"WS3_RECOVERY_GAP"}])
             self.assertEqual(views[-1]["indexed_trade_channels_failed"],0)
             self.assertEqual(views[-1]["indexed_trade_channels_acknowledged"],2)
+            self.assertEqual(views[-1]["indexed_trade_pairs_acknowledged"],
+                             ["btc_idr","vine_idr"])
             self.assertEqual(views[-1]["indexed_trade_cursor_repairs"],1)
             self.assertEqual(journal.status("vine_idr")["stream_status"],
                              "CONTIGUOUS_OBSERVED")

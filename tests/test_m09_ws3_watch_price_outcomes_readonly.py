@@ -860,6 +860,8 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertFalse(samples["ace_idr"]["checkpoint_request_membership"])
         self.assertEqual(samples["humanity_idr"]["pair_specific_ack_evidence"],
                          "NOT_AVAILABLE_IN_CHECKPOINT")
+        self.assertIsNone(samples["humanity_idr"]["local_checkpoint_pair_acknowledged"])
+        self.assertIsNone(samples["ace_idr"]["local_checkpoint_pair_acknowledged"])
         self.assertEqual(
             samples["humanity_idr"]["current_cursor_status_not_timestamped_ack"],
             "CONTIGUOUS_OBSERVED")
@@ -969,6 +971,39 @@ class M09OriginalWS3NoFillAndPriceOutcomeTests(unittest.TestCase):
         self.assertEqual(report["status"], "ORIGINAL_OR_CHECKPOINT_INVALID")
         self.assertFalse(report["execution_allowed"])
 
+
+    def test_new_pair_ack_checkpoint_is_local_and_not_independent(self):
+        from scripts.m04_ws3_watch_channel_coverage_readonly import (
+            inspect_m04_watch_trade_channels_readonly,
+        )
+        self.seed("tmg_idr")
+        self.seed("drx_idr")
+        base = {
+            "status": "M03_WS3_CONTINUOUS_CHECKPOINT",
+            "observed_epoch": NOW-10,
+            "indexed_trade_pairs": ["tmg_idr", "drx_idr"],
+            "indexed_trade_pairs_acknowledged": ["tmg_idr"],
+            "indexed_trade_channels_acknowledged": 1,
+        }
+        report = inspect_m04_watch_trade_channels_readonly(
+            source_db=self.ws, evaluation_epoch=NOW, checkpoint_records=[base])
+        self.assertEqual(report["status"], "M04_WATCH_TRADE_CHANNEL_COVERAGE_RESEARCH_ONLY")
+        rows = {row["pair"]: row for row in report["observations"]}
+        self.assertTrue(rows["tmg_idr"]["local_checkpoint_pair_acknowledged"])
+        self.assertFalse(rows["drx_idr"]["local_checkpoint_pair_acknowledged"])
+        self.assertFalse(rows["tmg_idr"]["local_checkpoint_pair_ack_is_independent_proof"])
+        self.assertFalse(rows["tmg_idr"]["local_checkpoint_epoch_is_exact_ack_arrival"])
+        self.assertFalse(report["pair_specific_ack_verified"])
+        self.assertFalse(report["execution_allowed"])
+        for malformed in (
+            dict(base, indexed_trade_pairs_acknowledged=["other_idr"]),
+            dict(base, indexed_trade_channels_acknowledged=2),
+            dict(base, indexed_trade_pairs_acknowledged=["tmg_idr","tmg_idr"]),
+        ):
+            invalid = inspect_m04_watch_trade_channels_readonly(
+                source_db=self.ws, evaluation_epoch=NOW, checkpoint_records=[malformed])
+            self.assertEqual(invalid["status"], "ORIGINAL_OR_CHECKPOINT_INVALID")
+            self.assertFalse(invalid["execution_allowed"])
 
     def test_multicohort_consumes_actual_original_current_m04_audit_contract(self):
         from scripts.m04_ws3_watch_channel_coverage_readonly import (
