@@ -374,6 +374,88 @@ class OriginalM09VirtualPaper(unittest.TestCase):
             self.app.step_m09_managed_paper_cycle_once(
                 **{**cfg,"require_m04_review":False},now_epoch=start+6)
 
+    def test_review_bound_pending_buy_expires_at_source_age_not_maker_ttl(self):
+        from hashlib import sha256
+        start=BUY_EPOCH
+        cfg=dict(seed_idr=D("500000"),buy_fee_pct=D("0.2"),
+                 maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
+                 slippage_pct=D("0.1"),depth_fraction_pct=D("5"),
+                 trailing_pct=D("2"),require_m04_review=True,
+                 source_db=self.db.parent/"m03.sqlite")
+        def entry(t):
+            return {"paper_entry_reference":{
+                "pair":"xrp_idr","maker_limit_price_idr":"1000",
+                "observed_epoch":t,
+                "m04_synthetic_selection_reference":{
+                    "pair":"xrp_idr",
+                    "evidence_digest_sha256":sha256(str(t).encode()).hexdigest(),
+                    "source_observed_epoch":t,
+                    "decision_observed_epoch":t}}}
+        def step(t, selected, *, expect_book=False):
+            app=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+            with patch.object(app,"discover_m09_paper_entry_reference_once",
+                              return_value=selected),patch.object(
+                    app,"_read_m09_observed_book",return_value=dict(
+                        orderbook_locally_observed_epoch=t,
+                        best_bid_idr="999",best_ask_idr="1000",
+                        bid_depth_top5_idr="20000000",
+                        ask_depth_top5_idr="20000000",
+                        spread_bps="10")) as book:
+                r=app.run_m09_original_paper_cycle_offline_once(
+                    action="AUTO_STEP",details={**cfg,"now_epoch":t})
+                self.check_isolation(r)
+                self.assertEqual(book.called,expect_book)
+                return r["paper"]
+        old=entry(start)
+        self.assertEqual(step(start,old)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        expired=step(start+61,entry(start+61))
+        self.assertEqual(expired["status"],"M09_PAPER_AUTO_M04_PENDING_SOURCE_EXPIRED")
+        self.assertIsNone(expired["paper_pending_order"])
+        self.assertIsNone(expired["paper_modeled_receipt"])
+        self.assertEqual(D(expired["paper_virtual_free_idr"]),D("500000"))
+        self.assertEqual(step(start+61,old)["status"],"M09_PAPER_AUTO_TICK_REPLAY")
+        self.assertEqual(step(start+62,old)["status"],"M09_PAPER_AUTO_M04_RESCAN_REQUIRED")
+        self.assertEqual(self.summary()["paper"]["paper_buy_count"],0)
+        self.assertEqual(step(start+63,entry(start+63))["status"],
+                         "M09_PAPER_AUTO_BUY_PENDING")
+        # The existing <=60s source age boundary remains inclusive.
+        filled=step(start+123,None,expect_book=True)
+        self.assertIn(filled["status"],("M09_PAPER_AUTO_BUY_FILLED",
+                                        "M09_PAPER_AUTO_BUY_PARTIAL_REMAINDER_CANCELLED"))
+        self.assertEqual(self.summary()["paper"]["paper_buy_count"],1)
+
+    def test_review_bound_pending_missing_selection_cancels_without_fill(self):
+        cfg=dict(seed_idr=D("500000"),buy_fee_pct=D("0.2"),
+                 maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
+                 slippage_pct=D("0.1"),depth_fraction_pct=D("5"),
+                 trailing_pct=D("2"),require_m04_review=True,
+                 source_db=self.db.parent/"m03.sqlite")
+        result={"paper_entry_reference":{
+            "pair":"xrp_idr","maker_limit_price_idr":"1000",
+            "observed_epoch":BUY_EPOCH,
+            "m04_synthetic_selection_reference":{
+                "pair":"xrp_idr","evidence_digest_sha256":"a"*64,
+                "source_observed_epoch":BUY_EPOCH,
+                "decision_observed_epoch":BUY_EPOCH}}}
+        with patch.object(self.app,"discover_m09_paper_entry_reference_once",
+                          return_value=result):
+            self.assertEqual(self.app.step_m09_managed_paper_cycle_once(
+                **cfg,now_epoch=BUY_EPOCH)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        # Isolated fixture only: simulate an incomplete persisted state.
+        with sqlite3.connect(self.db) as con:
+            state=json.loads(con.execute("SELECT state_json FROM m09_paper_auto_state").fetchone()[0])
+            del state["pending"]["m04_synthetic_selection_reference"]
+            con.execute("UPDATE m09_paper_auto_state SET state_json=? WHERE id=1",
+                        (json.dumps(state),))
+        app=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+        with patch.object(app,"_read_m09_observed_book",
+                          side_effect=AssertionError("INVALID_SELECTION_MUST_NOT_READ_BOOK")):
+            cancelled=app.step_m09_managed_paper_cycle_once(**cfg,now_epoch=BUY_EPOCH+1)
+        self.assertEqual(cancelled["status"],"M09_PAPER_AUTO_M04_PENDING_SELECTION_INVALID")
+        self.assertIsNone(cancelled["paper_pending_order"])
+        self.assertEqual(self.summary()["paper"]["paper_buy_count"],0)
+        self.assertFalse(cancelled["execution_allowed"])
+
     def test_managed_paper_pending_expiry_no_fill(self):
         cfg=dict(seed_idr=D("500000"),buy_fee_pct=D("0.2"),
                  maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
