@@ -175,6 +175,13 @@ def _validate_report(r: dict) -> tuple[int, tuple, list[dict]]:
                 or type(windows) is not dict
                 or set(windows) != {"1m", "15m", "60m"}):
             raise ValueError("EVIDENCE_CANDIDATE_PROVENANCE_INVALID")
+        local_ack = row.get("local_checkpoint_pair_acknowledged")
+        if (not (local_ack is True or local_ack is False or local_ack is None)
+                or (local_ack is True and membership is not True)
+                or (local_ack is not None and checkpoint_count == 0)
+                or row.get("local_checkpoint_pair_ack_is_independent_proof", False) is not False
+                or row.get("local_checkpoint_epoch_is_exact_ack_arrival", False) is not False):
+            raise ValueError("EVIDENCE_LOCAL_CHECKPOINT_ACK_INVALID")
         counts = []
         for h in ("1m", "15m", "60m"):
             w = windows[h]
@@ -195,6 +202,7 @@ def _validate_report(r: dict) -> tuple[int, tuple, list[dict]]:
             "pair": pair, "digest": digest,
             "source_epoch": source_epoch,
             "request_membership": membership,
+            "local_checkpoint_pair_acknowledged": local_ack,
             "local_trades_1m": counts[0],
             "local_trades_15m": counts[1],
             "local_trades_60m": counts[2],
@@ -253,6 +261,9 @@ def summarize_original_current_watch_reports_readonly(
         "request_listed": 0,
         "not_listed_latest_checkpoint": 0,
         "checkpoint_unavailable": 0,
+        "local_checkpoint_ack_listed": 0,
+        "local_checkpoint_ack_not_listed": 0,
+        "local_checkpoint_ack_unknown": 0,
         "with_retained_local_trades_1m": 0,
         "with_retained_local_trades_15m": 0,
         "with_retained_local_trades_60m": 0,
@@ -282,6 +293,13 @@ def summarize_original_current_watch_reports_readonly(
                 counts["not_listed_latest_checkpoint"] += 1
             else:
                 counts["checkpoint_unavailable"] += 1
+            ack = row["local_checkpoint_pair_acknowledged"]
+            if ack is True:
+                counts["local_checkpoint_ack_listed"] += 1
+            elif ack is False:
+                counts["local_checkpoint_ack_not_listed"] += 1
+            else:
+                counts["local_checkpoint_ack_unknown"] += 1
             for period in (1, 15, 60):
                 if row["local_trades_" + str(period) + "m"]:
                     counts["with_retained_local_trades_" + str(period) + "m"] += 1
