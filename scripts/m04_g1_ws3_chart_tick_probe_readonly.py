@@ -105,18 +105,30 @@ def _messages(raw):
     return messages
 
 
-def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch):
+def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
+                        closed_window_research=False, health_check=None):
     """Single connection; fail closed on rejected ACK, gap or malformed data.
 
     Fresh subscription only, not a historical/replay probe. Returns internal
     parsed rows to caller, never prints socket frames or public token.
     """
-    if not _valid_pair(pair) or type(seconds) is not int or not 30<=seconds<=120:
+    if (not _valid_pair(pair) or type(seconds) is not int
+            or type(closed_window_research) is not bool
+            or (seconds not in (1020,3720) if closed_window_research
+                else not 30<=seconds<=120)
+            or (closed_window_research and not callable(health_check))):
         raise ValueError("CHART_SCOPE_INVALID")
+    max_frames=50000 if closed_window_research else _MAX_FRAMES
+    max_bytes=64*1024*1024 if closed_window_research else _MAX_BYTES
+    max_ticks=100000 if closed_window_research else _MAX_TICKS
     channel="chart:tick-"+pair.replace("_","")
     sock=None
     ticks={}
+    receipts={}
+    stream_epoch=None
     try:
+        if closed_window_research:
+            health_check()
         sock=ws_module.create_connection(WS_URL,timeout=5,enable_multithread=True)
         sock.settimeout(1)
         sock.send(json.dumps({"params":{"token":PUBLIC_TOKEN},"id":1}))
@@ -126,7 +138,11 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch):
         publication_count=frames=total_bytes=0
         next_ping=None
         ping_id=3
+        next_health=monotonic()+10 if closed_window_research else None
         while monotonic()<deadline:
+            if closed_window_research and monotonic()>=next_health:
+                health_check()
+                next_health=monotonic()+10
             if phase=="OBSERVE" and monotonic()>=next_ping:
                 sock.send(json.dumps({"method":7,"id":ping_id}))
                 ping_id+=1
@@ -136,12 +152,12 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch):
             except ws_module.WebSocketTimeoutException:
                 continue
             frames+=1
-            if frames>_MAX_FRAMES:
+            if frames>max_frames:
                 raise ValueError("CHART_FRAME_CAP")
             if type(raw) is not str:
                 raise ValueError("CHART_FRAME_INVALID")
             total_bytes+=len(raw.encode("utf-8"))
-            if total_bytes>_MAX_BYTES:
+            if total_bytes>max_bytes:
                 raise ValueError("CHART_BYTE_CAP")
             for msg in _messages(raw):
                 if monotonic()>=deadline:
@@ -169,6 +185,7 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch):
                             or result.get("publications",[])!=[]):
                         raise ValueError("CHART_SUBSCRIBE_INVALID")
                     baseline=last=result["offset"]
+                    stream_epoch=result["epoch"]
                     ack_epoch=int(epoch())
                     phase="OBSERVE"
                     deadline=monotonic()+seconds
@@ -191,7 +208,9 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch):
                         if key in ticks:
                             raise ValueError("CHART_REPEAT_OR_CONFLICTING_IDENTITY")
                         ticks[key]=tick
-                        if len(ticks)>_MAX_TICKS:
+                        if closed_window_research:
+                            receipts[key]=received
+                        if len(ticks)>max_ticks:
                             raise ValueError("CHART_TICK_CAP")
                     publication_count+=1
                     last=off
@@ -200,9 +219,14 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch):
         finish=int(epoch())
         if not ack_epoch<=finish<=ack_epoch+seconds+5:
             raise ValueError("CHART_CLOCK_INVALID")
-        return dict(ack_epoch=ack_epoch,finish_epoch=finish,
-                    baseline_offset=baseline,last_offset=last,
-                    publication_count=publication_count,ticks=list(ticks.values()))
+        if closed_window_research:
+            health_check()
+        capture=dict(ack_epoch=ack_epoch,finish_epoch=finish,
+                     baseline_offset=baseline,last_offset=last,
+                     publication_count=publication_count,ticks=list(ticks.values()))
+        if closed_window_research:
+            capture.update(chart_stream_epoch=stream_epoch,tick_receipts=receipts)
+        return capture
     finally:
         if sock is not None:
             try:
@@ -228,7 +252,7 @@ def _open_source(path):
         raise
 
 
-def read_raw_overlap(path,pair,start,end,cutoff):
+def read_raw_overlap(path,pair,start,end,cutoff,*,max_identities=_MAX_TICKS):
     """Read retained digest-validated raw rows, not the quantity-less index."""
     db=_open_source(path)
     try:
@@ -270,7 +294,7 @@ def read_raw_overlap(path,pair,start,end,cutoff):
                     observed=min(x for x in (prior[1],observed) if x is not None) if (
                         prior[1] is not None or observed is not None) else None
                 raw[identity]=(values,observed)
-                if len(raw)>_MAX_TICKS:
+                if len(raw)>max_identities:
                     raise ValueError("ORIGINAL_RAW_IDENTITY_CAP")
         rows=[(key[0],key[1],value[1],value[2],value[3])
               for key,(value,receipt) in raw.items()
