@@ -105,8 +105,16 @@ def _messages(raw):
     return messages
 
 
+class ChartObservationInterrupted(KeyboardInterrupt):
+    """Only counters from the last fully processed publication, not rows."""
+    def __init__(self, summary):
+        super().__init__("CHART_OBSERVATION_INTERRUPTED")
+        self.summary=summary
+
+
 def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
-                        closed_window_research=False, health_check=None):
+                        closed_window_research=False, health_check=None,
+                        progress=None):
     """Single connection; fail closed on rejected ACK, gap or malformed data.
 
     Fresh subscription only, not a historical/replay probe. Returns internal
@@ -116,7 +124,8 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
             or type(closed_window_research) is not bool
             or (seconds not in (1020,3720) if closed_window_research
                 else not 30<=seconds<=120)
-            or (closed_window_research and not callable(health_check))):
+            or (closed_window_research and not callable(health_check))
+            or (progress is not None and (not closed_window_research or not callable(progress)))):
         raise ValueError("CHART_SCOPE_INVALID")
     max_frames=50000 if closed_window_research else _MAX_FRAMES
     max_bytes=64*1024*1024 if closed_window_research else _MAX_BYTES
@@ -126,6 +135,19 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
     ticks={}
     receipts={}
     stream_epoch=None
+    # Snapshot only after an entire publication has been processed. A Ctrl+C
+    # during parsing must not advertise half a publication as accepted.
+    committed=(None,None,0,0)
+    ack_epoch=None
+    observation_start=None
+    def progress_summary():
+        first,last,count,n=committed
+        elapsed=(max(0,min(seconds,int(monotonic()-observation_start)))
+                 if observation_start is not None else 0)
+        return dict(pair=pair,ack_epoch=ack_epoch,baseline_offset=first,
+                    last_offset=last,publication_count=count,
+                    chart_ticks_observed=n,elapsed_seconds=elapsed,
+                    requested_observation_seconds=seconds)
     try:
         if closed_window_research:
             health_check()
@@ -139,10 +161,14 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
         next_ping=None
         ping_id=3
         next_health=monotonic()+10 if closed_window_research else None
+        next_progress=None
         while monotonic()<deadline:
             if closed_window_research and monotonic()>=next_health:
                 health_check()
                 next_health=monotonic()+10
+            if progress is not None and next_progress is not None and monotonic()>=next_progress:
+                progress(dict(event="CHART_OBSERVATION_PROGRESS",**progress_summary()))
+                next_progress=monotonic()+30
             if phase=="OBSERVE" and monotonic()>=next_ping:
                 sock.send(json.dumps({"method":7,"id":ping_id}))
                 ping_id+=1
@@ -188,8 +214,13 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
                     stream_epoch=result["epoch"]
                     ack_epoch=int(epoch())
                     phase="OBSERVE"
-                    deadline=monotonic()+seconds
+                    observation_start=monotonic()
+                    deadline=observation_start+seconds
                     next_ping=monotonic()+30
+                    committed=(baseline,last,0,0)
+                    if progress is not None:
+                        progress(dict(event="CHART_SUBSCRIPTION_ACK",**progress_summary()))
+                        next_progress=monotonic()+30
                 else:
                     if msg=={} or (type(msg.get("id")) is int
                                    and 3<=msg["id"]<ping_id
@@ -214,6 +245,7 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
                             raise ValueError("CHART_TICK_CAP")
                     publication_count+=1
                     last=off
+                    committed=(baseline,last,publication_count,len(ticks))
         if phase!="OBSERVE":
             raise ValueError("CHART_HANDSHAKE_TIMEOUT")
         finish=int(epoch())
@@ -227,6 +259,10 @@ def collect_chart_ticks(*, pair, seconds, ws_module, monotonic, epoch,
         if closed_window_research:
             capture.update(chart_stream_epoch=stream_epoch,tick_receipts=receipts)
         return capture
+    except KeyboardInterrupt:
+        if closed_window_research:
+            raise ChartObservationInterrupted(progress_summary()) from None
+        raise
     finally:
         if sock is not None:
             try:
