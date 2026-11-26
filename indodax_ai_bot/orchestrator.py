@@ -2624,7 +2624,38 @@ class DailyScalpingOrchestrator:
                 if pending is not None:
                     if pending["side"]!="BUY":
                         raise DecisionConflictError("M09_PAPER_AUTO_PENDING_MISMATCH")
-                    if now-pending["created"]>=300:
+                    # A review-bound pending maker scenario must not turn
+                    # into a modeled fill after its original M04 selection
+                    # has expired. The legacy radar-only maker TTL remains
+                    # 300s. Restart/replay must not extend the 60s source
+                    # freshness bound or substitute a different selection.
+                    selection=pending.get("m04_synthetic_selection_reference")
+                    selection_valid=(
+                        type(selection) is dict
+                        and set(selection)=={
+                            "pair","evidence_digest_sha256",
+                            "source_observed_epoch","decision_observed_epoch",
+                        }
+                        and selection.get("pair")==pending.get("pair")
+                        and type(selection.get("evidence_digest_sha256")) is str
+                        and re.fullmatch(r"[0-9a-f]{64}",
+                                         selection["evidence_digest_sha256"]) is not None
+                        and type(selection.get("source_observed_epoch")) is int
+                        and type(selection.get("decision_observed_epoch")) is int
+                        and type(pending.get("created")) is int
+                        and 0<selection["source_observed_epoch"]
+                            <=selection["decision_observed_epoch"]
+                            <=pending["created"]<=now
+                        and state.get("last_m04_source_epoch")
+                            ==selection["source_observed_epoch"]
+                    )
+                    if require_m04_review and not selection_valid:
+                        state["pending"]=None
+                        status="M09_PAPER_AUTO_M04_PENDING_SELECTION_INVALID"
+                    elif require_m04_review and now-selection["source_observed_epoch"]>60:
+                        state["pending"]=None
+                        status="M09_PAPER_AUTO_M04_PENDING_SOURCE_EXPIRED"
+                    elif now-pending["created"]>=300:
                         state["pending"]=None
                         status="M09_PAPER_AUTO_BUY_EXPIRED"
                     else:
