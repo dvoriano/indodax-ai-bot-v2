@@ -294,6 +294,88 @@ class OriginalM09VirtualPaper(unittest.TestCase):
             self.buy()
 
 
+    def test_managed_paper_full_cycle_reads_original_sqlite_without_mocked_readers(self):
+        # Deterministic fixture: original table shapes, actual original radar
+        # and book readers; NOT a live source or exchange-fill attestation.
+        source=self.db.parent/"m03-original-source-fixture.sqlite3"
+        start=BUY_EPOCH
+        with sqlite3.connect(source) as con:
+            con.execute("""CREATE TABLE m03_ws_summary_watch_minute (
+                pair,minute_epoch,exchange_epoch,last_idr,rolling_24h_idr,
+                public_offset,PRIMARY KEY(pair,minute_epoch))""")
+            con.execute("""CREATE TABLE m03_ws_microstructure_watch_minute (
+                pair,minute_epoch,observed_local_epoch,trade_frames,
+                source_buy_count,source_sell_count,source_buy_idr,source_sell_idr,
+                last_trade_epoch,trade_offset,trade_gap_observed,trade_truncated,
+                book_offset,book_local_epoch,best_bid_idr,best_ask_idr,
+                spread_bps,bid_depth_top5_idr,ask_depth_top5_idr,
+                book_imbalance_top5_ratio,source_malformed,
+                PRIMARY KEY(pair,minute_epoch))""")
+            con.executemany("INSERT INTO m03_ws_summary_watch_minute VALUES (?,?,?,?,?,?)",[
+                ("xrp_idr",start-60,start-60,"995","499000000",1),
+                ("xrp_idr",start,start,"1000","500000000",2),
+                ("floki_idr",start-60,start-60,"995","900000000",1),
+                ("floki_idr",start,start,"1000","910000000",2)])
+        source.chmod(0o600)
+        def snap(t,bid,ask,bid_depth,ask_depth,*,malformed=0):
+            spread=str((D(ask)-D(bid))/((D(ask)+D(bid))/2)*10000)
+            with sqlite3.connect(source) as con:
+                con.execute("INSERT OR REPLACE INTO m03_ws_microstructure_watch_minute VALUES ("+
+                            ",".join(["?"]*21)+")",
+                            ("xrp_idr",t-t%60,t,1,1,1,"100000","80000",t,
+                             t-start+1,0,0,t-start+1,t,str(bid),str(ask),spread,
+                             str(bid_depth),str(ask_depth),None,malformed))
+        cfg=dict(seed_idr=D("1000000"),buy_fee_pct=D("0.2"),
+                 maker_sell_fee_pct=D("0.2"),taker_sell_fee_pct=D("0.3"),
+                 slippage_pct=D("0.1"),depth_fraction_pct=D("5"),
+                 trailing_pct=D("2"),source_db=source)
+        def step(t):
+            before=source.read_bytes()
+            app=DailyScalpingOrchestrator(Settings(),DecisionJournal(self.db))
+            r=app.run_m09_original_paper_cycle_offline_once(
+                action="AUTO_STEP",details={**cfg,"now_epoch":t})
+            self.check_isolation(r)
+            self.assertEqual(source.read_bytes(),before)
+            self.assertFalse(r["paper"]["paper_ai_review_verified"])
+            self.assertFalse(r["paper"]["paper_source_g1_verified"])
+            self.assertFalse(r["paper"]["paper_fill_depth_verified"])
+            return r["paper"]
+        snap(start,1000,1002,2000000,2000000)
+        pending=step(start)
+        self.assertEqual(pending["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        self.assertEqual(pending["paper_pending_order"]["pair"],"xrp_idr")
+        self.assertEqual(pending["paper_pending_order"]["limit"],"1000")
+        self.assertEqual(step(start+1)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        snap(start+2,998,999,2000000,2000000,malformed=1)
+        self.assertEqual(step(start+2)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        snap(start+3,998,999,2000000,2000000)
+        bought=step(start+3)
+        self.assertEqual(bought["status"],"M09_PAPER_AUTO_BUY_PARTIAL_REMAINDER_CANCELLED")
+        self.assertEqual(D(bought["paper_virtual_free_idr"]),D("899800"))
+        self.assertEqual(D(bought["paper_modeled_receipt"]["paper_buy_qty"]),D("100"))
+        self.assertEqual(step(start+3)["status"],"M09_PAPER_AUTO_TICK_REPLAY")
+        snap(start+4,1300,1302,1300000,2000000)
+        partial=step(start+4)
+        self.assertEqual(partial["status"],"M09_PAPER_AUTO_SELL_PARTIAL")
+        self.assertEqual(partial["paper_exit_reason"],"T3")
+        self.assertEqual(D(partial["paper_modeled_receipt"]["paper_remaining_qty"]),D("50"))
+        self.assertEqual(step(start+5)["status"],"M09_PAPER_AUTO_POSITION_WAIT_BOOK")
+        snap(start+6,1300,1302,5000000,2000000)
+        closed=step(start+6)
+        self.assertEqual(closed["status"],"M09_PAPER_AUTO_SELL_CLOSED")
+        self.assertIsNone(closed["paper_position_id"])
+        self.assertEqual(D(closed["paper_virtual_free_idr"]),D("1029280"))
+        self.assertEqual(D(self.summary()["paper"]["paper_net_pnl_idr_reference"]),D("29280"))
+        # No re-entry from the just-consumed book. A new summary and book
+        # from a later minute permit a new pending order, not instant fill.
+        self.assertEqual(step(start+7)["status"],"M09_PAPER_AUTO_DISCOVER_WAIT")
+        with sqlite3.connect(source) as con:
+            con.execute("INSERT INTO m03_ws_summary_watch_minute VALUES (?,?,?,?,?,?)",
+                        ("xrp_idr",start+60,start+60,"1005","501000000",3))
+        snap(start+60,1005,1007,2000000,2000000)
+        self.assertEqual(step(start+60)["status"],"M09_PAPER_AUTO_BUY_PENDING")
+        self.assertEqual(self.summary()["paper"]["paper_buy_count"],1)
+
     def test_explicit_m04_shadow_paper_selection_no_fallback_and_one_position(self):
         from indodax_ai_bot.three_role_ai import _candidate_decision_loop
         from hashlib import sha256
