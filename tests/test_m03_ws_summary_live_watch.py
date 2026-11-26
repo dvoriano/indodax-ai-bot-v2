@@ -329,7 +329,7 @@ class M03WSLiveWatchTests(unittest.TestCase):
         bad = frames(NOW+1, 110, offset=125)[2]
         bad["result"]["data"]["data"][0][2] = "SECRET_INVALID_PRICE"
         for suffix in ("trailing SECRET", "{}", json.dumps(bad),
-                       valid * 8, '{"result":'):
+                       valid * 32, '{"result":'):
             with self.subTest(suffix_type=len(suffix)):
                 provider = FakeWS(first[:2] + [RawWSFrame(valid + suffix)])
                 with self.assertRaisesRegex(
@@ -340,6 +340,108 @@ class M03WSLiveWatchTests(unittest.TestCase):
                         ws_module=provider, monotonic=Clock(), observe_seconds=3,
                     )
                 self.assertTrue(provider.sock.closed)
+
+    def test_coalesced_known_subscription_ack_then_trade_original_socket(self):
+        import json
+        from unittest.mock import patch
+        from indodax_ai_bot.trade_stream import PublicTradeStreamJournal
+        class SlowClock:
+            def __init__(self): self.value=0
+            def __call__(self):
+                self.value+=.1
+                return self.value
+        ack={"id":3,"result":{"recoverable":True,"epoch":"123","offset":40}}
+        trade={"result":{"channel":"market:trade-activity-btcidr","data":{
+            "offset":41,"data":[["btcidr",NOW,5,"buy",100,"10000","100"]]}}}
+        provider=FakeWS(frames(NOW,100)+[
+            RawWSFrame(json.dumps(ack)+json.dumps(trade))])
+        seen=[]
+        def stop(snapshot):
+            seen.append(snapshot)
+            raise M03WSWatchError("TEST_STOP_AFTER_CHECKPOINT")
+        with TemporaryDirectory() as tmp, patch(
+                "indodax_ai_bot.trade_stream.time.time",return_value=NOW):
+            journal=PublicTradeStreamJournal(Path(tmp)/"decisions.sqlite3",
+                                             index_m03_samples=True)
+            with self.assertRaisesRegex(M03WSWatchError,"TEST_STOP_AFTER_CHECKPOINT"):
+                collect_ws3_market_summary_once(
+                    ws_module=provider,monotonic=SlowClock(),epoch_fn=lambda:NOW,
+                    observe_seconds=3,trade_journal=journal,checkpoint=stop)
+            self.assertEqual(journal.status("btc_idr")["last_publication_offset"],41)
+        self.assertEqual(seen[0]["indexed_trade_pairs_acknowledged"],["btc_idr"])
+        self.assertEqual(seen[0]["coalesced_publication_frames"],1)
+        self.assertTrue(provider.sock.closed)
+
+    def test_coalesced_mixed_control_preflight_never_mutates_live_maps(self):
+        import json
+        from indodax_ai_bot.m03_ws_summary_live_watch import (
+            _decode_coalesced_publications,
+        )
+        channel="market:trade-activity-btcidr"
+        channels={channel:("btc_idr","trade")}
+        requests={3:("btc_idr","trade",channel)}
+        active=set()
+        ack={"id":3,"result":{"recoverable":True,"epoch":"123","offset":40}}
+        trade={"result":{"channel":channel,"data":{
+            "offset":41,"data":[["btcidr",NOW,5,"buy",100,"10000","100"]]}}}
+        ping={"id":999999,"result":{}}
+        def decode(values,**kw):
+            return _decode_coalesced_publications(
+                "".join(json.dumps(v) for v in values),
+                micro_channels=channels,micro_active=active,
+                micro_ids=requests,**kw)
+        self.assertEqual(decode([ping,ack,trade],ping_pending=True),[ping,ack,trade])
+        self.assertEqual(decode([ping,ack,trade]),[])
+        self.assertEqual(decode([ack,trade,{"id":888,"result":{}}]),[])
+        self.assertEqual(decode([trade,ack]),[])
+        self.assertEqual(decode([ack,ack,trade]),[])
+        self.assertEqual(decode([ack,trade,{}]),[])
+        self.assertEqual(decode([ack,trade,{"id":999999,"result":{}}]),[])
+        invalid=dict(ack,result={"recoverable":True,"offset":True})
+        self.assertEqual(decode([invalid,trade]),[])
+        self.assertEqual(active,set())
+        self.assertEqual(requests,{3:("btc_idr","trade",channel)})
+        self.assertEqual(channels,{channel:("btc_idr","trade")})
+
+    def test_coalesced_correlated_unsubscribe_and_denial(self):
+        import json
+        from indodax_ai_bot.m03_ws_summary_live_watch import (
+            _decode_coalesced_publications,
+        )
+        channel="market:trade-activity-btcidr"
+        channels={channel:("btc_idr","trade")}
+        summary=frames(NOW,100)[2]
+        trade={"result":{"channel":channel,"data":{
+            "offset":41,"data":[["btcidr",NOW,5,"buy",100,"10000","100"]]}}}
+        unsub={"id":4,"result":{}}
+        deny={"id":3,"error":{"code":103}}
+        def decode(values,**kw):
+            return _decode_coalesced_publications(
+                "".join(json.dumps(v) for v in values),
+                micro_channels=channels,**kw)
+        unsubs={4:("btc_idr",None,channel)}
+        self.assertEqual(decode([trade,unsub,summary],micro_active={channel},
+                                pending_unsubscribe=unsubs),[trade,unsub,summary])
+        self.assertEqual(decode([unsub,trade],micro_active={channel},
+                                pending_unsubscribe=unsubs),[])
+        self.assertEqual(decode([deny,summary],micro_active=set(),
+                                micro_ids={3:("btc_idr","trade",channel)}),
+                         [deny,summary])
+        self.assertEqual(decode([deny,trade],micro_active=set(),
+                                micro_ids={3:("btc_idr","trade",channel)}),[])
+
+    def test_coalesced_batch_above_old_eight_limit_is_bounded(self):
+        import json
+        from indodax_ai_bot.m03_ws_summary_live_watch import (
+            _decode_coalesced_publications,
+        )
+        messages=[frames(NOW+i,100,offset=124+i)[2] for i in range(32)]
+        def decode(values):
+            return _decode_coalesced_publications(
+                "".join(json.dumps(v) for v in values),
+                micro_channels={},micro_active=set())
+        self.assertEqual(decode(messages),messages)
+        self.assertEqual(decode(messages+[messages[-1]]),[])
 
     def test_coalesced_auth_ack_is_not_accepted(self):
         import json
