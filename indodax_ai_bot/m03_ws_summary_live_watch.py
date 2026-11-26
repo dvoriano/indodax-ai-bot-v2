@@ -84,15 +84,23 @@ def _redacted_json_failure_code(raw: str, *, phase: str,
     return "M03_WS_WATCH_JSON_INVALID:" + stage + ":" + kind
 
 
-def _decode_coalesced_publications(raw, *, micro_channels, micro_active):
-    """Only complete, bounded, already subscribed OBSERVE publications.
+def _decode_coalesced_publications(raw, *, micro_channels, micro_active,
+                                  micro_ids=None, pending_unsubscribe=None,
+                                  ping_pending=False):
+    """Bounded complete OBSERVE batches, including known control replies.
 
-    Never salvage a prefix, strip junk, accept a partial message, or
-    apply this framing compatibility to authentication/subscription ACKs.
-    Every object is validated before the original processing loop sees it.
+    Preflight the ENTIRE frame without changing runtime state. A shadow
+    subscription set permits a publication after its matching ACK in the
+    same batch. Original ACK/recovery/offset validation still runs in order
+    in the existing loop. Unknown IDs, invalid suffixes and partial frames
+    remain fail-closed; never salvage a prefix or relax AUTH/SUBSCRIBE.
     """
     decoder = json.JSONDecoder()
     messages = []
+    active = set(micro_active)
+    channels = dict(micro_channels)
+    requests = dict(micro_ids or {})
+    unsubs = dict(pending_unsubscribe or {})
     pos = 0
     try:
         while pos < len(raw):
@@ -100,10 +108,69 @@ def _decode_coalesced_publications(raw, *, micro_channels, micro_active):
                 pos += 1
             if pos == len(raw):
                 break
-            if len(messages) >= 8:
+            if len(messages) >= 32:
                 return []
             msg, pos = decoder.raw_decode(raw, pos)
-            if not isinstance(msg, dict) or set(msg) != {"result"}:
+            if not isinstance(msg, dict):
+                return []
+            if "id" in msg:
+                req = msg["id"]
+                if type(req) is not int:
+                    return []
+                if req == 999999 and ping_pending:
+                    if set(msg) != {"id", "result"} or msg["result"] != {}:
+                        return []
+                    ping_pending = False
+                elif req in unsubs:
+                    if set(msg) != {"id", "result"} or msg["result"] != {}:
+                        return []
+                    _, _, channel = unsubs.pop(req)
+                    active.discard(channel)
+                    channels.pop(channel, None)
+                elif req in requests:
+                    pair, kind, channel = requests.pop(req)
+                    if set(msg) == {"id", "error"}:
+                        error = msg["error"]
+                        if (kind != "trade" or not isinstance(error, dict)
+                                or type(error.get("code")) is not int
+                                or not set(error) <= {"code", "message"}
+                                or ("message" in error and
+                                    not isinstance(error["message"], str))):
+                            return []
+                        active.discard(channel)
+                        channels.pop(channel, None)
+                    else:
+                        ack = msg.get("result")
+                        if (set(msg) != {"id", "result"}
+                                or not isinstance(ack, dict)
+                                or ack.get("recoverable") is not True
+                                or type(ack.get("offset")) is not int
+                                or ack["offset"] < 0
+                                or ("epoch" in ack and (
+                                    not isinstance(ack["epoch"], str)
+                                    or not ack["epoch"].isdecimal()))
+                                or ("recovered" in ack and
+                                    type(ack["recovered"]) is not bool)):
+                            return []
+                        pubs = ack.get("publications", [])
+                        if not isinstance(pubs, list) or len(pubs) > 500:
+                            return []
+                        if pubs and kind != "trade":
+                            return []
+                        for pub in pubs:
+                            if not isinstance(pub, dict):
+                                return []
+                            parse_trade_activity_frame(
+                                {"result": {"channel": channel, "data": pub}},
+                                pair=pair)
+                        if channels.get(channel) != (pair, kind):
+                            return []
+                        active.add(channel)
+                else:
+                    return []
+                messages.append(msg)
+                continue
+            if set(msg) != {"result"}:
                 return []
             result = msg["result"]
             if not isinstance(result, dict):
@@ -124,8 +191,8 @@ def _decode_coalesced_publications(raw, *, micro_channels, micro_active):
                     "result": {"channel": _CHANNEL, "data": {
                         "data": idr, "offset": data.get("offset")}}
                 })
-            elif isinstance(channel, str) and channel in micro_active:
-                pair, kind = micro_channels[channel]
+            elif isinstance(channel, str) and channel in active:
+                pair, kind = channels[channel]
                 if kind == "trade":
                     parse_trade_activity_frame(msg, pair=pair)
                 else:
@@ -221,6 +288,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
         healing_pairs = set()
         isolated_cursor_repairs = 0
         last_ping_clock=clock() if checkpoint is not None else None
+        ping_pending=False
         last_summary_clock=None
         dense_prices={}
         liquid_latest={}
@@ -362,6 +430,7 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                 raise M03WSWatchError("M03_WS_CHANNEL_ACK_TIMEOUT")
             if checkpoint is not None and phase=="OBSERVE" and now-last_ping_clock>=30:
                 sock.send(json.dumps({"method":7,"id":999999}))
+                ping_pending=True
                 last_ping_clock=now
             if (checkpoint is not None and not pending and phase=="OBSERVE"
                     and now>=deadline):
@@ -443,7 +512,9 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                     if phase == "OBSERVE" and exc.msg == "Extra data":
                         batch = _decode_coalesced_publications(
                             raw, micro_channels=micro_channels,
-                            micro_active=micro_active)
+                            micro_active=micro_active, micro_ids=micro_ids,
+                            pending_unsubscribe=pending_unsubscribe,
+                            ping_pending=ping_pending)
                     if not batch:
                         raise M03WSWatchError(
                             _redacted_json_failure_code(raw, phase=phase, error=exc)
@@ -487,6 +558,11 @@ def collect_ws3_market_summary_once(*, ws_module=None, monotonic=None,
                         subscribe_micro(pair,kind,channel,next_micro_subscribe_id)
             else:
                 request_id = msg.get("id")
+                if (type(request_id) is int and request_id == 999999
+                        and ping_pending and set(msg) == {"id", "result"}
+                        and msg["result"] == {}):
+                    ping_pending=False
+                    continue
                 if type(request_id) is int and request_id in pending_unsubscribe:
                     old,new,channel=pending_unsubscribe.pop(request_id)
                     unsubscribe_started=None
