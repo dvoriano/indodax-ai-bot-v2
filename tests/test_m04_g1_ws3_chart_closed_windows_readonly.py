@@ -30,6 +30,83 @@ class ChartClosedWindowTests(unittest.TestCase):
             probe.collect_chart_ticks(pair=PAIR,seconds=1020,ws_module=ws,
                 monotonic=ws.clock,epoch=ws.epoch)
 
+    def test_progress_ack_and_periodic_counts_even_when_idle(self):
+        ws=FakeWS(prefix()+[(2,pub(11,2,21))])
+        events=[]
+        cap=probe.collect_chart_ticks(pair=PAIR,seconds=1020,
+            ws_module=ws,monotonic=ws.clock,epoch=ws.epoch,
+            closed_window_research=True,health_check=lambda:None,
+            progress=events.append)
+        self.assertEqual(events[0]["event"],"CHART_SUBSCRIPTION_ACK")
+        self.assertEqual(events[0]["elapsed_seconds"],0)
+        self.assertEqual(events[0]["chart_ticks_observed"],0)
+        self.assertEqual(events[1]["event"],"CHART_OBSERVATION_PROGRESS")
+        self.assertEqual(events[1]["elapsed_seconds"],30)
+        self.assertEqual(events[1]["chart_ticks_observed"],1)
+        self.assertEqual(events[1]["publication_count"],1)
+        self.assertEqual(events[-1]["elapsed_seconds"],990)
+        self.assertEqual(len(cap["ticks"]),1)
+        self.assertTrue(ws.closed)
+        self.assertEqual(ws.attempts,1)
+
+    def test_interrupt_inside_receive_returns_last_committed_counts(self):
+        ws=FakeWS(prefix()+[(2,pub(11,2,21))])
+        recv=ws.recv
+        def interrupted_recv():
+            if ws.t>=2:
+                raise KeyboardInterrupt()
+            return recv()
+        events=[]
+        with patch.object(ws,"recv",side_effect=interrupted_recv):
+            with self.assertRaises(probe.ChartObservationInterrupted) as cm:
+                probe.collect_chart_ticks(pair=PAIR,seconds=1020,
+                    ws_module=ws,monotonic=ws.clock,epoch=ws.epoch,
+                    closed_window_research=True,health_check=lambda:None,
+                    progress=events.append)
+        self.assertEqual(cm.exception.summary["chart_ticks_observed"],1)
+        self.assertEqual(cm.exception.summary["publication_count"],1)
+        self.assertEqual(cm.exception.summary["last_offset"],11)
+        self.assertTrue(ws.closed)
+        self.assertEqual(ws.attempts,1)
+
+    def test_interrupted_run_never_compares_partial_window(self):
+        ws=FakeWS(prefix()+[(2,pub(11,2,21))])
+        recv=ws.recv
+        def interrupted_recv():
+            if ws.t>=2:
+                raise KeyboardInterrupt()
+            return recv()
+        state=dict(ActiveState="active",SubState="running",MainPID="1",
+                   InvocationID=INV,NRestarts="0")
+        events=[]
+        with patch.dict(os.environ,probe._LOCKS,clear=True), patch.object(
+                m,"choose_pair",return_value=dict(
+                    status="PREFLIGHT_CURRENT_PAIR_REFERENCE_ONLY",
+                    sampled_invocation=INV,selected_pair=PAIR)), patch.object(
+                m,"_open_source"), patch.object(
+                m,"compare_closed_windows",
+                side_effect=AssertionError("interrupted window cannot compare")), patch.object(
+                ws,"recv",side_effect=interrupted_recv):
+            r=m.run(horizon="15m",service=lambda unit:dict(state),
+                journal_read=lambda end:[],ws_module=ws,
+                clock=ws.epoch,monotonic=ws.clock,progress=events.append)
+        self.assertEqual(r["status"],"CHART_OBSERVATION_INTERRUPTED")
+        self.assertFalse(r["completed_window_comparison"])
+        self.assertTrue(r["partial_counters_only"])
+        self.assertEqual(r["chart_ticks_observed"],1)
+        self.assertNotIn("windows",r)
+        self.assertFalse(r["execution_allowed"])
+        self.assertTrue(ws.closed)
+        self.assertEqual(ws.attempts,1)
+
+    def test_cli_interrupt_exit_130(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        with patch.object(m,"run",return_value={
+                "status":"CHART_OBSERVATION_INTERRUPTED"}), redirect_stdout(StringIO()):
+            self.assertEqual(m.main(["--horizon","15m",
+                "--observe-public-chart-closed-window"]),130)
+
     def test_health_change_closes_socket_without_reconnect(self):
         ws=FakeWS(prefix()+[(2,pub(11,2,21))])
         def health():

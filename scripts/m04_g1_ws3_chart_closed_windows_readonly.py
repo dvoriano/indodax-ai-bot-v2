@@ -12,11 +12,12 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 
 from scripts.m04_g1_ws3_chart_tick_probe_readonly import (
     DEFAULT_DB, _LOCKS, _result, _valid_pair, collect_chart_ticks,
-    compare_overlap, read_raw_overlap, _open_source,
+    compare_overlap, read_raw_overlap, _open_source, ChartObservationInterrupted,
 )
 from scripts.m04_g1_local_ack_windows_readonly import (
     _journal_read, summarize_local_ack_windows,
@@ -120,8 +121,8 @@ def compare_closed_windows(*, capture, pair, horizon, source_db, records,
 
 
 def run(*, horizon, source_db=DEFAULT_DB, service=None, journal_read=None,
-        ws_module=None, clock=None, monotonic=None):
-    if horizon not in DURATIONS:
+        ws_module=None, clock=None, monotonic=None, progress=None):
+    if horizon not in DURATIONS or (progress is not None and not callable(progress)):
         return _report("CHART_CLOSED_SCOPE_INVALID",connection_attempts=0)
     if any(os.environ.get(k)!=v for k,v in _LOCKS.items()):
         return _report("CHART_EXPLICIT_NONLIVE_LOCKS_REQUIRED",connection_attempts=0)
@@ -152,20 +153,43 @@ def run(*, horizon, source_db=DEFAULT_DB, service=None, journal_read=None,
         health()
         if ws_module is None:
             import websocket as ws_module
+    except KeyboardInterrupt:
+        return _report("CHART_OBSERVATION_INTERRUPTED",connection_attempts=0,
+                       horizon=horizon,completed_window_comparison=False)
     except (ValueError,OSError,TypeError,sqlite3.Error,subprocess.SubprocessError,ImportError):
         return _report("CHART_CLOSED_PREFLIGHT_BLOCKED",connection_attempts=0)
+    capture=None
     try:
+        if progress is not None:
+            progress(dict(event="CHART_PREFLIGHT_READY",pair=pair,
+                          requested_observation_seconds=DURATIONS[horizon]))
         capture=collect_chart_ticks(
             pair=pair,seconds=DURATIONS[horizon],ws_module=ws_module,
             monotonic=monotonic,epoch=clock,closed_window_research=True,
-            health_check=health)
+            health_check=health,progress=progress)
         health()
+        if progress is not None:
+            progress(dict(event="CHART_COLLECTION_FINISHED",pair=pair,
+                          chart_ticks_observed=len(capture["ticks"]),
+                          publication_count=capture["publication_count"]))
         end=capture["finish_epoch"]//60*60
         records=journal_read(end)
         windows=compare_closed_windows(
             capture=capture,pair=pair,horizon=horizon,source_db=source_db,
             records=records,expected_invocation=invocation)
         health()
+    except ChartObservationInterrupted as exc:
+        return _report("CHART_OBSERVATION_INTERRUPTED",connection_attempts=1,
+                       horizon=horizon,completed_window_comparison=False,
+                       partial_counters_only=True,**exc.summary)
+    except KeyboardInterrupt:
+        fields={} if capture is None else dict(
+            chart_ticks_observed=len(capture["ticks"]),
+            publication_count=capture["publication_count"],
+            ack_epoch=capture["ack_epoch"],finish_epoch=capture["finish_epoch"])
+        return _report("CHART_OBSERVATION_INTERRUPTED",connection_attempts=1,
+                       horizon=horizon,pair=pair,completed_window_comparison=False,
+                       partial_counters_only=True,**fields)
     except (ValueError,InvalidOperation) as exc:
         import re
         reason=str(exc)
@@ -188,8 +212,13 @@ def main(argv=None):
     parser.add_argument("--horizon",choices=tuple(DURATIONS),required=True)
     parser.add_argument("--observe-public-chart-closed-window",action="store_true",required=True)
     args=parser.parse_args(argv)
-    report=run(horizon=args.horizon)
-    print(json.dumps(report,sort_keys=True,separators=(",",":")))
+    def progress(fields):
+        print(json.dumps(fields,sort_keys=True,separators=(",",":")),
+              file=sys.stderr,flush=True)
+    report=run(horizon=args.horizon,progress=progress)
+    print(json.dumps(report,sort_keys=True,separators=(",",":")),flush=True)
+    if report["status"]=="CHART_OBSERVATION_INTERRUPTED":
+        return 130
     return 0 if report["status"]=="CHART_CLOSED_WINDOWS_RESEARCH_ONLY" else 2
 
 
