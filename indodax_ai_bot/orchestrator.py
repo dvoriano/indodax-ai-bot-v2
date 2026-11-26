@@ -2303,6 +2303,26 @@ class DailyScalpingOrchestrator:
             "order_sent":False,
         }
 
+    @staticmethod
+    def _m09_paper_local_book_reference(*, pair, now, obs):
+        """Small observation reference, not a signed receipt or fill proof."""
+        if not obs:
+            return None
+        stamp=obs.get("orderbook_locally_observed_epoch")
+        return {
+            "pair":pair,
+            "book_observed_epoch":stamp,
+            "book_age_seconds":now-stamp if type(stamp) is int else None,
+            "book_source_offset":obs.get("orderbook_source_offset"),
+            "source_capture_epoch":obs.get("source_capture_epoch"),
+            "best_bid_idr":obs.get("best_bid_idr"),
+            "best_ask_idr":obs.get("best_ask_idr"),
+            "spread_bps":obs.get("spread_bps"),
+            "bid_depth_top5_idr":obs.get("bid_depth_top5_idr"),
+            "ask_depth_top5_idr":obs.get("ask_depth_top5_idr"),
+            "reference_is_local_and_unattested":True,
+        }
+
     def discover_m09_paper_entry_reference_once(self, *,
             now_epoch: int | None = None, source_db=None,
             require_m04_review: bool = False,
@@ -2323,6 +2343,7 @@ class DailyScalpingOrchestrator:
             **self.journal._m09_paper_source_only(),
             "status":"M09_PAPER_WAIT_FOR_ENTRY_SOURCE",
             "paper_entry_reference":None,"paper_buy_fill_recorded":False,
+            "paper_discovery_source_status":None,
             "paper_source_g1_verified":False,"paper_ai_review_verified":False,
         }
         if self.journal.review_m09_paper_pnl_offline()[
@@ -2371,6 +2392,7 @@ class DailyScalpingOrchestrator:
             return base
         report=inspect_original_m03_ws3_watch_readonly(
             db_path=path,now_epoch=now)
+        base["paper_discovery_source_status"]=report.get("status")
         for candidate in report.get("micro_prealert_candidates_top40",[]):
             if selection is not None and candidate.get("pair") != selection["pair"]:
                 continue
@@ -2403,6 +2425,10 @@ class DailyScalpingOrchestrator:
                         "rolling_24h_idr":candidate["volume_24h_idr"],
                         "observed_rise_pct":candidate["observed_rise_pct"],
                         "maker_fill_verified":False,
+                        "summary_observed_epoch":candidate["observed_epoch"],
+                        "summary_age_seconds":now-candidate["observed_epoch"],
+                        "local_book_reference":self._m09_paper_local_book_reference(
+                            pair=candidate["pair"],now=now,obs=micro),
                         "entry_policy":assessment,
                         **({"m04_synthetic_selection_reference":selection}
                            if selection is not None else {})}}
@@ -2568,9 +2594,16 @@ class DailyScalpingOrchestrator:
         quantum=Decimal("0.00000001")
         def size_at_most(amount,price):
             return (amount/price).quantize(quantum,rounding=ROUND_DOWN)
+        source_ref={"read_kind":"NOT_READ"}
         def book(pair,after):
-            return self._read_m09_observed_book(
+            obs=self._read_m09_observed_book(
                 pair=pair,now=now,not_before=after+1,source_db=source)
+            source_ref.update(read_kind="BOOK",pair=pair,
+                              required_book_epoch_min=after+1,
+                              book_available=obs is not None,
+                              local_book_reference=self._m09_paper_local_book_reference(
+                                  pair=pair,now=now,obs=obs))
+            return obs
         with self.journal._connect() as con:
             con.execute("BEGIN IMMEDIATE")
             # Lazy creation ONLY in an isolated managed PAPER wallet.
@@ -2688,6 +2721,15 @@ class DailyScalpingOrchestrator:
                     found=self.discover_m09_paper_entry_reference_once(
                         now_epoch=now,source_db=source,**opts)
                     entry=found.get("paper_entry_reference")
+                    source_ref.update(
+                        read_kind="DISCOVERY",
+                        discovery_status=found.get("status"),
+                        discovery_source_status=found.get("paper_discovery_source_status"),
+                        entry_reference_available=entry is not None,
+                        pair=entry.get("pair") if entry else None,
+                        summary_observed_epoch=entry.get("summary_observed_epoch") if entry else None,
+                        summary_age_seconds=entry.get("summary_age_seconds") if entry else None,
+                        local_book_reference=entry.get("local_book_reference") if entry else None)
                     selection=entry.get("m04_synthetic_selection_reference") if entry else None
                     new_selection = (not require_m04_review or (
                         isinstance(selection, dict)
@@ -2790,6 +2832,9 @@ class DailyScalpingOrchestrator:
                 "paper_position_id":state["position"],
                 "paper_pending_order":state["pending"],
                 "paper_modeled_receipt":receipt,"paper_exit_reason":note,
+                "paper_step_epoch":now,
+                "paper_step_source_reference":source_ref,
+                "paper_step_source_reference_attested":False,
                 "paper_fill_model":"QUOTE_CROSS_AND_AGGREGATE_DEPTH_HAIRCUT",
                 "paper_fill_depth_verified":False,
                 "paper_ai_review_verified":False,"paper_source_g1_verified":False,
