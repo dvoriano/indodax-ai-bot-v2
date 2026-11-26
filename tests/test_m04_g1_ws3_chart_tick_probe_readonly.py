@@ -138,6 +138,47 @@ class ChartTickProbeTests(unittest.TestCase):
         r,_=self.run_probe(prefix()+[(2,pub(11,2,1))])
         self.assertEqual(r["status"],"CHART_NO_INTERIOR_OVERLAP")
 
+    def test_ack_only_reports_same_window_raw_activity_without_claiming_outage(self):
+        self.insert_raw(40,0,20,receipt=1)  # ACK second excluded.
+        self.insert_raw(41,10,21,receipt=11)
+        self.insert_raw(42,10,22,receipt=30)
+        self.insert_raw(43,12,23,receipt=31)
+        self.insert_raw(44,13,24)
+        self.insert_raw(45,30,25,receipt=30)  # Final second excluded.
+        r,_=self.run_probe(prefix())
+        self.assertEqual(r["status"],"CHART_ACK_ONLY_NO_TICKS")
+        self.assertEqual(r["local_raw_activity_status"],"LOCAL_TRADE_ACTIVITY_OBSERVED")
+        self.assertEqual(r["local_raw_trade_rows_by_finish"],2)
+        self.assertEqual(r["local_raw_trade_seconds_by_finish"],1)
+        self.assertEqual(r["local_raw_unknown_receipts"],1)
+        self.assertEqual(r["local_raw_late_receipts"],1)
+        self.assertEqual(r["local_window_start_epoch"],NOW+1)
+        self.assertEqual(r["local_window_end_epoch"],NOW+30)
+        self.assertTrue(r["local_nonempty_does_not_prove_chart_outage"])
+        self.assertFalse(r["complete_trade_tape_verified"])
+
+    def test_ack_only_empty_local_unknown_and_invalid_source_explicit(self):
+        r,_=self.run_probe(prefix())
+        self.assertEqual(r["local_raw_activity_status"],
+                         "NO_ON_TIME_LOCAL_TRADE_OBSERVED_UNVERIFIED")
+        self.assertEqual(r["local_raw_trade_rows_by_finish"],0)
+        self.assertTrue(r["local_empty_is_not_exchange_inactivity"])
+        self.insert_raw(40,10,21,receipt=11,bad=True)
+        r,_=self.run_probe(prefix())
+        self.assertEqual(r["local_raw_activity_status"],
+                         "LOCAL_ACK_WINDOW_SOURCE_UNAVAILABLE")
+        self.assertNotIn("local_raw_trade_rows_by_finish",r)
+
+    def test_retrospective_ack_context_rejects_future_and_expired_scope(self):
+        with patch.object(m,"read_raw_overlap",
+                          side_effect=AssertionError("invalid scope must not read")):
+            for now in (NOW+29,NOW+86400):
+                r=m.audit_ack_only_local_activity(
+                    source_db=self.db,pair=PAIR,ack_epoch=NOW,
+                    finish_epoch=NOW+30,now_epoch=now)
+                self.assertEqual(r["local_raw_activity_status"],
+                                 "LOCAL_ACK_WINDOW_SCOPE_INVALID")
+
     def test_unknown_late_and_conflicting_raw_not_credited(self):
         self.insert_raw(40,10,22,receipt=31)
         self.insert_raw(41,11,23)

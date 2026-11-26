@@ -281,6 +281,46 @@ def read_raw_overlap(path,pair,start,end,cutoff):
         db.close()
 
 
+def audit_ack_only_local_activity(*, source_db, pair, ack_epoch, finish_epoch,
+                                  now_epoch=None):
+    """Read original raw activity within a reported ACK-only probe interval.
+
+    The interval is an operator-reported local connection window, not a
+    chart-exchange-time coverage attestation. Exclude the ACK second and
+    the unfinished final second. Do not treat empty local data as proof of
+    exchange inactivity, or locally observed trade data as proof of a chart
+    tick outage. No transport, writes or service action.
+    """
+    now=int(time.time()) if now_epoch is None else now_epoch
+    base=dict(local_ack_window_is_not_chart_coverage=True,
+              local_empty_is_not_exchange_inactivity=True,
+              local_nonempty_does_not_prove_chart_outage=True,
+              local_raw_activity_status="LOCAL_ACK_WINDOW_SCOPE_INVALID")
+    if (not _valid_pair(pair) or any(type(t) is not int for t in
+                (ack_epoch,finish_epoch,now))
+            or not 1500000000<=ack_epoch<finish_epoch<=now
+            or not 2<=finish_epoch-ack_epoch<=125
+            or now-ack_epoch>23*3600):
+        return base
+    start=ack_epoch+1
+    end=finish_epoch
+    base.update(local_window_start_epoch=start,local_window_end_epoch=end,
+                local_receipt_cutoff_epoch=finish_epoch)
+    try:
+        rows,unknown,late=read_raw_overlap(
+            source_db,pair,start,end,finish_epoch)
+    except (OSError,ValueError,TypeError,InvalidOperation,sqlite3.Error,OverflowError):
+        return dict(base,local_raw_activity_status="LOCAL_ACK_WINDOW_SOURCE_UNAVAILABLE")
+    return dict(base,
+                local_raw_activity_status=(
+                    "LOCAL_TRADE_ACTIVITY_OBSERVED" if rows else
+                    "NO_ON_TIME_LOCAL_TRADE_OBSERVED_UNVERIFIED"),
+                local_raw_trade_rows_by_finish=len(rows),
+                local_raw_trade_seconds_by_finish=len({r[0] for r in rows}),
+                local_raw_unknown_receipts=unknown,
+                local_raw_late_receipts=late)
+
+
 def compare_overlap(capture, local_rows, *, start, end):
     chart=[r for r in capture["ticks"] if start<=r[0]<end]
     local=[r for r in local_rows if start<=r[0]<end]
@@ -336,7 +376,10 @@ def run(*, pair, seconds, source_db=DEFAULT_DB, ws_module=None,
     ticks=cap.pop("ticks")
     stats=dict(pair=pair,connection_attempts=1,chart_ticks_observed=len(ticks),**cap)
     if not ticks:
-        return _result("CHART_ACK_ONLY_NO_TICKS",**stats)
+        context=audit_ack_only_local_activity(
+            source_db=source_db,pair=pair,ack_epoch=cap["ack_epoch"],
+            finish_epoch=cap["finish_epoch"],now_epoch=int((epoch or time.time)()))
+        return _result("CHART_ACK_ONLY_NO_TICKS",**stats,**context)
     start=max(cap["ack_epoch"]+1,min(t[0] for t in ticks)+1)
     end=min(cap["finish_epoch"],max(t[0] for t in ticks))
     if end<=start:
